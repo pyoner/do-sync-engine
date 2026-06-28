@@ -1,0 +1,25 @@
+{
+  "name": "todo-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "deploy": "vp run build && wrangler deploy"
+  },
+  "dependencies": {
+    "@do-sync-engine/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "latest",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@types/node": "^24.13.2",
+    "svelte": "^5.56.3",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "latest"
+  }
+}

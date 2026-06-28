@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "todo-demo",
+  "compatibility_date": "2026-06-27",
+  "main": "./src/worker/index.ts",
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "TODO_STORE", "class_name": "TodoStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TodoStore"] }],
+}

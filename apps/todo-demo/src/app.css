@@ -1,0 +1,13 @@
+:root {
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg, #0f0f0f);
+  color: var(--fg, #e0e0e0);
+}
