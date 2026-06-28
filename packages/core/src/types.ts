@@ -1,28 +1,16 @@
 export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
 export type SqlRow = Record<string, SqlValue>;
 
-export interface SqlAnalysis {
-  statementType: "select" | "insert" | "update" | "delete";
-  readTables: Set<string>;
-  writtenTables: Set<string>;
-  ast: unknown;
-}
-
-export interface Selector {
+export interface SqlOperation<Operation extends string = string> {
   name: string;
   sql: string;
-  readTables: Set<string>;
-  ast: unknown;
+  operation: Operation;
+  tables: Set<string>;
 }
 
-export interface Mutator {
-  name: string;
-  sql: string;
-  operation: "insert" | "update" | "delete";
-  writtenTables: Set<string>;
-  readTables: Set<string>;
-  ast: unknown;
-}
+export type Selector = SqlOperation<"select">;
+
+export type Mutator = SqlOperation<"insert" | "update" | "delete">;
 
 export interface MutationMetadata {
   rowsAffected: number;

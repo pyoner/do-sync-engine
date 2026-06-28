@@ -13,21 +13,14 @@ export class SyncEngine {
   }
 
   registerSelector(name: string, sql: string): Selector {
-    const analysis = analyzeSql(sql);
-    if (analysis.statementType !== "select") {
-      throw new Error(`Selector "${name}" must be a SELECT, got ${analysis.statementType}`);
+    const result = analyzeSql(name, sql);
+    if (result.operation !== "select") {
+      throw new Error(`Selector "${name}" must be a SELECT, got ${result.operation}`);
     }
     this.unregisterSelector(name);
 
-    const selector: Selector = {
-      name,
-      sql,
-      readTables: analysis.readTables,
-      ast: analysis.ast,
-    };
-    this.selectors.set(name, selector);
-
-    for (const table of analysis.readTables) {
+    this.selectors.set(name, result);
+    for (const table of result.tables) {
       let set = this.tableToSelectors.get(table);
       if (!set) {
         set = new Set();
@@ -35,13 +28,13 @@ export class SyncEngine {
       }
       set.add(name);
     }
-    return selector;
+    return result;
   }
 
   private unregisterSelector(name: string): void {
     const old = this.selectors.get(name);
     if (!old) return;
-    for (const table of old.readTables) {
+    for (const table of old.tables) {
       const set = this.tableToSelectors.get(table);
       set?.delete(name);
       if (set && set.size === 0) this.tableToSelectors.delete(table);
@@ -50,20 +43,12 @@ export class SyncEngine {
   }
 
   registerMutator(name: string, sql: string): Mutator {
-    const analysis = analyzeSql(sql);
-    if (analysis.writtenTables.size === 0) {
+    const result = analyzeSql(name, sql);
+    if (result.operation === "select") {
       throw new Error(`Mutator "${name}" must be an INSERT/UPDATE/DELETE`);
     }
-    const mutator: Mutator = {
-      name,
-      sql,
-      operation: analysis.statementType as "insert" | "update" | "delete",
-      writtenTables: analysis.writtenTables,
-      readTables: analysis.readTables,
-      ast: analysis.ast,
-    };
-    this.mutators.set(name, mutator);
-    return mutator;
+    this.mutators.set(name, result);
+    return result;
   }
 
   query(name: string, ...params: SqlValue[]): SqlRow[] {
@@ -80,7 +65,7 @@ export class SyncEngine {
     const metadata = this.storage.execute(mutator.sql, ...params);
 
     const affected = new Set<string>();
-    for (const table of mutator.writtenTables) {
+    for (const table of mutator.tables) {
       const selectorSet = this.tableToSelectors.get(table);
       if (selectorSet) for (const s of selectorSet) affected.add(s);
     }

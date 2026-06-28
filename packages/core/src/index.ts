@@ -3,7 +3,7 @@ export { analyzeSql } from "./analyze.js";
 export type {
   SqlValue,
   SqlRow,
-  SqlAnalysis,
+  SqlOperation,
   Selector,
   Mutator,
   MutationMetadata,
