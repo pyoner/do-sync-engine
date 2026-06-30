@@ -1,6 +1,6 @@
-import type { Env } from "./todo-store.js";
+import type { Env } from "./todo-store";
 
-export { TodoStore } from "./todo-store.js";
+export { TodoStore } from "./todo-store";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

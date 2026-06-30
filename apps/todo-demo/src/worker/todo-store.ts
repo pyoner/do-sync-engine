@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
 import type { SqlRow, MutationResult } from "@do-sync-engine/core";
-import { DoSyncStorage } from "./do-storage.js";
+import { DoSyncStorage } from "./do-storage";
 
 export interface Env {
   TODO_STORE: DurableObjectNamespace<TodoStore>;

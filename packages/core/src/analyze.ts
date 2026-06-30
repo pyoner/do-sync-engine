@@ -1,5 +1,5 @@
 import { Parser } from "node-sql-parser";
-import type { Selector, Mutator } from "./types.js";
+import type { Selector, Mutator } from "./types";
 
 const parser = new Parser();
 const OPT = { database: "SQLite" } as const;

@@ -1,5 +1,5 @@
-export { SyncEngine } from "./engine.js";
-export { analyzeSql } from "./analyze.js";
+export { SyncEngine } from "./engine";
+export { analyzeSql } from "./analyze";
 export type {
   SqlValue,
   SqlRow,
@@ -9,4 +9,4 @@ export type {
   MutationMetadata,
   MutationResult,
   SyncStorage,
-} from "./types.js";
+} from "./types";

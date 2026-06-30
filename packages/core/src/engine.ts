@@ -1,5 +1,5 @@
-import { analyzeSql } from "./analyze.js";
-import type { Selector, Mutator, MutationResult, SqlRow, SqlValue, SyncStorage } from "./types.js";
+import { analyzeSql } from "./analyze";
+import type { Selector, Mutator, MutationResult, SqlRow, SqlValue, SyncStorage } from "./types";
 
 export class SyncEngine {
   private storage: SyncStorage;
