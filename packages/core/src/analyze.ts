@@ -5,7 +5,7 @@ const parser = new Parser();
 const OPT = { database: "SQLite" } as const;
 
 export function analyzeSql(name: string, sql: string): Selector | Mutator {
-  const { tableList } = parser.parse(sql, OPT);
+  const { tableList, ast } = parser.parse(sql, OPT);
 
   const readTables = new Set<string>();
   const writtenTables = new Set<string>();
@@ -28,5 +28,6 @@ export function analyzeSql(name: string, sql: string): Selector | Mutator {
   }
 
   const tables = operation === "select" ? readTables : writtenTables;
-  return { name, sql, operation, tables };
+  const normalizedSql = parser.sqlify(ast, OPT);
+  return { name, sql: normalizedSql, operation, tables };
 }
