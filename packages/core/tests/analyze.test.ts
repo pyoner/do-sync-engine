@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { analyzeSql } from "../src/analyze.js";
+import { analyzeSql } from "../src/analyze";
 
 test("SELECT * FROM users", () => {
   const result = analyzeSql("test", "SELECT * FROM users");
@@ -34,10 +34,37 @@ test("DELETE FROM users", () => {
   expect(result.tables).toEqual(new Set(["users"]));
 });
 
-test("DELETE with subquery reads", () => {
+test("DELETE with subquery reports only deleted table", () => {
   const result = analyzeSql("test", "DELETE FROM users WHERE id IN (SELECT user_id FROM posts)");
   expect(result.operation).toBe("delete");
   expect(result.tables).toEqual(new Set(["users"]));
+});
+
+test("INSERT ... SELECT reports only inserted table", () => {
+  const result = analyzeSql("test", "INSERT INTO archive_users SELECT * FROM users");
+  expect(result.operation).toBe("insert");
+  expect(result.tables).toEqual(new Set(["archive_users"]));
+});
+
+test("UPDATE with subquery reports only updated table", () => {
+  const result = analyzeSql(
+    "test",
+    "UPDATE users SET name = 'inactive' WHERE id IN (SELECT user_id FROM posts)",
+  );
+  expect(result.operation).toBe("update");
+  expect(result.tables).toEqual(new Set(["users"]));
+});
+
+test("REPLACE is rejected", () => {
+  expect(() => analyzeSql("test", "REPLACE INTO users (id, name) VALUES (1, 'alice')")).toThrow(
+    "SELECT, INSERT, UPDATE, DELETE",
+  );
+});
+
+test("CREATE TABLE is rejected", () => {
+  expect(() => analyzeSql("test", "CREATE TABLE users (id INTEGER)")).toThrow(
+    "SELECT, INSERT, UPDATE, DELETE",
+  );
 });
 
 test("Parameterized SELECT", () => {
