@@ -1,7 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
-import type { SyncStorage, SqlRow, SqlValue, MutationMetadata } from "../src/index.js";
 
-export class NodeSqliteStorage implements SyncStorage {
+export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
+export type SqlRow = Record<string, SqlValue>;
+
+export interface MutationMetadata {
+  rowsAffected: number;
+  lastInsertRowid: number | bigint | null;
+}
+
+export class NodeSqliteStorage {
   private db: DatabaseSync;
 
   constructor(path: string = ":memory:") {

@@ -8,10 +8,9 @@
   }
 
   interface MutationResponse {
-    mutatorName: string;
     metadata: { rowsAffected: number; lastInsertRowid: number | null };
     recomputedSelectors: string[];
-    recomputeResults: Record<string, Todo[]>;
+    recomputeResults: Record<string, unknown[]>;
   }
 
   let todos = $state<Todo[]>([]);
@@ -114,7 +113,6 @@
   {#if lastMutation}
     <div class="recompute-panel">
       <h2>Last recompute</h2>
-      <p class="mutator">Mutator: <code>{lastMutation.mutatorName}</code></p>
       <p class="meta">Rows affected: {lastMutation.metadata.rowsAffected}</p>
       <h3>Recomputed selectors</h3>
       <ul class="selector-list">
@@ -257,7 +255,7 @@
     color: #aaa;
   }
 
-  .mutator, .meta {
+  .meta {
     margin: 0.25rem 0;
     font-size: 0.9rem;
   }

@@ -1,12 +1,9 @@
 export { SyncEngine } from "./engine";
-export { analyzeSql } from "./analyze";
 export type {
-  SqlValue,
-  SqlRow,
-  SqlOperation,
-  Selector,
+  MaybePromise,
   Mutator,
-  MutationMetadata,
   MutationResult,
-  SyncStorage,
+  RecomputedSelector,
+  Selector,
+  TableKey,
 } from "./types";

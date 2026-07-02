@@ -1,89 +1,153 @@
-import { analyzeSql } from "./analyze";
-import type { Selector, Mutator, MutationResult, SqlRow, SqlValue, SyncStorage } from "./types";
+import type { MutationResult, Mutator, Selector, TableKey } from "./types";
 
-export class SyncEngine {
-  private storage: SyncStorage;
-  private selectors = new Map<string, Selector>();
-  private mutators = new Map<string, Mutator>();
-  private lastParams = new Map<string, SqlValue[]>();
-  private tableToSelectors = new Map<string, Set<string>>();
+interface TrackedSelectorCall<Table, Result = unknown> {
+  selector: Selector<unknown[], Result, Table>;
+  params: readonly unknown[];
+  tables: readonly Table[];
+}
 
-  constructor(storage: SyncStorage) {
-    this.storage = storage;
+export class SyncEngine<Table = TableKey> {
+  private selectorIds = new WeakMap<object, number>();
+  private nextSelectorId = 1;
+  private trackedSelectors = new Map<string, TrackedSelectorCall<Table>>();
+
+  async query<Params extends unknown[], Result>(
+    selector: Selector<Params, Result, Table>,
+    ...params: Params
+  ): Promise<Result> {
+    const selectorId = this.getSelectorId(selector);
+    const paramsHash = await this.hashParams(params);
+    const result = await selector.run(...params);
+
+    this.trackedSelectors.set(`${selectorId}:${paramsHash}`, {
+      selector: selector as Selector<unknown[], Result, Table>,
+      params: [...params],
+      tables: [...selector.tables],
+    });
+
+    return result;
   }
 
-  registerSelector(name: string, sql: string): Selector {
-    const result = analyzeSql(name, sql);
-    if (result.operation !== "select") {
-      throw new Error(`Selector "${name}" must be a SELECT, got ${result.operation}`);
-    }
-    this.unregisterSelector(name);
+  async mutate<Params extends unknown[], Metadata>(
+    mutator: Mutator<Params, Metadata, Table>,
+    ...params: Params
+  ): Promise<MutationResult<Metadata, unknown, Table>> {
+    const metadata = await mutator.run(...params);
+    const tables = [...new Set(mutator.tables)];
+    const touchedTables = new Set(tables);
+    const recomputedSelectors: MutationResult<Metadata, unknown, Table>["recomputedSelectors"] = [];
 
-    this.selectors.set(name, result);
-    for (const table of result.tables) {
-      let set = this.tableToSelectors.get(table);
-      if (!set) {
-        set = new Set();
-        this.tableToSelectors.set(table, set);
+    for (const tracked of this.trackedSelectors.values()) {
+      const isAffected = tracked.tables.some((table) => touchedTables.has(table));
+      if (!isAffected) {
+        continue;
       }
-      set.add(name);
-    }
-    return result;
-  }
 
-  private unregisterSelector(name: string): void {
-    const old = this.selectors.get(name);
-    if (!old) return;
-    for (const table of old.tables) {
-      const set = this.tableToSelectors.get(table);
-      set?.delete(name);
-      if (set && set.size === 0) this.tableToSelectors.delete(table);
-    }
-    this.selectors.delete(name);
-  }
-
-  registerMutator(name: string, sql: string): Mutator {
-    const result = analyzeSql(name, sql);
-    if (result.operation === "select") {
-      throw new Error(`Mutator "${name}" must be an INSERT/UPDATE/DELETE`);
-    }
-    this.mutators.set(name, result);
-    return result;
-  }
-
-  query(name: string, ...params: SqlValue[]): SqlRow[] {
-    const selector = this.selectors.get(name);
-    if (!selector) throw new Error(`Selector "${name}" not registered`);
-    this.lastParams.set(name, params);
-    return this.storage.query(selector.sql, ...params);
-  }
-
-  mutate(name: string, ...params: SqlValue[]): MutationResult {
-    const mutator = this.mutators.get(name);
-    if (!mutator) throw new Error(`Mutator "${name}" not registered`);
-
-    const metadata = this.storage.execute(mutator.sql, ...params);
-
-    const affected = new Set<string>();
-    for (const table of mutator.tables) {
-      const selectorSet = this.tableToSelectors.get(table);
-      if (selectorSet) for (const s of selectorSet) affected.add(s);
-    }
-
-    const recomputeResults: Record<string, SqlRow[]> = {};
-    for (const selectorName of affected) {
-      const p = this.lastParams.get(selectorName) ?? [];
-      recomputeResults[selectorName] = this.storage.query(
-        this.selectors.get(selectorName)!.sql,
-        ...p,
-      );
+      const result = await tracked.selector.run(...tracked.params);
+      recomputedSelectors.push({
+        selector: tracked.selector,
+        params: tracked.params,
+        tables: tracked.tables,
+        result,
+      });
     }
 
     return {
-      mutatorName: name,
       metadata,
-      recomputedSelectors: [...affected],
-      recomputeResults,
+      tables,
+      recomputedSelectors,
     };
+  }
+
+  private getSelectorId(selector: object): number {
+    const existingId = this.selectorIds.get(selector);
+    if (existingId !== undefined) {
+      return existingId;
+    }
+
+    const nextId = this.nextSelectorId;
+    this.nextSelectorId += 1;
+    this.selectorIds.set(selector, nextId);
+    return nextId;
+  }
+
+  private async hashParams(params: readonly unknown[]): Promise<string> {
+    const input = new TextEncoder().encode(this.stableStringify(params));
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", input);
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  }
+
+  private stableStringify(value: unknown): string {
+    const seen = new Set<object>();
+
+    const visit = (current: unknown): string => {
+      if (current === null) {
+        return "null";
+      }
+
+      switch (typeof current) {
+        case "string":
+          return JSON.stringify(current);
+        case "boolean":
+          return current ? "true" : "false";
+        case "number":
+          if (!Number.isFinite(current)) {
+            throw new TypeError("Selector params must be serializable");
+          }
+          return Object.is(current, -0) ? "0" : String(current);
+        case "bigint":
+          return `{"$type":"bigint","value":${JSON.stringify(current.toString())}}`;
+        case "undefined":
+        case "function":
+        case "symbol":
+          throw new TypeError("Selector params must be serializable");
+        case "object": {
+          if (current instanceof Date) {
+            if (Number.isNaN(current.getTime())) {
+              throw new TypeError("Selector params must be serializable");
+            }
+            return `{"$type":"date","value":${JSON.stringify(current.toISOString())}}`;
+          }
+
+          if (current instanceof Uint8Array) {
+            return `{"$type":"uint8array","value":[${Array.from(current, (byte) => String(byte)).join(",")}]}`;
+          }
+
+          if (Array.isArray(current)) {
+            if (seen.has(current)) {
+              throw new TypeError("Selector params must be serializable");
+            }
+            seen.add(current);
+            const serialized = `[${current.map((entry) => visit(entry)).join(",")}]`;
+            seen.delete(current);
+            return serialized;
+          }
+
+          const prototype = Object.getPrototypeOf(current);
+          if (prototype !== Object.prototype && prototype !== null) {
+            throw new TypeError("Selector params must be serializable");
+          }
+
+          if (seen.has(current)) {
+            throw new TypeError("Selector params must be serializable");
+          }
+          seen.add(current);
+          const keys = Object.keys(current).sort();
+          const serialized = `{${keys
+            .map(
+              (key) => `${JSON.stringify(key)}:${visit((current as Record<string, unknown>)[key])}`,
+            )
+            .join(",")}}`;
+          seen.delete(current);
+          return serialized;
+        }
+        default:
+          throw new TypeError("Selector params must be serializable");
+      }
+    };
+
+    return visit(value);
   }
 }

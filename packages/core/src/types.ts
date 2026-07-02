@@ -1,30 +1,33 @@
-export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
-export type SqlRow = Record<string, SqlValue>;
+export type MaybePromise<T> = T | PromiseLike<T>;
+export type TableKey = string;
 
-export interface SqlOperation<Operation extends string = string> {
-  name: string;
-  sql: string;
-  operation: Operation;
-  tables: Set<string>;
+export interface Selector<
+  Params extends unknown[] = unknown[],
+  Result = unknown,
+  Table = TableKey,
+> {
+  tables: readonly Table[];
+  run(...params: Params): MaybePromise<Result>;
 }
 
-export type Selector = SqlOperation<"select">;
-
-export type Mutator = SqlOperation<"insert" | "update" | "delete">;
-
-export interface MutationMetadata {
-  rowsAffected: number;
-  lastInsertRowid: number | bigint | null;
+export interface Mutator<
+  Params extends unknown[] = unknown[],
+  Metadata = unknown,
+  Table = TableKey,
+> {
+  tables: readonly Table[];
+  run(...params: Params): MaybePromise<Metadata>;
 }
 
-export interface MutationResult {
-  mutatorName: string;
-  metadata: MutationMetadata;
-  recomputedSelectors: string[];
-  recomputeResults: Record<string, SqlRow[]>;
+export interface RecomputedSelector<Result = unknown, Table = TableKey> {
+  selector: object;
+  params: readonly unknown[];
+  tables: readonly Table[];
+  result: Result;
 }
 
-export interface SyncStorage {
-  query(sql: string, ...params: SqlValue[]): SqlRow[];
-  execute(sql: string, ...params: SqlValue[]): MutationMetadata;
+export interface MutationResult<Metadata = unknown, Result = unknown, Table = TableKey> {
+  metadata: Metadata;
+  tables: readonly Table[];
+  recomputedSelectors: RecomputedSelector<Result, Table>[];
 }

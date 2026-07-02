@@ -1,6 +1,12 @@
-import type { SyncStorage, SqlRow, SqlValue, MutationMetadata } from "@do-sync-engine/core";
+export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
+export type SqlRow = Record<string, SqlValue>;
 
-export class DoSyncStorage implements SyncStorage {
+export interface MutationMetadata {
+  rowsAffected: number;
+  lastInsertRowid: number | bigint | null;
+}
+
+export class DoSyncStorage {
   private sql: SqlStorage;
 
   constructor(sql: SqlStorage) {
