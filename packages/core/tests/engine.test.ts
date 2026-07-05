@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/engine.js";
 import { NodeSqliteStorage } from "./helpers.js";
-import type { MutationResult, Mutator, Selector } from "../src/index.js";
+import type { Mutator, Selector } from "../src/index.js";
 import type { MutationMetadata, SqlRow } from "./helpers.js";
 
 function setupDb(storage: NodeSqliteStorage) {
@@ -31,16 +31,9 @@ describe("SyncEngine", () => {
   let storage: NodeSqliteStorage;
   let engine: SyncEngine;
   let allUsers: Selector<[], SqlRow[]>;
-  let userPosts: Selector<[], SqlRow[]>;
-  let postCount: Selector<[], SqlRow[]>;
   let userById: Selector<[number], SqlRow[]>;
   let insertUser: Mutator<[string], MutationMetadata>;
-  let deleteUser: Mutator<[number], MutationMetadata>;
-  let insertPost: Mutator<[number, string], MutationMetadata>;
   let updateUserName: Mutator<[string, number], MutationMetadata>;
-
-  const resultsFor = (result: MutationResult<MutationMetadata>, selector: object) =>
-    result.recomputedSelectors.filter((entry) => entry.selector === selector);
 
   beforeEach(() => {
     storage = new NodeSqliteStorage();
@@ -51,43 +44,20 @@ describe("SyncEngine", () => {
     allUsers = {
       tables: readTablesFromSql(allUsersSql),
       run: () => storage.query(allUsersSql),
-    };
-
-    const userPostsSql =
-      "SELECT u.name, p.title FROM users u JOIN posts p ON u.id = p.user_id ORDER BY u.id, p.id";
-    userPosts = {
-      tables: readTablesFromSql(userPostsSql),
-      run: () => storage.query(userPostsSql),
-    };
-
-    const postCountSql = "SELECT COUNT(*) as total_count FROM posts";
-    postCount = {
-      tables: readTablesFromSql(postCountSql),
-      run: () => storage.query(postCountSql),
+      callback: () => {},
     };
 
     const userByIdSql = "SELECT * FROM users WHERE id = ?";
     userById = {
       tables: readTablesFromSql(userByIdSql),
       run: (id) => storage.query(userByIdSql, id),
+      callback: () => {},
     };
 
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
     insertUser = {
       tables: writeTablesFromSql(insertUserSql),
       run: (name) => storage.execute(insertUserSql, name),
-    };
-
-    const deleteUserSql = "DELETE FROM users WHERE id = ?";
-    deleteUser = {
-      tables: writeTablesFromSql(deleteUserSql),
-      run: (id) => storage.execute(deleteUserSql, id),
-    };
-
-    const insertPostSql = "INSERT INTO posts (user_id, title) VALUES (?, ?)";
-    insertPost = {
-      tables: writeTablesFromSql(insertPostSql),
-      run: (userId, title) => storage.execute(insertPostSql, userId, title),
     };
 
     const updateUserNameSql = "UPDATE users SET name = ? WHERE id = ?";
@@ -97,129 +67,204 @@ describe("SyncEngine", () => {
     };
   });
 
-  test("query returns rows", async () => {
-    const rows = await engine.query(allUsers);
-    expect(rows.length).toBe(2);
-    expect(rows[0].name).toBe("alice");
-    expect(rows[1].name).toBe("bob");
-  });
+  describe("Broker", () => {
+    test("publish runs matching selector callback and resolves void", async () => {
+      const callbackResults: SqlRow[][] = [];
+      const selector: Selector<[], SqlRow[]> = {
+        tables: [...allUsers.tables],
+        run: () => allUsers.run(),
+        callback: (result) => {
+          callbackResults.push(result);
+        },
+      };
 
-  test("mutate inserts and recomputes affected selectors", async () => {
-    await engine.query(allUsers);
-    await engine.query(postCount);
+      engine.subscribe(selector);
 
-    const result = await engine.mutate(insertUser, "charlie");
+      const publishResult = await engine.publish(insertUser, "charlie");
 
-    expect(result.metadata.rowsAffected).toBe(1);
-    expect(result.tables).toEqual(["users"]);
-    expect(resultsFor(result, allUsers)).toHaveLength(1);
-    expect(resultsFor(result, postCount)).toHaveLength(0);
+      expect(publishResult).toBeUndefined();
+      expect(callbackResults).toHaveLength(1);
+      expect(callbackResults[0].some((row) => row.name === "charlie")).toBe(true);
+    });
 
-    const [allUsersResult] = resultsFor(result, allUsers);
-    expect(allUsersResult.tables).toEqual(allUsers.tables);
-    expect(allUsersResult.result).toHaveLength(3);
-    expect((allUsersResult.result as SqlRow[]).some((row) => row.name === "charlie")).toBe(true);
-  });
+    test("publish skips subscriptions whose tables do not overlap", async () => {
+      const postsOnlySql = "SELECT * FROM posts ORDER BY id";
+      let runCount = 0;
+      let callbackCount = 0;
+      const postsOnly: Selector<[], SqlRow[]> = {
+        tables: readTablesFromSql(postsOnlySql),
+        run: () => {
+          runCount += 1;
+          return storage.query(postsOnlySql);
+        },
+        callback: () => {
+          callbackCount += 1;
+        },
+      };
 
-  test("mutate insertPost recomputes userPosts and postCount but not allUsers", async () => {
-    await engine.query(allUsers);
-    await engine.query(userPosts);
-    await engine.query(postCount);
+      engine.subscribe(postsOnly);
+      await engine.publish(insertUser, "charlie");
 
-    const result = await engine.mutate(insertPost, 1, "world");
+      expect(runCount).toBe(0);
+      expect(callbackCount).toBe(0);
+    });
 
-    expect(resultsFor(result, userPosts)).toHaveLength(1);
-    expect(resultsFor(result, postCount)).toHaveLength(1);
-    expect(resultsFor(result, allUsers)).toHaveLength(0);
-    expect((resultsFor(result, postCount)[0].result as SqlRow[])[0].total_count).toBe(2);
-  });
+    test("publish does not run selectors that were never subscribed", async () => {
+      let runCount = 0;
+      let callbackCount = 0;
+      const inactiveSelector: Selector<[], SqlRow[]> = {
+        tables: ["users"],
+        run: () => {
+          runCount += 1;
+          return storage.query("SELECT * FROM users ORDER BY id");
+        },
+        callback: () => {
+          callbackCount += 1;
+        },
+      };
 
-  test("mutate deleteUser recomputes allUsers and userPosts but not postCount", async () => {
-    await engine.query(allUsers);
-    await engine.query(userPosts);
-    await engine.query(postCount);
+      void inactiveSelector;
 
-    const result = await engine.mutate(deleteUser, 1);
+      await engine.publish(insertUser, "charlie");
 
-    expect(resultsFor(result, allUsers)).toHaveLength(1);
-    expect(resultsFor(result, userPosts)).toHaveLength(1);
-    expect(resultsFor(result, postCount)).toHaveLength(0);
-    expect(resultsFor(result, allUsers)[0].result as SqlRow[]).toHaveLength(1);
-    expect((resultsFor(result, allUsers)[0].result as SqlRow[])[0].name).toBe("bob");
-  });
+      expect(runCount).toBe(0);
+      expect(callbackCount).toBe(0);
+    });
 
-  test("mutate updateUserName publishes tables and recompute entries keep selector tables", async () => {
-    await engine.query(allUsers);
-    await engine.query(userPosts);
+    test("unsubscribe stops future publications", async () => {
+      let callbackCount = 0;
+      const selector: Selector<[], SqlRow[]> = {
+        tables: [...allUsers.tables],
+        run: () => allUsers.run(),
+        callback: () => {
+          callbackCount += 1;
+        },
+      };
 
-    const result = await engine.mutate(updateUserName, "alice_updated", 1);
+      const unsubscribe = engine.subscribe(selector);
+      unsubscribe();
 
-    expect(result.tables).toEqual(["users"]);
+      await engine.publish(insertUser, "charlie");
+      expect(callbackCount).toBe(0);
 
-    const [allUsersResult] = resultsFor(result, allUsers);
-    const [userPostsResult] = resultsFor(result, userPosts);
+      unsubscribe();
+      await engine.publish(insertUser, "dave");
+      expect(callbackCount).toBe(0);
+    });
 
-    expect(allUsersResult.tables).toEqual(allUsers.tables);
-    expect(userPostsResult.tables).toEqual(userPosts.tables);
-    expect((allUsersResult.result as SqlRow[]).some((row) => row.name === "alice_updated")).toBe(
-      true,
-    );
-  });
+    test("parameterized subscriptions pass params to run and callback receives the result", async () => {
+      const runParams: number[] = [];
+      let callbackResult: SqlRow[] = [];
+      const selector: Selector<[number], SqlRow[]> = {
+        tables: [...userById.tables],
+        run: (id) => {
+          runParams.push(id);
+          return storage.query("SELECT * FROM users WHERE id = ?", id);
+        },
+        callback: (result) => {
+          callbackResult = result;
+        },
+      };
 
-  test("never-queried selectors are not recomputed", async () => {
-    const inactiveSelector: Selector<[], SqlRow[]> = {
-      tables: ["users"],
-      run: () => storage.query("SELECT * FROM users ORDER BY id"),
-    };
+      engine.subscribe(selector, 2);
+      await engine.publish(updateUserName, "bob_updated", 2);
 
-    const result = await engine.mutate(insertUser, "dave");
+      expect(runParams).toEqual([2]);
+      expect(callbackResult).toHaveLength(1);
+      expect(callbackResult[0].name).toBe("bob_updated");
+    });
 
-    expect(resultsFor(result, inactiveSelector)).toHaveLength(0);
-  });
+    test("duplicate subscriptions are independent", async () => {
+      let callbackCount = 0;
+      const selector: Selector<[], SqlRow[]> = {
+        tables: [...allUsers.tables],
+        run: () => allUsers.run(),
+        callback: () => {
+          callbackCount += 1;
+        },
+      };
 
-  test("selectors whose tables do not overlap mutator tables are not recomputed", async () => {
-    const postsOnlySql = "SELECT * FROM posts ORDER BY id";
-    const postsOnly: Selector<[], SqlRow[]> = {
-      tables: readTablesFromSql(postsOnlySql),
-      run: () => storage.query(postsOnlySql),
-    };
+      const unsubscribeFirst = engine.subscribe(selector);
+      engine.subscribe(selector);
 
-    await engine.query(postsOnly);
+      await engine.publish(insertUser, "charlie");
+      expect(callbackCount).toBe(2);
 
-    const result = await engine.mutate(insertUser, "dave");
+      unsubscribeFirst();
+      await engine.publish(insertUser, "dave");
+      expect(callbackCount).toBe(3);
+    });
 
-    expect(resultsFor(result, postsOnly)).toHaveLength(0);
-  });
+    test("publish awaits async mutator, selector, and callback", async () => {
+      const createDeferred = () => {
+        let resolve!: () => void;
+        const promise = new Promise<void>((res) => {
+          resolve = res;
+        });
+        return { promise, resolve };
+      };
 
-  test("tracks unique selector and params combinations", async () => {
-    await engine.query(userById, 1);
-    await engine.query(userById, 1);
-    await engine.query(userById, 2);
+      const mutatorGate = createDeferred();
+      const selectorGate = createDeferred();
+      const callbackGate = createDeferred();
+      let publishResolved = false;
+      let callbackRows: SqlRow[] = [];
 
-    const result = await engine.mutate(updateUserName, "alice_updated", 1);
-    const userByIdResults = resultsFor(result, userById);
+      const asyncSelector: Selector<[], SqlRow[]> = {
+        tables: ["users"],
+        run: async () => {
+          await selectorGate.promise;
+          return storage.query("SELECT * FROM users ORDER BY id");
+        },
+        callback: async (result) => {
+          await callbackGate.promise;
+          callbackRows = result;
+        },
+      };
+      const asyncMutator: Mutator<[string], MutationMetadata> = {
+        tables: ["users"],
+        run: async (name) => {
+          await mutatorGate.promise;
+          return storage.execute("INSERT INTO users (name) VALUES (?)", name);
+        },
+      };
 
-    expect(userByIdResults).toHaveLength(2);
-    expect(userByIdResults.map((entry) => entry.params)).toEqual([[1], [2]]);
-  });
+      engine.subscribe(asyncSelector);
+      const publishPromise = engine.publish(asyncMutator, "charlie").then(() => {
+        publishResolved = true;
+      });
 
-  test("query and mutate await async selector and mutator runs", async () => {
-    const asyncSelector: Selector<[], SqlRow[]> = {
-      tables: ["users"],
-      run: () => Promise.resolve(storage.query("SELECT * FROM users ORDER BY id")),
-    };
-    const asyncMutator: Mutator<[string], MutationMetadata> = {
-      tables: ["users"],
-      run: (name) => Promise.resolve(storage.execute("INSERT INTO users (name) VALUES (?)", name)),
-    };
+      await Promise.resolve();
+      expect(publishResolved).toBe(false);
 
-    const queryResult = await engine.query(asyncSelector);
-    const mutationResult = await engine.mutate(asyncMutator, "charlie");
+      mutatorGate.resolve();
+      await Promise.resolve();
+      expect(publishResolved).toBe(false);
 
-    expect(queryResult).toHaveLength(2);
-    expect(mutationResult.metadata.rowsAffected).toBe(1);
-    expect(resultsFor(mutationResult, asyncSelector)).toHaveLength(1);
-    expect(resultsFor(mutationResult, asyncSelector)[0].result as SqlRow[]).toHaveLength(3);
+      selectorGate.resolve();
+      await Promise.resolve();
+      expect(publishResolved).toBe(false);
+
+      callbackGate.resolve();
+      await publishPromise;
+
+      expect(callbackRows).toHaveLength(3);
+      expect(callbackRows[2].name).toBe("charlie");
+    });
+
+    test("publish rejects when a selector callback fails", async () => {
+      const selector: Selector<[], SqlRow[]> = {
+        tables: [...allUsers.tables],
+        run: () => allUsers.run(),
+        callback: () => {
+          throw new Error("callback failed");
+        },
+      };
+
+      engine.subscribe(selector);
+
+      await expect(engine.publish(insertUser, "charlie")).rejects.toThrow("callback failed");
+    });
   });
 
   test("storage.close works", () => {

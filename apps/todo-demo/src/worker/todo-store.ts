@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { MutationResult, Mutator, Selector } from "@do-sync-engine/core";
+import type { Broker, Mutator, Selector } from "@do-sync-engine/core";
 import { DoSyncStorage } from "./do-storage";
 import type { MutationMetadata, SqlRow } from "./do-storage";
 
@@ -51,18 +51,22 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
     allTodos: {
       tables: todoTablesFromSql(allTodosSql),
       run: () => storage.query(allTodosSql),
+      callback: () => {},
     },
     incompleteTodos: {
       tables: todoTablesFromSql(incompleteTodosSql),
       run: () => storage.query(incompleteTodosSql),
+      callback: () => {},
     },
     completedTodos: {
       tables: todoTablesFromSql(completedTodosSql),
       run: () => storage.query(completedTodosSql),
+      callback: () => {},
     },
     todoCount: {
       tables: todoTablesFromSql(todoCountSql),
       run: () => storage.query(todoCountSql),
+      callback: () => {},
     },
   } satisfies Record<string, Selector<[], SqlRow[]>>;
 }
@@ -94,10 +98,9 @@ function createMutators(storage: DoSyncStorage): TodoMutators {
 }
 
 export class TodoStore extends DurableObject<Env> {
-  private engine!: SyncEngine;
+  private engine!: Broker;
   private selectors!: TodoSelectors;
   private mutators!: TodoMutators;
-  private selectorNames = new WeakMap<object, string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -107,56 +110,55 @@ export class TodoStore extends DurableObject<Env> {
       this.engine = new SyncEngine();
       this.selectors = createSelectors(storage);
       this.mutators = createMutators(storage);
-
-      for (const [name, selector] of Object.entries(this.selectors)) {
-        this.selectorNames.set(selector, name);
-      }
     });
   }
 
   async getAllTodos(): Promise<SqlRow[]> {
-    await this.engine.query(this.selectors.todoCount);
-    return this.engine.query(this.selectors.allTodos);
+    return this.selectors.allTodos.run();
   }
 
   async addTodo(title: string): Promise<MutationResponse> {
-    const result = await this.engine.mutate(this.mutators.addTodo, title);
-    return this.toMutationResponse(result);
+    return this.publishMutation(this.mutators.addTodo, title);
   }
 
   async toggleTodo(id: number): Promise<MutationResponse> {
-    const result = await this.engine.mutate(this.mutators.toggleTodo, id);
-    return this.toMutationResponse(result);
+    return this.publishMutation(this.mutators.toggleTodo, id);
   }
 
   async deleteTodo(id: number): Promise<MutationResponse> {
-    const result = await this.engine.mutate(this.mutators.deleteTodo, id);
-    return this.toMutationResponse(result);
+    return this.publishMutation(this.mutators.deleteTodo, id);
   }
 
   async clearCompleted(): Promise<MutationResponse> {
-    const result = await this.engine.mutate(this.mutators.clearCompleted);
-    return this.toMutationResponse(result);
+    return this.publishMutation(this.mutators.clearCompleted);
   }
 
-  private toMutationResponse(result: MutationResult<MutationMetadata>): MutationResponse {
-    const recomputedSelectors: string[] = [];
-    const recomputeResults: Record<string, SqlRow[]> = {};
+  private async publishMutation<Params extends unknown[]>(
+    mutator: Mutator<Params, MutationMetadata>,
+    ...params: Params
+  ): Promise<MutationResponse> {
+    let metadata: MutationMetadata | undefined;
 
-    for (const entry of result.recomputedSelectors) {
-      const selectorName = this.selectorNames.get(entry.selector);
-      if (!selectorName) {
-        throw new Error("Unknown recomputed selector");
-      }
+    const capturingMutator: Mutator<Params, MutationMetadata> = {
+      tables: mutator.tables,
+      run: async (...runParams) => {
+        metadata = await mutator.run(...runParams);
+        return metadata;
+      },
+    };
 
-      recomputedSelectors.push(selectorName);
-      recomputeResults[selectorName] = entry.result as SqlRow[];
+    await this.engine.publish(capturingMutator, ...params);
+
+    if (metadata === undefined) {
+      throw new Error("Mutation did not produce metadata");
     }
 
-    return {
-      metadata: result.metadata,
-      recomputedSelectors,
-      recomputeResults,
+    const recomputedSelectors = ["todoCount", "allTodos"];
+    const recomputeResults: Record<string, SqlRow[]> = {
+      todoCount: await this.selectors.todoCount.run(),
+      allTodos: await this.selectors.allTodos.run(),
     };
+
+    return { metadata, recomputedSelectors, recomputeResults };
   }
 }
