@@ -3,7 +3,7 @@ export type SqlRow = Record<string, SqlValue>;
 
 export interface MutationMetadata {
   rowsAffected: number;
-  lastInsertRowid: number | bigint | null;
+  lastInsertRowid: number | null;
 }
 
 export class DoSyncStorage {

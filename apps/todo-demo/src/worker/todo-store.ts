@@ -1,6 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
 import type { Broker, Mutator, Selector } from "@do-sync-engine/core";
+import type {
+  ClientMessage,
+  MutationResponse as WireMutationResponse,
+  ServerMessage,
+  Todo,
+} from "../todo-protocol";
 import { DoSyncStorage } from "./do-storage";
 import type { MutationMetadata, SqlRow } from "./do-storage";
 
@@ -8,14 +14,10 @@ export interface Env {
   TODO_STORE: DurableObjectNamespace<TodoStore>;
 }
 
-export interface MutationResponse {
-  metadata: MutationMetadata;
-  recomputedSelectors: string[];
-  recomputeResults: Record<string, SqlRow[]>;
-}
+export type MutationResponse = WireMutationResponse;
 
 interface TodoSelectors {
-  allTodos: Selector<[], SqlRow[]>;
+  allTodos: Selector<[], Todo[]>;
   incompleteTodos: Selector<[], SqlRow[]>;
   completedTodos: Selector<[], SqlRow[]>;
   todoCount: Selector<[], SqlRow[]>;
@@ -40,7 +42,6 @@ const SCHEMA = `
 function todoTablesFromSql(sql: string) {
   return /\btodos\b/i.test(sql) ? ["todos"] : [];
 }
-
 function createSelectors(storage: DoSyncStorage): TodoSelectors {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
   const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
@@ -50,7 +51,13 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
   return {
     allTodos: {
       tables: todoTablesFromSql(allTodosSql),
-      run: () => storage.query(allTodosSql),
+      run: () =>
+        storage.query(allTodosSql).map((row) => ({
+          id: Number(row.id),
+          title: String(row.title),
+          completed: Number(row.completed),
+          created_at: Number(row.created_at),
+        })),
       callback: () => {},
     },
     incompleteTodos: {
@@ -68,7 +75,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
       run: () => storage.query(todoCountSql),
       callback: () => {},
     },
-  } satisfies Record<string, Selector<[], SqlRow[]>>;
+  };
 }
 
 function createMutators(storage: DoSyncStorage): TodoMutators {
@@ -110,26 +117,156 @@ export class TodoStore extends DurableObject<Env> {
       this.engine = new SyncEngine();
       this.selectors = createSelectors(storage);
       this.mutators = createMutators(storage);
+      this.engine.subscribe({
+        ...this.selectors.allTodos,
+        callback: (todos) => {
+          this.broadcast({ type: "todos", todos });
+        },
+      });
     });
   }
 
-  async getAllTodos(): Promise<SqlRow[]> {
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    this.ctx.acceptWebSocket(server);
+    this.send(server, { type: "todos", todos: await this.getAllTodos() });
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== "string") {
+      this.send(ws, { type: "error", message: "Expected text WebSocket message" });
+      return;
+    }
+
+    let value: unknown;
+    try {
+      value = JSON.parse(message);
+    } catch {
+      this.send(ws, { type: "error", message: "Invalid JSON message" });
+      return;
+    }
+
+    const parsed = this.parseClientMessage(value);
+    if ("error" in parsed) {
+      this.send(ws, {
+        type: "error",
+        requestId: parsed.requestId,
+        message: parsed.error,
+      });
+      return;
+    }
+
+    try {
+      let mutation: MutationResponse;
+      switch (parsed.type) {
+        case "addTodo":
+          mutation = await this.addTodo(parsed.title);
+          break;
+        case "toggleTodo":
+          mutation = await this.toggleTodo(parsed.todoId);
+          break;
+        case "deleteTodo":
+          mutation = await this.deleteTodo(parsed.todoId);
+          break;
+        case "clearCompleted":
+          mutation = await this.clearCompleted();
+          break;
+      }
+
+      this.send(ws, { type: "mutation", requestId: parsed.requestId, mutation });
+    } catch (error) {
+      this.send(ws, {
+        type: "error",
+        requestId: parsed.requestId,
+        message: String(error),
+      });
+    }
+  }
+
+  private send(ws: WebSocket, message: ServerMessage): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(message));
+    }
+  }
+
+  private broadcast(message: ServerMessage): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      this.send(ws, message);
+    }
+  }
+
+  private parseClientMessage(
+    value: unknown,
+  ): ClientMessage | { error: string; requestId?: string } {
+    if (typeof value !== "object" || value === null) {
+      return { error: "requestId required" };
+    }
+
+    const candidate = value as Record<string, unknown>;
+    const requestId = typeof candidate.requestId === "string" ? candidate.requestId : undefined;
+    if (!requestId?.trim()) {
+      return { error: "requestId required" };
+    }
+
+    switch (candidate.type) {
+      case "addTodo": {
+        if (typeof candidate.title !== "string" || !candidate.title.trim()) {
+          return { error: "title required", requestId };
+        }
+
+        return { type: "addTodo", requestId, title: candidate.title.trim() };
+      }
+      case "toggleTodo": {
+        if (!this.isPositiveInteger(candidate.todoId)) {
+          return { error: "todoId required", requestId };
+        }
+
+        return { type: "toggleTodo", requestId, todoId: candidate.todoId };
+      }
+      case "deleteTodo": {
+        if (!this.isPositiveInteger(candidate.todoId)) {
+          return { error: "todoId required", requestId };
+        }
+
+        return { type: "deleteTodo", requestId, todoId: candidate.todoId };
+      }
+      case "clearCompleted":
+        return { type: "clearCompleted", requestId };
+      default:
+        return requestId
+          ? { error: "Unknown message type", requestId }
+          : { error: "Unknown message type" };
+    }
+  }
+
+  private isPositiveInteger(value: unknown): value is number {
+    return typeof value === "number" && Number.isInteger(value) && value > 0;
+  }
+
+  private async getAllTodos(): Promise<Todo[]> {
     return this.selectors.allTodos.run();
   }
 
-  async addTodo(title: string): Promise<MutationResponse> {
+  private async addTodo(title: string): Promise<MutationResponse> {
     return this.publishMutation(this.mutators.addTodo, title);
   }
 
-  async toggleTodo(id: number): Promise<MutationResponse> {
+  private async toggleTodo(id: number): Promise<MutationResponse> {
     return this.publishMutation(this.mutators.toggleTodo, id);
   }
 
-  async deleteTodo(id: number): Promise<MutationResponse> {
+  private async deleteTodo(id: number): Promise<MutationResponse> {
     return this.publishMutation(this.mutators.deleteTodo, id);
   }
 
-  async clearCompleted(): Promise<MutationResponse> {
+  private async clearCompleted(): Promise<MutationResponse> {
     return this.publishMutation(this.mutators.clearCompleted);
   }
 
@@ -154,9 +291,9 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     const recomputedSelectors = ["todoCount", "allTodos"];
-    const recomputeResults: Record<string, SqlRow[]> = {
+    const recomputeResults: Record<string, unknown[]> = {
       todoCount: await this.selectors.todoCount.run(),
-      allTodos: await this.selectors.allTodos.run(),
+      allTodos: await this.getAllTodos(),
     };
 
     return { metadata, recomputedSelectors, recomputeResults };

@@ -1,73 +1,180 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  interface Todo {
-    id: number;
-    title: string;
-    completed: number;
-    created_at: number;
-  }
-
-  interface MutationResponse {
-    metadata: { rowsAffected: number; lastInsertRowid: number | null };
-    recomputedSelectors: string[];
-    recomputeResults: Record<string, unknown[]>;
-  }
+  import {
+    TODO_WS_PATH,
+    type ClientCommand,
+    type ClientMessage,
+    type MutationResponse,
+    type ServerMessage,
+    type Todo,
+  } from "./todo-protocol";
 
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
   let lastMutation = $state<MutationResponse | null>(null);
   let loading = $state(false);
+  let socket = $state<WebSocket | null>(null);
+  let connected = $state(false);
+  let errorMessage = $state<string | null>(null);
 
-  async function fetchTodos() {
-    const res = await fetch("/api/todos");
-    const data = await res.json();
-    todos = data.todos;
+  const pendingMutations = new Map<
+    string,
+    {
+      resolve: (mutation: MutationResponse) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+
+  function websocketUrl(): string {
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${location.host}${TODO_WS_PATH}`;
+  }
+
+  function connect(): () => void {
+    const ws = new WebSocket(websocketUrl());
+    socket = ws;
+
+    ws.addEventListener("open", () => {
+      connected = true;
+      errorMessage = null;
+    });
+
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") {
+        errorMessage = "Invalid server message";
+        return;
+      }
+
+      try {
+        handleServerMessage(JSON.parse(event.data) as ServerMessage);
+      } catch {
+        errorMessage = "Invalid server message";
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      connected = false;
+      socket = null;
+      for (const pending of pendingMutations.values()) {
+        pending.reject(new Error("WebSocket closed"));
+      }
+      pendingMutations.clear();
+    });
+
+    ws.addEventListener("error", () => {
+      errorMessage = "WebSocket error";
+    });
+
+    return () => {
+      ws.close();
+    };
+  }
+
+  function handleServerMessage(message: ServerMessage): void {
+    switch (message.type) {
+      case "todos":
+        todos = message.todos;
+        return;
+      case "mutation": {
+        lastMutation = message.mutation;
+        if (Array.isArray(message.mutation.recomputeResults.allTodos)) {
+          todos = message.mutation.recomputeResults.allTodos as Todo[];
+        }
+        const pending = pendingMutations.get(message.requestId);
+        if (pending) {
+          pendingMutations.delete(message.requestId);
+          pending.resolve(message.mutation);
+        }
+        return;
+      }
+      case "error": {
+        errorMessage = message.message;
+        if (message.requestId) {
+          const pending = pendingMutations.get(message.requestId);
+          if (pending) {
+            pendingMutations.delete(message.requestId);
+            pending.reject(new Error(message.message));
+          }
+        }
+      }
+    }
+  }
+
+  function sendMutation(message: ClientCommand): Promise<MutationResponse> {
+    if (socket?.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("WebSocket is not connected"));
+    }
+
+    const requestId = crypto.randomUUID();
+    const outbound: ClientMessage = { ...message, requestId };
+
+    return new Promise((resolve, reject) => {
+      pendingMutations.set(requestId, { resolve, reject });
+      try {
+        socket.send(JSON.stringify(outbound));
+      } catch (error) {
+        pendingMutations.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   async function addTodo() {
     if (!newTitle.trim()) return;
     loading = true;
-    const res = await fetch("/api/todos", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: newTitle.trim() }),
-    });
-    const mutation: MutationResponse = await res.json();
-    lastMutation = mutation;
-    newTitle = "";
-    await fetchTodos();
-    loading = false;
+    errorMessage = null;
+    try {
+      const mutation = await sendMutation({ type: "addTodo", title: newTitle.trim() });
+      lastMutation = mutation;
+      newTitle = "";
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
   }
 
   async function toggleTodo(id: number) {
     loading = true;
-    const res = await fetch(`/api/todos/${id}`, { method: "PATCH" });
-    const mutation: MutationResponse = await res.json();
-    lastMutation = mutation;
-    await fetchTodos();
-    loading = false;
+    errorMessage = null;
+    try {
+      const mutation = await sendMutation({ type: "toggleTodo", todoId: id });
+      lastMutation = mutation;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
   }
 
   async function deleteTodo(id: number) {
     loading = true;
-    const res = await fetch(`/api/todos/${id}`, { method: "DELETE" });
-    const mutation: MutationResponse = await res.json();
-    lastMutation = mutation;
-    await fetchTodos();
-    loading = false;
+    errorMessage = null;
+    try {
+      const mutation = await sendMutation({ type: "deleteTodo", todoId: id });
+      lastMutation = mutation;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
   }
 
   async function clearCompleted() {
     loading = true;
-    const res = await fetch("/api/todos", { method: "DELETE" });
-    const mutation: MutationResponse = await res.json();
-    lastMutation = mutation;
-    await fetchTodos();
-    loading = false;
+    errorMessage = null;
+    try {
+      const mutation = await sendMutation({ type: "clearCompleted" });
+      lastMutation = mutation;
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    } finally {
+      loading = false;
+    }
   }
 
   onMount(() => {
-    fetchTodos();
+    return connect();
   });
 </script>
 
@@ -75,14 +182,20 @@
   <h1>TODO Demo</h1>
   <p class="subtitle">Powered by <code>@do-sync-engine/core</code> + Cloudflare Durable Objects</p>
 
+  {#if errorMessage}
+    <p class="status error">{errorMessage}</p>
+  {:else if !connected}
+    <p class="status">Connecting...</p>
+  {/if}
+
   <form onsubmit={(e) => { e.preventDefault(); addTodo(); }}>
     <input
       type="text"
       bind:value={newTitle}
       placeholder="What needs doing?"
-      disabled={loading}
+      disabled={loading || !connected}
     />
-    <button type="submit" disabled={loading || !newTitle.trim()}>Add</button>
+    <button type="submit" disabled={loading || !connected || !newTitle.trim()}>Add</button>
   </form>
 
   {#if todos.length === 0}
@@ -96,17 +209,17 @@
               type="checkbox"
               checked={!!todo.completed}
               onchange={() => toggleTodo(todo.id)}
-              disabled={loading}
+              disabled={loading || !connected}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={loading}>×</button>
+          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={loading || !connected}>×</button>
         </li>
       {/each}
     </ul>
 
     {#if todos.some(t => t.completed)}
-      <button class="clear" onclick={clearCompleted} disabled={loading}>Clear completed</button>
+      <button class="clear" onclick={clearCompleted} disabled={loading || !connected}>Clear completed</button>
     {/if}
   {/if}
 
@@ -156,6 +269,15 @@
     color: #888;
     margin-top: 0;
     margin-bottom: 1.5rem;
+  }
+
+  .status {
+    color: #888;
+    margin: 0 0 1rem;
+  }
+
+  .status.error {
+    color: var(--danger);
   }
 
   form {
