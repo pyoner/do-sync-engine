@@ -129,15 +129,16 @@ describe("SyncEngine", () => {
         run: () => allUsers.run(),
       };
 
-      const unsubscribe = engine.subscribe(selector, [], () => {
+      const subscriptionId = engine.subscribe(selector, [], () => {
         callbackCount += 1;
       });
-      unsubscribe();
+      expect(subscriptionId).toBeTypeOf("number");
+      expect(engine.unsubscribe(subscriptionId)).toBe(true);
 
       await engine.publish(insertUser, "charlie");
       expect(callbackCount).toBe(0);
 
-      unsubscribe();
+      expect(engine.unsubscribe(subscriptionId)).toBe(false);
       await engine.publish(insertUser, "dave");
       expect(callbackCount).toBe(0);
     });
@@ -176,19 +177,21 @@ describe("SyncEngine", () => {
         run: () => allUsers.run(),
       };
 
-      const unsubscribeFirst = engine.subscribe(selector, [], () => {
+      const firstSubscriptionId = engine.subscribe(selector, [], () => {
         callbackCount += 1;
       });
-      engine.subscribe(selector, [], () => {
+      const secondSubscriptionId = engine.subscribe(selector, [], () => {
         callbackCount += 1;
       });
+      expect(firstSubscriptionId).not.toBe(secondSubscriptionId);
 
       await engine.publish(insertUser, "charlie");
       expect(callbackCount).toBe(2);
 
-      unsubscribeFirst();
+      expect(engine.unsubscribe(firstSubscriptionId)).toBe(true);
       await engine.publish(insertUser, "dave");
       expect(callbackCount).toBe(3);
+      expect(engine.unsubscribe(secondSubscriptionId)).toBe(true);
     });
 
     test("publish awaits async mutator, selector, and callback", async () => {

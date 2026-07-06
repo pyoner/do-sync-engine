@@ -29,18 +29,19 @@ export interface Mutator<
   run(...params: Params): MaybePromise<Metadata>;
 }
 
-export type Unsubscribe = () => void;
+export type SubscriptionId = number;
 export interface Broker<Table = TableKey> {
   subscribe<Result>(
     selector: Selector<[], Result, Table>,
     params?: [],
     callback?: SubscribeCallback<[], Result, Table>,
-  ): Unsubscribe;
+  ): SubscriptionId;
   subscribe<Params extends [unknown, ...unknown[]], Result>(
     selector: Selector<Params, Result, Table>,
     params: Params,
     callback?: SubscribeCallback<Params, Result, Table>,
-  ): Unsubscribe;
+  ): SubscriptionId;
+  unsubscribe(subscriptionId: SubscriptionId): boolean;
   publish<Params extends unknown[], Metadata>(
     mutator: Mutator<Params, Metadata, Table>,
     ...params: Params

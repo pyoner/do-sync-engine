@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/index.js";
-import type { Broker, Selector, SubscribeCallback, Unsubscribe } from "../src/index.js";
+import type { Broker, Selector, SubscribeCallback, SubscriptionId } from "../src/index.js";
 
 test("exports Broker contract through SyncEngine", () => {
   const broker: Broker = new SyncEngine();
@@ -14,15 +14,17 @@ test("exports Broker contract through SyncEngine", () => {
     void params;
   };
 
-  const unsubscribe: Unsubscribe = broker.subscribe(selector, [], subscribeCallback);
+  const subscriptionId: SubscriptionId = broker.subscribe(selector, [], subscribeCallback);
 
-  expect(unsubscribe).toBeTypeOf("function");
+  expect(subscriptionId).toBeTypeOf("number");
 
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "publish",
     "subscribe",
+    "unsubscribe",
   ]);
 
-  unsubscribe();
+  expect(broker.unsubscribe(subscriptionId)).toBe(true);
+  expect(broker.unsubscribe(subscriptionId)).toBe(false);
 });

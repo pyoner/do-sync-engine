@@ -1,4 +1,11 @@
-import type { Broker, Mutator, Selector, SubscribeCallback, TableKey, Unsubscribe } from "./types";
+import type {
+  Broker,
+  Mutator,
+  Selector,
+  SubscribeCallback,
+  SubscriptionId,
+  TableKey,
+} from "./types";
 
 interface TrackedSelectorCall<Table> {
   selector: Selector<unknown[], unknown, Table>;
@@ -8,28 +15,31 @@ interface TrackedSelectorCall<Table> {
 }
 
 export class SyncEngine<Table = TableKey> implements Broker<Table> {
-  private subscriptions = new Set<TrackedSelectorCall<Table>>();
+  private nextSubscriptionId: SubscriptionId = 1;
+  private subscriptions = new Map<SubscriptionId, TrackedSelectorCall<Table>>();
 
   subscribe<Result>(
     selector: Selector<[], Result, Table>,
     params?: [],
     callback?: SubscribeCallback<[], Result, Table>,
-  ): Unsubscribe;
+  ): SubscriptionId;
   subscribe<Params extends [unknown, ...unknown[]], Result>(
     selector: Selector<Params, Result, Table>,
     params: Params,
     callback?: SubscribeCallback<Params, Result, Table>,
-  ): Unsubscribe;
+  ): SubscriptionId;
   subscribe<Params extends unknown[], Result>(
     selector: Selector<Params, Result, Table>,
     ...rest: Params extends []
       ? [params?: [], callback?: SubscribeCallback<[], Result, Table>]
       : [params: Params, callback?: SubscribeCallback<Params, Result, Table>]
-  ): Unsubscribe {
+  ): SubscriptionId {
     const [params, callback] = rest as [
       Params | undefined,
       SubscribeCallback<Params, Result, Table> | undefined,
     ];
+    const subscriptionId = this.nextSubscriptionId;
+    this.nextSubscriptionId += 1;
     const subscription: TrackedSelectorCall<Table> = {
       selector: selector as Selector<unknown[], unknown, Table>,
       params: [...(params ?? [])],
@@ -38,10 +48,12 @@ export class SyncEngine<Table = TableKey> implements Broker<Table> {
     if (callback !== undefined) {
       subscription.callback = callback as SubscribeCallback<unknown[], unknown, Table>;
     }
-    this.subscriptions.add(subscription);
-    return () => {
-      this.subscriptions.delete(subscription);
-    };
+    this.subscriptions.set(subscriptionId, subscription);
+    return subscriptionId;
+  }
+
+  unsubscribe(subscriptionId: SubscriptionId): boolean {
+    return this.subscriptions.delete(subscriptionId);
   }
 
   async publish<Params extends unknown[], Metadata>(
@@ -53,8 +65,8 @@ export class SyncEngine<Table = TableKey> implements Broker<Table> {
     const touchedTables = new Set(tables);
 
     // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot required for unsubscribe-safe publish iteration
-    for (const subscription of [...this.subscriptions]) {
-      if (!this.subscriptions.has(subscription)) {
+    for (const [subscriptionId, subscription] of [...this.subscriptions]) {
+      if (!this.subscriptions.has(subscriptionId)) {
         continue;
       }
 

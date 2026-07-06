@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Broker, Mutator, Selector, Unsubscribe } from "@do-sync-engine/core";
+import type { Broker, Mutator, Selector, SubscriptionId } from "@do-sync-engine/core";
 import type {
   ClientMessage,
   MutationResponse as WireMutationResponse,
@@ -148,8 +148,7 @@ export class TodoStore extends DurableObject<Env> {
   private engine!: Broker;
   private selectors!: TodoSelectors;
   private mutators!: TodoMutators;
-  private subscriptions = new Map<WebSocket, Map<TodoSelectorName, Unsubscribe>>();
-
+  private subscriptions = new Map<WebSocket, Map<TodoSelectorName, SubscriptionId>>();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -350,7 +349,7 @@ export class TodoStore extends DurableObject<Env> {
 
   private async subscribeSelector<Name extends TodoSelectorName>(
     ws: WebSocket,
-    socketSubscriptions: Map<TodoSelectorName, Unsubscribe>,
+    socketSubscriptions: Map<TodoSelectorName, SubscriptionId>,
     name: Name,
   ): Promise<void> {
     const selector = this.selectors[name];
@@ -391,7 +390,10 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     for (const name of selectors) {
-      socketSubscriptions.get(name)?.();
+      const subscriptionId = socketSubscriptions.get(name);
+      if (subscriptionId !== undefined) {
+        this.engine.unsubscribe(subscriptionId);
+      }
       socketSubscriptions.delete(name);
     }
 
@@ -401,8 +403,8 @@ export class TodoStore extends DurableObject<Env> {
   private clearSubscriptions(ws: WebSocket): void {
     const socketSubscriptions = this.subscriptions.get(ws);
     if (socketSubscriptions) {
-      for (const unsubscribe of socketSubscriptions.values()) {
-        unsubscribe();
+      for (const subscriptionId of socketSubscriptions.values()) {
+        this.engine.unsubscribe(subscriptionId);
       }
       this.subscriptions.delete(ws);
     }

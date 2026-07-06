@@ -5,6 +5,6 @@ export type {
   Mutator,
   Selector,
   SubscribeCallback,
+  SubscriptionId,
   TableKey,
-  Unsubscribe,
 } from "./types";
