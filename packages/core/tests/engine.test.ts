@@ -44,14 +44,12 @@ describe("SyncEngine", () => {
     allUsers = {
       tables: readTablesFromSql(allUsersSql),
       run: () => storage.query(allUsersSql),
-      callback: () => {},
     };
 
     const userByIdSql = "SELECT * FROM users WHERE id = ?";
     userById = {
       tables: readTablesFromSql(userByIdSql),
       run: (id) => storage.query(userByIdSql, id),
-      callback: () => {},
     };
 
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
@@ -73,12 +71,11 @@ describe("SyncEngine", () => {
       const selector: Selector<[], SqlRow[]> = {
         tables: [...allUsers.tables],
         run: () => allUsers.run(),
-        callback: (result) => {
-          callbackResults.push(result);
-        },
       };
 
-      engine.subscribe(selector);
+      engine.subscribe(selector, [], (result) => {
+        callbackResults.push(result);
+      });
 
       const publishResult = await engine.publish(insertUser, "charlie");
 
@@ -97,12 +94,11 @@ describe("SyncEngine", () => {
           runCount += 1;
           return storage.query(postsOnlySql);
         },
-        callback: () => {
-          callbackCount += 1;
-        },
       };
 
-      engine.subscribe(postsOnly);
+      engine.subscribe(postsOnly, [], () => {
+        callbackCount += 1;
+      });
       await engine.publish(insertUser, "charlie");
 
       expect(runCount).toBe(0);
@@ -111,15 +107,11 @@ describe("SyncEngine", () => {
 
     test("publish does not run selectors that were never subscribed", async () => {
       let runCount = 0;
-      let callbackCount = 0;
       const inactiveSelector: Selector<[], SqlRow[]> = {
         tables: ["users"],
         run: () => {
           runCount += 1;
           return storage.query("SELECT * FROM users ORDER BY id");
-        },
-        callback: () => {
-          callbackCount += 1;
         },
       };
 
@@ -128,7 +120,6 @@ describe("SyncEngine", () => {
       await engine.publish(insertUser, "charlie");
 
       expect(runCount).toBe(0);
-      expect(callbackCount).toBe(0);
     });
 
     test("unsubscribe stops future publications", async () => {
@@ -136,12 +127,11 @@ describe("SyncEngine", () => {
       const selector: Selector<[], SqlRow[]> = {
         tables: [...allUsers.tables],
         run: () => allUsers.run(),
-        callback: () => {
-          callbackCount += 1;
-        },
       };
 
-      const unsubscribe = engine.subscribe(selector);
+      const unsubscribe = engine.subscribe(selector, [], () => {
+        callbackCount += 1;
+      });
       unsubscribe();
 
       await engine.publish(insertUser, "charlie");
@@ -152,26 +142,31 @@ describe("SyncEngine", () => {
       expect(callbackCount).toBe(0);
     });
 
-    test("parameterized subscriptions pass params to run and callback receives the result", async () => {
+    test("parameterized subscriptions pass tuple params to run and subscribe callback receives result selector and params", async () => {
       const runParams: number[] = [];
       let callbackResult: SqlRow[] = [];
+      let callbackSelector: Selector<[number], SqlRow[]> | undefined;
+      let callbackParams: readonly [number] | undefined;
       const selector: Selector<[number], SqlRow[]> = {
         tables: [...userById.tables],
         run: (id) => {
           runParams.push(id);
           return storage.query("SELECT * FROM users WHERE id = ?", id);
         },
-        callback: (result) => {
-          callbackResult = result;
-        },
       };
 
-      engine.subscribe(selector, 2);
+      engine.subscribe(selector, [2], (result, subscribedSelector, params) => {
+        callbackResult = result;
+        callbackSelector = subscribedSelector;
+        callbackParams = params;
+      });
       await engine.publish(updateUserName, "bob_updated", 2);
 
       expect(runParams).toEqual([2]);
       expect(callbackResult).toHaveLength(1);
       expect(callbackResult[0].name).toBe("bob_updated");
+      expect(callbackSelector).toBe(selector);
+      expect(callbackParams).toEqual([2]);
     });
 
     test("duplicate subscriptions are independent", async () => {
@@ -179,13 +174,14 @@ describe("SyncEngine", () => {
       const selector: Selector<[], SqlRow[]> = {
         tables: [...allUsers.tables],
         run: () => allUsers.run(),
-        callback: () => {
-          callbackCount += 1;
-        },
       };
 
-      const unsubscribeFirst = engine.subscribe(selector);
-      engine.subscribe(selector);
+      const unsubscribeFirst = engine.subscribe(selector, [], () => {
+        callbackCount += 1;
+      });
+      engine.subscribe(selector, [], () => {
+        callbackCount += 1;
+      });
 
       await engine.publish(insertUser, "charlie");
       expect(callbackCount).toBe(2);
@@ -216,10 +212,6 @@ describe("SyncEngine", () => {
           await selectorGate.promise;
           return storage.query("SELECT * FROM users ORDER BY id");
         },
-        callback: async (result) => {
-          await callbackGate.promise;
-          callbackRows = result;
-        },
       };
       const asyncMutator: Mutator<[string], MutationMetadata> = {
         tables: ["users"],
@@ -229,7 +221,10 @@ describe("SyncEngine", () => {
         },
       };
 
-      engine.subscribe(asyncSelector);
+      engine.subscribe(asyncSelector, [], async (result) => {
+        await callbackGate.promise;
+        callbackRows = result;
+      });
       const publishPromise = engine.publish(asyncMutator, "charlie").then(() => {
         publishResolved = true;
       });
@@ -256,14 +251,30 @@ describe("SyncEngine", () => {
       const selector: Selector<[], SqlRow[]> = {
         tables: [...allUsers.tables],
         run: () => allUsers.run(),
-        callback: () => {
-          throw new Error("callback failed");
+      };
+
+      engine.subscribe(selector, [], () => {
+        throw new Error("callback failed");
+      });
+
+      await expect(engine.publish(insertUser, "charlie")).rejects.toThrow("callback failed");
+    });
+
+    test("subscribe without callback still runs matching selector", async () => {
+      let runCount = 0;
+      const selector: Selector<[], SqlRow[]> = {
+        tables: ["users"],
+        run: () => {
+          runCount += 1;
+          return storage.query("SELECT * FROM users ORDER BY id");
         },
       };
 
       engine.subscribe(selector);
+      const publishResult = await engine.publish(insertUser, "charlie");
 
-      await expect(engine.publish(insertUser, "charlie")).rejects.toThrow("callback failed");
+      expect(publishResult).toBeUndefined();
+      expect(runCount).toBe(1);
     });
   });
 

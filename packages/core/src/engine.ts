@@ -1,23 +1,43 @@
-import type { Broker, Mutator, Selector, TableKey, Unsubscribe } from "./types";
+import type { Broker, Mutator, Selector, SubscribeCallback, TableKey, Unsubscribe } from "./types";
 
-interface TrackedSelectorCall<Table, Result = unknown> {
-  selector: Selector<unknown[], Result, Table>;
+interface TrackedSelectorCall<Table> {
+  selector: Selector<unknown[], unknown, Table>;
   params: readonly unknown[];
   tables: readonly Table[];
+  callback?: SubscribeCallback<unknown[], unknown, Table>;
 }
 
 export class SyncEngine<Table = TableKey> implements Broker<Table> {
   private subscriptions = new Set<TrackedSelectorCall<Table>>();
 
+  subscribe<Result>(
+    selector: Selector<[], Result, Table>,
+    params?: [],
+    callback?: SubscribeCallback<[], Result, Table>,
+  ): Unsubscribe;
+  subscribe<Params extends [unknown, ...unknown[]], Result>(
+    selector: Selector<Params, Result, Table>,
+    params: Params,
+    callback?: SubscribeCallback<Params, Result, Table>,
+  ): Unsubscribe;
   subscribe<Params extends unknown[], Result>(
     selector: Selector<Params, Result, Table>,
-    ...params: Params
+    ...rest: Params extends []
+      ? [params?: [], callback?: SubscribeCallback<[], Result, Table>]
+      : [params: Params, callback?: SubscribeCallback<Params, Result, Table>]
   ): Unsubscribe {
+    const [params, callback] = rest as [
+      Params | undefined,
+      SubscribeCallback<Params, Result, Table> | undefined,
+    ];
     const subscription: TrackedSelectorCall<Table> = {
       selector: selector as Selector<unknown[], unknown, Table>,
-      params: [...params],
+      params: [...(params ?? [])],
       tables: [...selector.tables],
     };
+    if (callback !== undefined) {
+      subscription.callback = callback as SubscribeCallback<unknown[], unknown, Table>;
+    }
     this.subscriptions.add(subscription);
     return () => {
       this.subscriptions.delete(subscription);
@@ -44,7 +64,7 @@ export class SyncEngine<Table = TableKey> implements Broker<Table> {
       }
 
       const result = await subscription.selector.run(...subscription.params);
-      await subscription.selector.callback(result);
+      await subscription.callback?.(result, subscription.selector, subscription.params);
     }
   }
 }

@@ -8,8 +8,17 @@ export interface Selector<
 > {
   tables: readonly Table[];
   run(...params: Params): MaybePromise<Result>;
-  callback(result: Result): MaybePromise<void>;
 }
+
+export type SubscribeCallback<
+  Params extends unknown[] = unknown[],
+  Result = unknown,
+  Table = TableKey,
+> = (
+  result: Result,
+  selector: Selector<Params, Result, Table>,
+  params: readonly [...Params],
+) => MaybePromise<void>;
 
 export interface Mutator<
   Params extends unknown[] = unknown[],
@@ -22,9 +31,15 @@ export interface Mutator<
 
 export type Unsubscribe = () => void;
 export interface Broker<Table = TableKey> {
-  subscribe<Params extends unknown[], Result>(
+  subscribe<Result>(
+    selector: Selector<[], Result, Table>,
+    params?: [],
+    callback?: SubscribeCallback<[], Result, Table>,
+  ): Unsubscribe;
+  subscribe<Params extends [unknown, ...unknown[]], Result>(
     selector: Selector<Params, Result, Table>,
-    ...params: Params
+    params: Params,
+    callback?: SubscribeCallback<Params, Result, Table>,
   ): Unsubscribe;
   publish<Params extends unknown[], Metadata>(
     mutator: Mutator<Params, Metadata, Table>,

@@ -17,7 +17,7 @@ export interface Env {
 
 export type MutationResponse = WireMutationResponse;
 
-type SelectorDefinition<Result> = Pick<Selector<[], Result>, "tables" | "run">;
+type SelectorDefinition<Result> = Selector<[], Result>;
 type TodoSelectors = {
   [Name in TodoSelectorName]: SelectorDefinition<TodoSelectorResults[Name]>;
 };
@@ -335,21 +335,36 @@ export class TodoStore extends DurableObject<Env> {
     return selectors.filter(isTodoSelectorName);
   }
 
-  private selectorForWebSocket<Name extends TodoSelectorName>(
+  private sendSelectorResult<Name extends TodoSelectorName>(
     ws: WebSocket,
     name: Name,
-  ): Selector<[], TodoSelectorResults[Name]> {
-    return {
-      ...this.selectors[name],
-      callback: (result) => {
-        const message = {
-          type: "selectorResult",
-          selector: name,
-          result,
-        } as ServerMessage;
-        this.send(ws, message);
-      },
-    };
+    result: TodoSelectorResults[Name],
+  ): void {
+    const message = {
+      type: "selectorResult",
+      selector: name,
+      result,
+    } as ServerMessage;
+    this.send(ws, message);
+  }
+
+  private async subscribeSelector<Name extends TodoSelectorName>(
+    ws: WebSocket,
+    socketSubscriptions: Map<TodoSelectorName, Unsubscribe>,
+    name: Name,
+  ): Promise<void> {
+    const selector = this.selectors[name];
+    if (!socketSubscriptions.has(name)) {
+      socketSubscriptions.set(
+        name,
+        this.engine.subscribe(selector, [], (result) => {
+          this.sendSelectorResult(ws, name, result);
+        }),
+      );
+    }
+
+    const result = await selector.run();
+    this.sendSelectorResult(ws, name, result);
   }
 
   private async subscribeSelectors(
@@ -363,13 +378,7 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     for (const name of selectors) {
-      const selector = this.selectorForWebSocket(ws, name);
-      if (!socketSubscriptions.has(name)) {
-        socketSubscriptions.set(name, this.engine.subscribe(selector));
-      }
-
-      const result = await selector.run();
-      await selector.callback(result);
+      await this.subscribeSelector(ws, socketSubscriptions, name);
     }
 
     ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
