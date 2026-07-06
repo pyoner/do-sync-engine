@@ -3,15 +3,20 @@
   import {
     TODO_WS_PATH,
     type ClientCommand,
-    type ClientMessage,
+    type MutationCommand,
     type MutationResponse,
     type ServerMessage,
     type Todo,
+    type TodoSelectorName,
+    type TodoSelectorResults,
   } from "./todo-protocol";
+
+  const defaultSelectors: TodoSelectorName[] = ["allTodos", "todoCount"];
 
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
   let lastMutation = $state<MutationResponse | null>(null);
+  let selectorResults = $state<Partial<TodoSelectorResults>>({});
   let loading = $state(false);
   let socket = $state<WebSocket | null>(null);
   let connected = $state(false);
@@ -37,6 +42,7 @@
     ws.addEventListener("open", () => {
       connected = true;
       errorMessage = null;
+      sendClientMessage({ type: "subscribe", selectors: defaultSelectors });
     });
 
     ws.addEventListener("message", (event) => {
@@ -72,14 +78,14 @@
 
   function handleServerMessage(message: ServerMessage): void {
     switch (message.type) {
-      case "todos":
-        todos = message.todos;
+      case "selectorResult":
+        selectorResults = { ...selectorResults, [message.selector]: message.result };
+        if (message.selector === "allTodos") {
+          todos = message.result;
+        }
         return;
       case "mutation": {
         lastMutation = message.mutation;
-        if (Array.isArray(message.mutation.recomputeResults.allTodos)) {
-          todos = message.mutation.recomputeResults.allTodos as Todo[];
-        }
         const pending = pendingMutations.get(message.requestId);
         if (pending) {
           pendingMutations.delete(message.requestId);
@@ -100,18 +106,21 @@
     }
   }
 
-  function sendMutation(message: ClientCommand): Promise<MutationResponse> {
+  function sendClientMessage(message: ClientCommand, requestId = crypto.randomUUID()): string {
     if (socket?.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("WebSocket is not connected"));
+      throw new Error("WebSocket is not connected");
     }
 
-    const requestId = crypto.randomUUID();
-    const outbound: ClientMessage = { ...message, requestId };
+    socket.send(JSON.stringify({ ...message, requestId }));
+    return requestId;
+  }
 
+  function sendMutation(message: MutationCommand): Promise<MutationResponse> {
     return new Promise((resolve, reject) => {
+      const requestId = crypto.randomUUID();
       pendingMutations.set(requestId, { resolve, reject });
       try {
-        socket.send(JSON.stringify(outbound));
+        sendClientMessage(message, requestId);
       } catch (error) {
         pendingMutations.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
@@ -225,23 +234,27 @@
 
   {#if lastMutation}
     <div class="recompute-panel">
-      <h2>Last recompute</h2>
+      <h2>Last mutation</h2>
       <p class="meta">Rows affected: {lastMutation.metadata.rowsAffected}</p>
-      <h3>Recomputed selectors</h3>
-      <ul class="selector-list">
-        {#each lastMutation.recomputedSelectors as sel}
-          <li>
-            <code>{sel}</code>
-            <span class="row-count">({lastMutation.recomputeResults[sel]?.length ?? 0} rows)</span>
-          </li>
-        {/each}
-      </ul>
-      <details>
-        <summary>Full recompute results (JSON)</summary>
-        <pre>{JSON.stringify(lastMutation.recomputeResults, null, 2)}</pre>
-      </details>
+      <p class="meta">Last insert rowid: {lastMutation.metadata.lastInsertRowid ?? "n/a"}</p>
     </div>
   {/if}
+
+  <div class="recompute-panel">
+    <h2>Subscribed selectors</h2>
+    <ul class="selector-list">
+      {#each defaultSelectors as selector}
+        <li>
+          <code>{selector}</code>
+          <span class="row-count">({selectorResults[selector]?.length ?? 0} rows)</span>
+        </li>
+      {/each}
+    </ul>
+    <details>
+      <summary>Latest selector results (JSON)</summary>
+      <pre>{JSON.stringify(selectorResults, null, 2)}</pre>
+    </details>
+  </div>
 </main>
 
 <style>
@@ -371,11 +384,6 @@
     color: var(--accent);
   }
 
-  .recompute-panel h3 {
-    margin: 0.75rem 0 0.25rem;
-    font-size: 0.85rem;
-    color: #aaa;
-  }
 
   .meta {
     margin: 0.25rem 0;

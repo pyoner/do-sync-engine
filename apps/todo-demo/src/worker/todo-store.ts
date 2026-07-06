@@ -1,14 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Broker, Mutator, Selector } from "@do-sync-engine/core";
+import type { Broker, Mutator, Selector, Unsubscribe } from "@do-sync-engine/core";
 import type {
   ClientMessage,
   MutationResponse as WireMutationResponse,
   ServerMessage,
-  Todo,
+  TodoSelectorName,
+  TodoSelectorResults,
 } from "../todo-protocol";
 import { DoSyncStorage } from "./do-storage";
-import type { MutationMetadata, SqlRow } from "./do-storage";
+import type { MutationMetadata } from "./do-storage";
 
 export interface Env {
   TODO_STORE: DurableObjectNamespace<TodoStore>;
@@ -16,18 +17,20 @@ export interface Env {
 
 export type MutationResponse = WireMutationResponse;
 
-interface TodoSelectors {
-  allTodos: Selector<[], Todo[]>;
-  incompleteTodos: Selector<[], SqlRow[]>;
-  completedTodos: Selector<[], SqlRow[]>;
-  todoCount: Selector<[], SqlRow[]>;
-}
+type SelectorDefinition<Result> = Pick<Selector<[], Result>, "tables" | "run">;
+type TodoSelectors = {
+  [Name in TodoSelectorName]: SelectorDefinition<TodoSelectorResults[Name]>;
+};
 
 interface TodoMutators {
   addTodo: Mutator<[string], MutationMetadata>;
   toggleTodo: Mutator<[number], MutationMetadata>;
   deleteTodo: Mutator<[number], MutationMetadata>;
   clearCompleted: Mutator<[], MutationMetadata>;
+}
+
+interface WebSocketSubscriptionAttachment {
+  selectors?: TodoSelectorName[];
 }
 
 const SCHEMA = `
@@ -39,9 +42,39 @@ const SCHEMA = `
   )
 `;
 
+const TODO_SELECTOR_NAMES = [
+  "allTodos",
+  "incompleteTodos",
+  "completedTodos",
+  "todoCount",
+] as const satisfies readonly TodoSelectorName[];
+
 function todoTablesFromSql(sql: string) {
   return /\btodos\b/i.test(sql) ? ["todos"] : [];
 }
+
+function isTodoSelectorName(value: unknown): value is TodoSelectorName {
+  return typeof value === "string" && TODO_SELECTOR_NAMES.includes(value as TodoSelectorName);
+}
+
+function parseSelectorNames(value: unknown): TodoSelectorName[] | string {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "selectors required";
+  }
+
+  const selectors: TodoSelectorName[] = [];
+  for (const selector of value) {
+    if (!isTodoSelectorName(selector)) {
+      return "Unknown selector";
+    }
+    if (!selectors.includes(selector)) {
+      selectors.push(selector);
+    }
+  }
+
+  return selectors;
+}
+
 function createSelectors(storage: DoSyncStorage): TodoSelectors {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
   const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
@@ -58,22 +91,29 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
           completed: Number(row.completed),
           created_at: Number(row.created_at),
         })),
-      callback: () => {},
     },
     incompleteTodos: {
       tables: todoTablesFromSql(incompleteTodosSql),
-      run: () => storage.query(incompleteTodosSql),
-      callback: () => {},
+      run: () =>
+        storage.query(incompleteTodosSql).map((row) => ({
+          id: Number(row.id),
+          title: String(row.title),
+        })),
     },
     completedTodos: {
       tables: todoTablesFromSql(completedTodosSql),
-      run: () => storage.query(completedTodosSql),
-      callback: () => {},
+      run: () =>
+        storage.query(completedTodosSql).map((row) => ({
+          id: Number(row.id),
+          title: String(row.title),
+        })),
     },
     todoCount: {
       tables: todoTablesFromSql(todoCountSql),
-      run: () => storage.query(todoCountSql),
-      callback: () => {},
+      run: () =>
+        storage.query(todoCountSql).map((row) => ({
+          total_count: Number(row.total_count),
+        })),
     },
   };
 }
@@ -108,6 +148,7 @@ export class TodoStore extends DurableObject<Env> {
   private engine!: Broker;
   private selectors!: TodoSelectors;
   private mutators!: TodoMutators;
+  private subscriptions = new Map<WebSocket, Map<TodoSelectorName, Unsubscribe>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -117,12 +158,11 @@ export class TodoStore extends DurableObject<Env> {
       this.engine = new SyncEngine();
       this.selectors = createSelectors(storage);
       this.mutators = createMutators(storage);
-      this.engine.subscribe({
-        ...this.selectors.allTodos,
-        callback: (todos) => {
-          this.broadcast({ type: "todos", todos });
-        },
-      });
+
+      for (const ws of this.ctx.getWebSockets()) {
+        this.subscriptions.set(ws, new Map());
+        await this.subscribeSelectors(ws, this.readAttachedSelectors(ws));
+      }
     });
   }
 
@@ -134,7 +174,8 @@ export class TodoStore extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    this.send(server, { type: "todos", todos: await this.getAllTodos() });
+    this.subscriptions.set(server, new Map());
+    server.serializeAttachment({ selectors: [] } satisfies WebSocketSubscriptionAttachment);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -164,23 +205,42 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     try {
-      let mutation: MutationResponse;
       switch (parsed.type) {
+        case "subscribe":
+          await this.subscribeSelectors(ws, parsed.selectors);
+          return;
+        case "unsubscribe":
+          this.unsubscribeSelectors(ws, parsed.selectors);
+          return;
         case "addTodo":
-          mutation = await this.addTodo(parsed.title);
-          break;
+          this.send(ws, {
+            type: "mutation",
+            requestId: parsed.requestId,
+            mutation: await this.addTodo(parsed.title),
+          });
+          return;
         case "toggleTodo":
-          mutation = await this.toggleTodo(parsed.todoId);
-          break;
+          this.send(ws, {
+            type: "mutation",
+            requestId: parsed.requestId,
+            mutation: await this.toggleTodo(parsed.todoId),
+          });
+          return;
         case "deleteTodo":
-          mutation = await this.deleteTodo(parsed.todoId);
-          break;
+          this.send(ws, {
+            type: "mutation",
+            requestId: parsed.requestId,
+            mutation: await this.deleteTodo(parsed.todoId),
+          });
+          return;
         case "clearCompleted":
-          mutation = await this.clearCompleted();
-          break;
+          this.send(ws, {
+            type: "mutation",
+            requestId: parsed.requestId,
+            mutation: await this.clearCompleted(),
+          });
+          return;
       }
-
-      this.send(ws, { type: "mutation", requestId: parsed.requestId, mutation });
     } catch (error) {
       this.send(ws, {
         type: "error",
@@ -190,15 +250,17 @@ export class TodoStore extends DurableObject<Env> {
     }
   }
 
+  webSocketClose(ws: WebSocket): void {
+    this.clearSubscriptions(ws);
+  }
+
+  webSocketError(ws: WebSocket): void {
+    this.clearSubscriptions(ws);
+  }
+
   private send(ws: WebSocket, message: ServerMessage): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
-    }
-  }
-
-  private broadcast(message: ServerMessage): void {
-    for (const ws of this.ctx.getWebSockets()) {
-      this.send(ws, message);
     }
   }
 
@@ -216,6 +278,15 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     switch (candidate.type) {
+      case "subscribe":
+      case "unsubscribe": {
+        const selectors = parseSelectorNames(candidate.selectors);
+        if (typeof selectors === "string") {
+          return { error: selectors, requestId };
+        }
+
+        return { type: candidate.type, requestId, selectors };
+      }
       case "addTodo": {
         if (typeof candidate.title !== "string" || !candidate.title.trim()) {
           return { error: "title required", requestId };
@@ -250,8 +321,86 @@ export class TodoStore extends DurableObject<Env> {
     return typeof value === "number" && Number.isInteger(value) && value > 0;
   }
 
-  private async getAllTodos(): Promise<Todo[]> {
-    return this.selectors.allTodos.run();
+  private readAttachedSelectors(ws: WebSocket): TodoSelectorName[] {
+    const attachment = ws.deserializeAttachment();
+    if (typeof attachment !== "object" || attachment === null) {
+      return [];
+    }
+
+    const { selectors } = attachment as WebSocketSubscriptionAttachment;
+    if (!Array.isArray(selectors)) {
+      return [];
+    }
+
+    return selectors.filter(isTodoSelectorName);
+  }
+
+  private selectorForWebSocket<Name extends TodoSelectorName>(
+    ws: WebSocket,
+    name: Name,
+  ): Selector<[], TodoSelectorResults[Name]> {
+    return {
+      ...this.selectors[name],
+      callback: (result) => {
+        const message = {
+          type: "selectorResult",
+          selector: name,
+          result,
+        } as ServerMessage;
+        this.send(ws, message);
+      },
+    };
+  }
+
+  private async subscribeSelectors(
+    ws: WebSocket,
+    selectors: readonly TodoSelectorName[],
+  ): Promise<void> {
+    let socketSubscriptions = this.subscriptions.get(ws);
+    if (!socketSubscriptions) {
+      socketSubscriptions = new Map();
+      this.subscriptions.set(ws, socketSubscriptions);
+    }
+
+    for (const name of selectors) {
+      const selector = this.selectorForWebSocket(ws, name);
+      if (!socketSubscriptions.has(name)) {
+        socketSubscriptions.set(name, this.engine.subscribe(selector));
+      }
+
+      const result = await selector.run();
+      await selector.callback(result);
+    }
+
+    ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
+  }
+
+  private unsubscribeSelectors(ws: WebSocket, selectors: readonly TodoSelectorName[]): void {
+    const socketSubscriptions = this.subscriptions.get(ws);
+    if (!socketSubscriptions) {
+      return;
+    }
+
+    for (const name of selectors) {
+      socketSubscriptions.get(name)?.();
+      socketSubscriptions.delete(name);
+    }
+
+    ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
+  }
+
+  private clearSubscriptions(ws: WebSocket): void {
+    const socketSubscriptions = this.subscriptions.get(ws);
+    if (socketSubscriptions) {
+      for (const unsubscribe of socketSubscriptions.values()) {
+        unsubscribe();
+      }
+      this.subscriptions.delete(ws);
+    }
+
+    if (ws.readyState !== WebSocket.CLOSED) {
+      ws.serializeAttachment({ selectors: [] });
+    }
   }
 
   private async addTodo(title: string): Promise<MutationResponse> {
@@ -290,12 +439,6 @@ export class TodoStore extends DurableObject<Env> {
       throw new Error("Mutation did not produce metadata");
     }
 
-    const recomputedSelectors = ["todoCount", "allTodos"];
-    const recomputeResults: Record<string, unknown[]> = {
-      todoCount: await this.selectors.todoCount.run(),
-      allTodos: await this.getAllTodos(),
-    };
-
-    return { metadata, recomputedSelectors, recomputeResults };
+    return { metadata };
   }
 }
