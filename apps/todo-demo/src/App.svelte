@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     TODO_WS_PATH,
+    parseServerMessage,
     type ClientCommand,
     type MutationCommand,
     type MutationResponse,
@@ -9,7 +10,7 @@
     type Todo,
     type TodoQueryName,
     type TodoQueryResults,
-  } from "./todo-protocol";
+} from "./todo-protocol";
 
   const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
 
@@ -69,7 +70,7 @@
       }
 
       try {
-        handleServerMessage(JSON.parse(event.data) as ServerMessage);
+        handleServerMessage(parseServerMessage(event.data));
       } catch {
         errorMessage = "Invalid server message";
       }

@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
 import type { Mutation, Query, QueryResult, SubscriptionId } from "@do-sync-engine/core";
+import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
-  ClientMessage,
   MutationMetadata,
   MutationResponse,
   ServerMessage,
@@ -35,13 +35,6 @@ const SCHEMA = `
   )
 `;
 
-const TODO_QUERY_NAMES = [
-  "allTodos",
-  "incompleteTodos",
-  "completedTodos",
-  "todoCount",
-] as const satisfies readonly TodoQueryName[];
-
 function readTablesFromSql(sql: string) {
   const lower = sql.toLowerCase();
   return /\b(from|join)\s+todos\b/.test(lower) ? ["todos"] : [];
@@ -50,28 +43,6 @@ function readTablesFromSql(sql: string) {
 function writeTablesFromSql(sql: string) {
   const lower = sql.toLowerCase();
   return /^\s*(insert\s+into|update|delete\s+from)\s+todos\b/.test(lower) ? ["todos"] : [];
-}
-
-function isTodoQueryName(value: unknown): value is TodoQueryName {
-  return typeof value === "string" && TODO_QUERY_NAMES.includes(value as TodoQueryName);
-}
-
-function parseQueryNames(value: unknown): TodoQueryName[] | string {
-  if (!Array.isArray(value) || value.length === 0) {
-    return "queries required";
-  }
-
-  const queries: TodoQueryName[] = [];
-  for (const query of value) {
-    if (!isTodoQueryName(query)) {
-      return "Unknown query";
-    }
-    if (!queries.includes(query)) {
-      queries.push(query);
-    }
-  }
-
-  return queries;
 }
 
 function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
@@ -186,15 +157,7 @@ export class TodoStore extends DurableObject<Env> {
       return;
     }
 
-    let value: unknown;
-    try {
-      value = JSON.parse(message);
-    } catch {
-      this.send(ws, { type: "error", message: "Invalid JSON message" });
-      return;
-    }
-
-    const parsed = this.parseClientMessage(value);
+    const parsed = parseClientMessage(message);
     if ("error" in parsed) {
       this.send(ws, {
         type: "error",
@@ -262,63 +225,6 @@ export class TodoStore extends DurableObject<Env> {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
     }
-  }
-
-  private parseClientMessage(
-    value: unknown,
-  ): ClientMessage | { error: string; requestId?: string } {
-    if (typeof value !== "object" || value === null) {
-      return { error: "requestId required" };
-    }
-
-    const candidate = value as Record<string, unknown>;
-    const requestId = typeof candidate.requestId === "string" ? candidate.requestId : undefined;
-    if (!requestId?.trim()) {
-      return { error: "requestId required" };
-    }
-
-    switch (candidate.type) {
-      case "subscribe":
-      case "unsubscribe": {
-        const queries = parseQueryNames(candidate.queries);
-        if (typeof queries === "string") {
-          return { error: queries, requestId };
-        }
-
-        return { type: candidate.type, requestId, queries };
-      }
-      case "addTodo": {
-        if (typeof candidate.title !== "string" || !candidate.title.trim()) {
-          return { error: "title required", requestId };
-        }
-
-        return { type: "addTodo", requestId, title: candidate.title.trim() };
-      }
-      case "toggleTodo": {
-        if (!this.isPositiveInteger(candidate.todoId)) {
-          return { error: "todoId required", requestId };
-        }
-
-        return { type: "toggleTodo", requestId, todoId: candidate.todoId };
-      }
-      case "deleteTodo": {
-        if (!this.isPositiveInteger(candidate.todoId)) {
-          return { error: "todoId required", requestId };
-        }
-
-        return { type: "deleteTodo", requestId, todoId: candidate.todoId };
-      }
-      case "clearCompleted":
-        return { type: "clearCompleted", requestId };
-      default:
-        return requestId
-          ? { error: "Unknown message type", requestId }
-          : { error: "Unknown message type" };
-    }
-  }
-
-  private isPositiveInteger(value: unknown): value is number {
-    return typeof value === "number" && Number.isInteger(value) && value > 0;
   }
 
   private readAttachedQueries(ws: WebSocket): TodoQueryName[] {

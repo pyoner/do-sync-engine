@@ -10,7 +10,8 @@
     "deploy": "vp run build && wrangler deploy"
   },
   "dependencies": {
-    "@do-sync-engine/core": "workspace:*"
+    "@do-sync-engine/core": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "latest",

@@ -12,6 +12,7 @@ catalog:
   vite: npm:@voidzero-dev/vite-plus-core@latest
   vitest: 4.1.9
   vite-plus: latest
+  zod: ^4.4.3
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
