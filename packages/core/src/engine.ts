@@ -1,16 +1,17 @@
 import type {
-  Broker,
-  BrokerSnapshot,
-  MutatorRegistry,
-  OperationKey,
-  PublishResult,
-  SelectionResult,
-  SelectorRegistry,
+  Mutation,
+  MutationMap,
+  MutationResult,
+  Query,
+  QueryMap,
+  QueryResult,
+  Snapshot,
+  Subscription,
   SubscriptionId,
-  SubscriptionState,
   SyncEngineOptions,
-  TableKey,
 } from "./types";
+
+type StringKey<T> = Extract<keyof T, string>;
 
 function cloneOrThrow<T>(value: T, label: string): T {
   try {
@@ -20,23 +21,23 @@ function cloneOrThrow<T>(value: T, label: string): T {
   }
 }
 
-interface ValidatedSnapshot {
+interface ValidatedSnapshot<QueryName extends string = string> {
   nextSubscriptionId: SubscriptionId;
-  subscriptions: SubscriptionState[];
+  subscriptions: Subscription<QueryName>[];
 }
 
-function validateSnapshot(
-  snapshot: BrokerSnapshot,
-  knownSelectors: Set<string>,
-): ValidatedSnapshot {
-  const cloned = cloneOrThrow(snapshot, "Broker snapshot");
+function validateSnapshot<QueryName extends string = string>(
+  snapshot: Snapshot<QueryName>,
+  knownQueries: Set<string>,
+): ValidatedSnapshot<QueryName> {
+  const cloned = cloneOrThrow(snapshot, "Snapshot");
 
   if (!Number.isInteger(cloned.nextSubscriptionId) || cloned.nextSubscriptionId < 1) {
-    throw new TypeError("Broker snapshot nextSubscriptionId must be a positive integer");
+    throw new TypeError("Snapshot nextSubscriptionId must be a positive integer");
   }
 
   if (!Array.isArray(cloned.subscriptions)) {
-    throw new TypeError("Broker snapshot subscriptions must be an array");
+    throw new TypeError("Snapshot subscriptions must be an array");
   }
 
   const seenIds = new Set<SubscriptionId>();
@@ -53,34 +54,39 @@ function validateSnapshot(
       throw new TypeError("Subscription params must be an array");
     }
 
-    if (typeof sub.selector !== "string") {
-      throw new TypeError("Subscription selector must be a string");
+    if (typeof sub.query !== "string") {
+      throw new TypeError("Subscription query must be a string");
     }
 
-    if (!knownSelectors.has(sub.selector)) {
-      throw new ReferenceError(`Unknown selector: ${sub.selector}`);
+    if (!knownQueries.has(sub.query)) {
+      throw new ReferenceError(`Unknown query: ${sub.query}`);
     }
   }
 
-  return cloned as ValidatedSnapshot;
+  return cloned as ValidatedSnapshot<QueryName>;
 }
 
-export class SyncEngine<Table = TableKey> implements Broker {
-  private readonly knownSelectors: ReadonlyMap<OperationKey, SelectorRegistry<Table>[OperationKey]>;
-  private readonly knownMutators: ReadonlyMap<OperationKey, MutatorRegistry<Table>[OperationKey]>;
+export class SyncEngine<
+  Queries extends QueryMap<Queries> = QueryMap,
+  Mutations extends MutationMap<Mutations> = MutationMap,
+> {
+  private readonly queries: ReadonlyMap<string, Query<any[], unknown>>;
+  private readonly mutations: ReadonlyMap<string, Mutation<any[], unknown>>;
   private nextSubscriptionId: SubscriptionId;
-  private subscriptions: SubscriptionState[] = [];
+  private subscriptions: Subscription<StringKey<Queries>>[] = [];
 
-  constructor(options: SyncEngineOptions<Table>) {
-    this.knownSelectors = new Map(Object.entries(options.selectors));
-    this.knownMutators = new Map(Object.entries(options.mutators));
+  constructor(options: SyncEngineOptions<Queries, Mutations>) {
+    this.queries = new Map(Object.entries(options.queries) as [string, Query<any[], unknown>][]);
+    this.mutations = new Map(
+      Object.entries(options.mutations) as [string, Mutation<any[], unknown>][],
+    );
 
     if (options.snapshot === undefined) {
       this.nextSubscriptionId = 1;
       this.subscriptions = [];
     } else {
-      const knownSelectorNames = new Set(this.knownSelectors.keys());
-      const snap = validateSnapshot(options.snapshot, knownSelectorNames);
+      const knownQueryNames = new Set(this.queries.keys());
+      const snap = validateSnapshot(options.snapshot, knownQueryNames);
 
       const highestId = snap.subscriptions.reduce((max, sub) => Math.max(max, sub.id), 0);
       this.nextSubscriptionId = Math.max(snap.nextSubscriptionId, highestId + 1, 1);
@@ -88,15 +94,18 @@ export class SyncEngine<Table = TableKey> implements Broker {
     }
   }
 
-  subscribe(selector: OperationKey, params?: readonly unknown[]): SubscriptionId {
-    if (!this.knownSelectors.has(selector)) {
-      throw new ReferenceError(`Unknown selector: ${selector}`);
+  subscribe<Name extends StringKey<Queries>>(
+    query: Name,
+    ...params: Parameters<Queries[Name]["run"]>
+  ): SubscriptionId {
+    if (!this.queries.has(query)) {
+      throw new ReferenceError(`Unknown query: ${query}`);
     }
 
-    const clonedParams = cloneOrThrow(params ?? [], "Subscription params");
+    const clonedParams = cloneOrThrow([...params], "Subscription params");
 
     const id = this.nextSubscriptionId++;
-    this.subscriptions.push({ id, selector, params: clonedParams });
+    this.subscriptions.push({ id, query, params: clonedParams });
     return id;
   }
 
@@ -107,51 +116,50 @@ export class SyncEngine<Table = TableKey> implements Broker {
     return true;
   }
 
-  snapshot(): BrokerSnapshot {
-    const snap: BrokerSnapshot = {
+  snapshot(): Snapshot<StringKey<Queries>> {
+    const snap: Snapshot<StringKey<Queries>> = {
       nextSubscriptionId: this.nextSubscriptionId,
       subscriptions: [...this.subscriptions],
     };
-    return cloneOrThrow(snap, "Broker snapshot");
+    return cloneOrThrow(snap, "Snapshot");
   }
 
-  async publish(mutator: OperationKey, ...params: unknown[]): Promise<PublishResult> {
-    const mutatorDef = this.knownMutators.get(mutator);
-    if (mutatorDef === undefined) {
-      throw new ReferenceError(`Unknown mutator: ${mutator}`);
+  async mutate<Name extends StringKey<Mutations>>(
+    mutation: Name,
+    ...params: Parameters<Mutations[Name]["run"]>
+  ): Promise<MutationResult<Awaited<ReturnType<Mutations[Name]["run"]>>, StringKey<Queries>>> {
+    const mutationDef = this.mutations.get(mutation);
+    if (mutationDef === undefined) {
+      throw new ReferenceError(`Unknown mutation: ${mutation}`);
     }
 
-    const metadata = await mutatorDef.run(...params);
-    // Intentionally erased by MutatorRegistry type; safe because registry key was already validated
-    const mutatorTables: readonly unknown[] = mutatorDef.tables;
-    const touchedTables = new Set(mutatorTables);
+    const metadata = await mutationDef.run(...params);
+    const changedTables = new Set(mutationDef.tables);
 
     // Shallow-copy subscriptions for safe iteration (destroyed subscriptions skipped)
     const snapshot = [...this.subscriptions];
-    const selections: SelectionResult[] = [];
+    const results: QueryResult<StringKey<Queries>>[] = [];
 
     for (const sub of snapshot) {
       if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
 
-      const selectorDef = this.knownSelectors.get(sub.selector);
-      if (selectorDef === undefined) continue;
-
-      // Intentionally erased by SelectorRegistry type; safe because registry key was already validated
-      const selectorTables: readonly unknown[] = selectorDef.tables;
-      const isAffected = selectorTables.some((table) => touchedTables.has(table));
+      const queryDef = this.queries.get(sub.query);
+      if (queryDef === undefined) continue;
+      const isAffected = queryDef.tables.some((table) => changedTables.has(table));
       if (!isAffected) continue;
 
-      // Registry erases param types intentionally; subscription stores only clone-safe data
-      const selectorParams: readonly unknown[] = sub.params;
-      const result = await selectorDef.run(...(selectorParams as never[]));
-      selections.push({
+      const result = await queryDef.run(...sub.params);
+      results.push({
         subscriptionId: sub.id,
-        selector: sub.selector,
+        query: sub.query,
         params: sub.params,
         result,
       });
     }
 
-    return { metadata, selections };
+    return { metadata, results } as MutationResult<
+      Awaited<ReturnType<Mutations[Name]["run"]>>,
+      StringKey<Queries>
+    >;
   }
 }

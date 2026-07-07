@@ -1,12 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type {
-  Broker,
-  Mutator,
-  Selector,
-  SelectionResult,
-  SubscriptionId,
-} from "@do-sync-engine/core";
+import type { Mutation, Query, QueryResult, SubscriptionId } from "@do-sync-engine/core";
 import type {
   ClientMessage,
   MutationResponse as WireMutationResponse,
@@ -23,16 +17,16 @@ export interface Env {
 
 export type MutationResponse = WireMutationResponse;
 
-type SelectorDefinition<Result> = Selector<[], Result>;
+type SelectorDefinition<Result> = Query<[], Result>;
 type TodoSelectors = {
   [Name in TodoSelectorName]: SelectorDefinition<TodoSelectorResults[Name]>;
 };
 
 interface TodoMutators {
-  addTodo: Mutator<[string], MutationMetadata>;
-  toggleTodo: Mutator<[number], MutationMetadata>;
-  deleteTodo: Mutator<[number], MutationMetadata>;
-  clearCompleted: Mutator<[], MutationMetadata>;
+  addTodo: Mutation<[string], MutationMetadata>;
+  toggleTodo: Mutation<[number], MutationMetadata>;
+  deleteTodo: Mutation<[number], MutationMetadata>;
+  clearCompleted: Mutation<[], MutationMetadata>;
 }
 
 interface WebSocketSubscriptionAttachment {
@@ -151,7 +145,7 @@ function createMutators(storage: DoSyncStorage): TodoMutators {
 }
 
 export class TodoStore extends DurableObject<Env> {
-  private engine!: Broker;
+  private engine!: SyncEngine<TodoSelectors, TodoMutators>;
   private selectors!: TodoSelectors;
   private mutators!: TodoMutators;
   private subscriptions = new Map<WebSocket, Map<TodoSelectorName, SubscriptionId>>();
@@ -163,10 +157,9 @@ export class TodoStore extends DurableObject<Env> {
       this.selectors = createSelectors(storage);
       this.mutators = createMutators(storage);
       this.engine = new SyncEngine({
-        selectors: { ...this.selectors },
-        mutators: { ...this.mutators },
+        queries: { ...this.selectors },
+        mutations: { ...this.mutators },
       });
-
       for (const ws of this.ctx.getWebSockets()) {
         this.subscriptions.set(ws, new Map());
         await this.subscribeSelectors(ws, this.readAttachedSelectors(ws));
@@ -355,23 +348,23 @@ export class TodoStore extends DurableObject<Env> {
     } as ServerMessage;
     this.send(ws, message);
   }
-  private sendPublishedSelection(selection: SelectionResult<TodoSelectorName>): void {
+  private sendPublishedSelection(selection: QueryResult<TodoSelectorName>): void {
     for (const [ws, socketSubscriptions] of this.subscriptions) {
-      const subId = socketSubscriptions.get(selection.selector);
+      const subId = socketSubscriptions.get(selection.query);
       if (subId === selection.subscriptionId) {
-        this.sendSelectorResult(ws, selection.selector, selection.result as never);
+        this.sendSelectorResult(ws, selection.query, selection.result as never);
         return; // at most one socket per selector name
       }
     }
   }
 
-  private async subscribeSelector<Name extends TodoSelectorName>(
+  private async subscribeSelector(
     ws: WebSocket,
     socketSubscriptions: Map<TodoSelectorName, SubscriptionId>,
-    name: Name,
+    name: TodoSelectorName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
-      socketSubscriptions.set(name, this.engine.subscribe(name, []));
+      socketSubscriptions.set(name, this.engine.subscribe(name));
     }
 
     const result = await this.selectors[name].run();
@@ -442,14 +435,14 @@ export class TodoStore extends DurableObject<Env> {
     return this.publishMutation("clearCompleted");
   }
 
-  private async publishMutation(
-    mutator: keyof TodoMutators & string,
-    ...params: unknown[]
+  private async publishMutation<Name extends keyof TodoMutators>(
+    mutator: Name,
+    ...params: Parameters<TodoMutators[Name]["run"]>
   ): Promise<MutationResponse> {
-    const result = await this.engine.publish(mutator, ...params);
-    for (const selection of result.selections) {
-      this.sendPublishedSelection(selection as SelectionResult<TodoSelectorName>);
+    const result = await this.engine.mutate(mutator, ...params);
+    for (const queryResult of result.results) {
+      this.sendPublishedSelection(queryResult);
     }
-    return { metadata: result.metadata as MutationMetadata };
+    return { metadata: result.metadata };
   }
 }
