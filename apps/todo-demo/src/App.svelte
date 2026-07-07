@@ -7,16 +7,16 @@
     type MutationResponse,
     type ServerMessage,
     type Todo,
-    type TodoSelectorName,
-    type TodoSelectorResults,
+    type TodoQueryName,
+    type TodoQueryResults,
   } from "./todo-protocol";
 
-  const defaultSelectors: TodoSelectorName[] = ["allTodos", "todoCount"];
+  const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
 
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
   let lastMutation = $state<MutationResponse | null>(null);
-  let selectorResults = $state<Partial<TodoSelectorResults>>({});
+  let queryResults = $state<Partial<TodoQueryResults>>({});
   let loading = $state(false);
   let socket = $state<WebSocket | null>(null);
   let connected = $state(false);
@@ -25,10 +25,27 @@
   const pendingMutations = new Map<
     string,
     {
-      resolve: (mutation: MutationResponse) => void;
+      resolve: () => void;
       reject: (error: Error) => void;
     }
   >();
+
+  function toErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  async function runMutation(message: MutationCommand, afterSuccess?: () => void) {
+    loading = true;
+    errorMessage = null;
+    try {
+      await sendMutation(message);
+      afterSuccess?.();
+    } catch (error) {
+      errorMessage = toErrorMessage(error);
+    } finally {
+      loading = false;
+    }
+  }
 
   function websocketUrl(): string {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -42,7 +59,7 @@
     ws.addEventListener("open", () => {
       connected = true;
       errorMessage = null;
-      sendClientMessage({ type: "subscribe", selectors: defaultSelectors });
+      sendClientMessage({ type: "subscribe", queries: defaultQueries });
     });
 
     ws.addEventListener("message", (event) => {
@@ -78,9 +95,9 @@
 
   function handleServerMessage(message: ServerMessage): void {
     switch (message.type) {
-      case "selectorResult":
-        selectorResults = { ...selectorResults, [message.selector]: message.result };
-        if (message.selector === "allTodos") {
+      case "queryResult":
+        queryResults = { ...queryResults, [message.query]: message.result };
+        if (message.query === "allTodos") {
           todos = message.result;
         }
         return;
@@ -89,7 +106,7 @@
         const pending = pendingMutations.get(message.requestId);
         if (pending) {
           pendingMutations.delete(message.requestId);
-          pending.resolve(message.mutation);
+          pending.resolve();
         }
         return;
       }
@@ -115,7 +132,7 @@
     return requestId;
   }
 
-  function sendMutation(message: MutationCommand): Promise<MutationResponse> {
+  function sendMutation(message: MutationCommand): Promise<void> {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomUUID();
       pendingMutations.set(requestId, { resolve, reject });
@@ -123,63 +140,29 @@
         sendClientMessage(message, requestId);
       } catch (error) {
         pendingMutations.delete(requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        reject(new Error(toErrorMessage(error)));
       }
     });
   }
 
-  async function addTodo() {
-    if (!newTitle.trim()) return;
-    loading = true;
-    errorMessage = null;
-    try {
-      const mutation = await sendMutation({ type: "addTodo", title: newTitle.trim() });
-      lastMutation = mutation;
+  function addTodo() {
+    const title = newTitle.trim();
+    if (!title) return;
+    return runMutation({ type: "addTodo", title }, () => {
       newTitle = "";
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      loading = false;
-    }
+    });
   }
 
-  async function toggleTodo(id: number) {
-    loading = true;
-    errorMessage = null;
-    try {
-      const mutation = await sendMutation({ type: "toggleTodo", todoId: id });
-      lastMutation = mutation;
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      loading = false;
-    }
+  function toggleTodo(id: number) {
+    return runMutation({ type: "toggleTodo", todoId: id });
   }
 
-  async function deleteTodo(id: number) {
-    loading = true;
-    errorMessage = null;
-    try {
-      const mutation = await sendMutation({ type: "deleteTodo", todoId: id });
-      lastMutation = mutation;
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      loading = false;
-    }
+  function deleteTodo(id: number) {
+    return runMutation({ type: "deleteTodo", todoId: id });
   }
 
-  async function clearCompleted() {
-    loading = true;
-    errorMessage = null;
-    try {
-      const mutation = await sendMutation({ type: "clearCompleted" });
-      lastMutation = mutation;
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    } finally {
-      loading = false;
-    }
+  function clearCompleted() {
+    return runMutation({ type: "clearCompleted" });
   }
 
   onMount(() => {
@@ -241,26 +224,24 @@
   {/if}
 
   <div class="recompute-panel">
-    <h2>Subscribed selectors</h2>
-    <ul class="selector-list">
-      {#each defaultSelectors as selector}
+    <h2>Subscribed queries</h2>
+    <ul class="query-list">
+      {#each defaultQueries as query}
         <li>
-          <code>{selector}</code>
-          <span class="row-count">({selectorResults[selector]?.length ?? 0} rows)</span>
+          <code>{query}</code>
+          <span class="row-count">({queryResults[query]?.length ?? 0} rows)</span>
         </li>
       {/each}
     </ul>
     <details>
-      <summary>Latest selector results (JSON)</summary>
-      <pre>{JSON.stringify(selectorResults, null, 2)}</pre>
+      <summary>Latest query results (JSON)</summary>
+      <pre>{JSON.stringify(queryResults, null, 2)}</pre>
     </details>
   </div>
 </main>
 
 <style>
   :root {
-    --bg: #0f0f0f;
-    --fg: #e0e0e0;
     --accent: #4fc3f7;
     --accent-dim: #1a3a4a;
     --border: #333;
@@ -384,19 +365,18 @@
     color: var(--accent);
   }
 
-
   .meta {
     margin: 0.25rem 0;
     font-size: 0.9rem;
   }
 
-  .selector-list {
+  .query-list {
     list-style: none;
     padding: 0;
     margin: 0;
   }
 
-  .selector-list li {
+  .query-list li {
     font-size: 0.9rem;
     padding: 0.15rem 0;
   }

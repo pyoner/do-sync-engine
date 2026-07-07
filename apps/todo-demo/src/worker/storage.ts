@@ -1,12 +1,9 @@
+import type { MutationMetadata } from "../todo-protocol";
+
 export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
 export type SqlRow = Record<string, SqlValue>;
 
-export interface MutationMetadata {
-  rowsAffected: number;
-  lastInsertRowid: number | null;
-}
-
-export class DoSyncStorage {
+export class DurableObjectSqlStorage {
   private sql: SqlStorage;
 
   constructor(sql: SqlStorage) {

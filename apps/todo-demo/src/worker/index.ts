@@ -1,5 +1,4 @@
 import { TODO_WS_PATH } from "../todo-protocol";
-import type { Env } from "./todo-store";
 
 export { TodoStore } from "./todo-store";
 

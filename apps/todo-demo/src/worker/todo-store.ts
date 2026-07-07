@@ -3,26 +3,19 @@ import { SyncEngine } from "@do-sync-engine/core";
 import type { Mutation, Query, QueryResult, SubscriptionId } from "@do-sync-engine/core";
 import type {
   ClientMessage,
-  MutationResponse as WireMutationResponse,
+  MutationMetadata,
+  MutationResponse,
   ServerMessage,
-  TodoSelectorName,
-  TodoSelectorResults,
+  TodoQueryName,
+  TodoQueryResults,
 } from "../todo-protocol";
-import { DoSyncStorage } from "./do-storage";
-import type { MutationMetadata } from "./do-storage";
+import { DurableObjectSqlStorage } from "./storage";
 
-export interface Env {
-  TODO_STORE: DurableObjectNamespace<TodoStore>;
-}
-
-export type MutationResponse = WireMutationResponse;
-
-type SelectorDefinition<Result> = Query<[], Result>;
-type TodoSelectors = {
-  [Name in TodoSelectorName]: SelectorDefinition<TodoSelectorResults[Name]>;
+type TodoQueries = {
+  [Name in TodoQueryName]: Query<[], TodoQueryResults[Name]>;
 };
 
-interface TodoMutators {
+interface TodoMutations {
   addTodo: Mutation<[string], MutationMetadata>;
   toggleTodo: Mutation<[number], MutationMetadata>;
   deleteTodo: Mutation<[number], MutationMetadata>;
@@ -30,7 +23,7 @@ interface TodoMutators {
 }
 
 interface WebSocketSubscriptionAttachment {
-  selectors?: TodoSelectorName[];
+  selectors?: TodoQueryName[];
 }
 
 const SCHEMA = `
@@ -42,40 +35,46 @@ const SCHEMA = `
   )
 `;
 
-const TODO_SELECTOR_NAMES = [
+const TODO_QUERY_NAMES = [
   "allTodos",
   "incompleteTodos",
   "completedTodos",
   "todoCount",
-] as const satisfies readonly TodoSelectorName[];
+] as const satisfies readonly TodoQueryName[];
 
-function todoTablesFromSql(sql: string) {
-  return /\btodos\b/i.test(sql) ? ["todos"] : [];
+function readTablesFromSql(sql: string) {
+  const lower = sql.toLowerCase();
+  return /\b(from|join)\s+todos\b/.test(lower) ? ["todos"] : [];
 }
 
-function isTodoSelectorName(value: unknown): value is TodoSelectorName {
-  return typeof value === "string" && TODO_SELECTOR_NAMES.includes(value as TodoSelectorName);
+function writeTablesFromSql(sql: string) {
+  const lower = sql.toLowerCase();
+  return /^\s*(insert\s+into|update|delete\s+from)\s+todos\b/.test(lower) ? ["todos"] : [];
 }
 
-function parseSelectorNames(value: unknown): TodoSelectorName[] | string {
+function isTodoQueryName(value: unknown): value is TodoQueryName {
+  return typeof value === "string" && TODO_QUERY_NAMES.includes(value as TodoQueryName);
+}
+
+function parseQueryNames(value: unknown): TodoQueryName[] | string {
   if (!Array.isArray(value) || value.length === 0) {
-    return "selectors required";
+    return "queries required";
   }
 
-  const selectors: TodoSelectorName[] = [];
-  for (const selector of value) {
-    if (!isTodoSelectorName(selector)) {
-      return "Unknown selector";
+  const queries: TodoQueryName[] = [];
+  for (const query of value) {
+    if (!isTodoQueryName(query)) {
+      return "Unknown query";
     }
-    if (!selectors.includes(selector)) {
-      selectors.push(selector);
+    if (!queries.includes(query)) {
+      queries.push(query);
     }
   }
 
-  return selectors;
+  return queries;
 }
 
-function createSelectors(storage: DoSyncStorage): TodoSelectors {
+function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
   const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
   const completedTodosSql = "SELECT id, title FROM todos WHERE completed = 1 ORDER BY id";
@@ -83,7 +82,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
 
   return {
     allTodos: {
-      tables: todoTablesFromSql(allTodosSql),
+      tables: readTablesFromSql(allTodosSql),
       run: () =>
         storage.query(allTodosSql).map((row) => ({
           id: Number(row.id),
@@ -93,7 +92,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
         })),
     },
     incompleteTodos: {
-      tables: todoTablesFromSql(incompleteTodosSql),
+      tables: readTablesFromSql(incompleteTodosSql),
       run: () =>
         storage.query(incompleteTodosSql).map((row) => ({
           id: Number(row.id),
@@ -101,7 +100,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
         })),
     },
     completedTodos: {
-      tables: todoTablesFromSql(completedTodosSql),
+      tables: readTablesFromSql(completedTodosSql),
       run: () =>
         storage.query(completedTodosSql).map((row) => ({
           id: Number(row.id),
@@ -109,7 +108,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
         })),
     },
     todoCount: {
-      tables: todoTablesFromSql(todoCountSql),
+      tables: readTablesFromSql(todoCountSql),
       run: () =>
         storage.query(todoCountSql).map((row) => ({
           total_count: Number(row.total_count),
@@ -118,7 +117,7 @@ function createSelectors(storage: DoSyncStorage): TodoSelectors {
   };
 }
 
-function createMutators(storage: DoSyncStorage): TodoMutators {
+function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
   const addTodoSql = "INSERT INTO todos (title) VALUES (?)";
   const toggleTodoSql = "UPDATE todos SET completed = NOT completed WHERE id = ?";
   const deleteTodoSql = "DELETE FROM todos WHERE id = ?";
@@ -126,43 +125,43 @@ function createMutators(storage: DoSyncStorage): TodoMutators {
 
   return {
     addTodo: {
-      tables: todoTablesFromSql(addTodoSql),
+      tables: writeTablesFromSql(addTodoSql),
       run: (title) => storage.execute(addTodoSql, title),
     },
     toggleTodo: {
-      tables: todoTablesFromSql(toggleTodoSql),
+      tables: writeTablesFromSql(toggleTodoSql),
       run: (id) => storage.execute(toggleTodoSql, id),
     },
     deleteTodo: {
-      tables: todoTablesFromSql(deleteTodoSql),
+      tables: writeTablesFromSql(deleteTodoSql),
       run: (id) => storage.execute(deleteTodoSql, id),
     },
     clearCompleted: {
-      tables: todoTablesFromSql(clearCompletedSql),
+      tables: writeTablesFromSql(clearCompletedSql),
       run: () => storage.execute(clearCompletedSql),
     },
-  } satisfies TodoMutators;
+  } satisfies TodoMutations;
 }
 
 export class TodoStore extends DurableObject<Env> {
-  private engine!: SyncEngine<TodoSelectors, TodoMutators>;
-  private selectors!: TodoSelectors;
-  private mutators!: TodoMutators;
-  private subscriptions = new Map<WebSocket, Map<TodoSelectorName, SubscriptionId>>();
+  private engine!: SyncEngine<TodoQueries, TodoMutations>;
+  private queries!: TodoQueries;
+  private subscriptions = new Map<WebSocket, Map<TodoQueryName, SubscriptionId>>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA);
-      const storage = new DoSyncStorage(this.ctx.storage.sql);
-      this.selectors = createSelectors(storage);
-      this.mutators = createMutators(storage);
+      const storage = new DurableObjectSqlStorage(this.ctx.storage.sql);
+      this.queries = createQueries(storage);
+      const mutations = createMutations(storage);
       this.engine = new SyncEngine({
-        queries: { ...this.selectors },
-        mutations: { ...this.mutators },
+        queries: { ...this.queries },
+        mutations: { ...mutations },
       });
       for (const ws of this.ctx.getWebSockets()) {
         this.subscriptions.set(ws, new Map());
-        await this.subscribeSelectors(ws, this.readAttachedSelectors(ws));
+        await this.subscribeQueries(ws, this.readAttachedQueries(ws));
       }
     });
   }
@@ -208,37 +207,37 @@ export class TodoStore extends DurableObject<Env> {
     try {
       switch (parsed.type) {
         case "subscribe":
-          await this.subscribeSelectors(ws, parsed.selectors);
+          await this.subscribeQueries(ws, parsed.queries);
           return;
         case "unsubscribe":
-          this.unsubscribeSelectors(ws, parsed.selectors);
+          this.unsubscribeQueries(ws, parsed.queries);
           return;
         case "addTodo":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.addTodo(parsed.title),
+            mutation: await this.publishMutation("addTodo", parsed.title),
           });
           return;
         case "toggleTodo":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.toggleTodo(parsed.todoId),
+            mutation: await this.publishMutation("toggleTodo", parsed.todoId),
           });
           return;
         case "deleteTodo":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.deleteTodo(parsed.todoId),
+            mutation: await this.publishMutation("deleteTodo", parsed.todoId),
           });
           return;
         case "clearCompleted":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.clearCompleted(),
+            mutation: await this.publishMutation("clearCompleted"),
           });
           return;
       }
@@ -281,12 +280,12 @@ export class TodoStore extends DurableObject<Env> {
     switch (candidate.type) {
       case "subscribe":
       case "unsubscribe": {
-        const selectors = parseSelectorNames(candidate.selectors);
-        if (typeof selectors === "string") {
-          return { error: selectors, requestId };
+        const queries = parseQueryNames(candidate.queries);
+        if (typeof queries === "string") {
+          return { error: queries, requestId };
         }
 
-        return { type: candidate.type, requestId, selectors };
+        return { type: candidate.type, requestId, queries };
       }
       case "addTodo": {
         if (typeof candidate.title !== "string" || !candidate.title.trim()) {
@@ -322,7 +321,7 @@ export class TodoStore extends DurableObject<Env> {
     return typeof value === "number" && Number.isInteger(value) && value > 0;
   }
 
-  private readAttachedSelectors(ws: WebSocket): TodoSelectorName[] {
+  private readAttachedQueries(ws: WebSocket): TodoQueryName[] {
     const attachment = ws.deserializeAttachment();
     if (typeof attachment !== "object" || attachment === null) {
       return [];
@@ -333,68 +332,67 @@ export class TodoStore extends DurableObject<Env> {
       return [];
     }
 
-    return selectors.filter(isTodoSelectorName);
+    return selectors.filter(isTodoQueryName);
   }
 
-  private sendSelectorResult<Name extends TodoSelectorName>(
+  private sendQueryResult<Name extends TodoQueryName>(
     ws: WebSocket,
     name: Name,
-    result: TodoSelectorResults[Name],
+    result: TodoQueryResults[Name],
   ): void {
     const message = {
-      type: "selectorResult",
-      selector: name,
+      type: "queryResult",
+      query: name,
       result,
     } as ServerMessage;
     this.send(ws, message);
   }
-  private sendPublishedSelection(selection: QueryResult<TodoSelectorName>): void {
+
+  private sendPublishedQueryResult(selection: QueryResult<TodoQueryName>): void {
+    // subscription ids are unique
     for (const [ws, socketSubscriptions] of this.subscriptions) {
       const subId = socketSubscriptions.get(selection.query);
       if (subId === selection.subscriptionId) {
-        this.sendSelectorResult(ws, selection.query, selection.result as never);
-        return; // at most one socket per selector name
+        this.sendQueryResult(ws, selection.query, selection.result as never);
+        return; // at most one socket per query name
       }
     }
   }
 
-  private async subscribeSelector(
+  private async subscribeQuery(
     ws: WebSocket,
-    socketSubscriptions: Map<TodoSelectorName, SubscriptionId>,
-    name: TodoSelectorName,
+    socketSubscriptions: Map<TodoQueryName, SubscriptionId>,
+    name: TodoQueryName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
       socketSubscriptions.set(name, this.engine.subscribe(name));
     }
 
-    const result = await this.selectors[name].run();
-    this.sendSelectorResult(ws, name, result);
+    const result = await this.queries[name].run();
+    this.sendQueryResult(ws, name, result);
   }
 
-  private async subscribeSelectors(
-    ws: WebSocket,
-    selectors: readonly TodoSelectorName[],
-  ): Promise<void> {
+  private async subscribeQueries(ws: WebSocket, queries: readonly TodoQueryName[]): Promise<void> {
     let socketSubscriptions = this.subscriptions.get(ws);
     if (!socketSubscriptions) {
       socketSubscriptions = new Map();
       this.subscriptions.set(ws, socketSubscriptions);
     }
 
-    for (const name of selectors) {
-      await this.subscribeSelector(ws, socketSubscriptions, name);
+    for (const name of queries) {
+      await this.subscribeQuery(ws, socketSubscriptions, name);
     }
 
     ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
   }
 
-  private unsubscribeSelectors(ws: WebSocket, selectors: readonly TodoSelectorName[]): void {
+  private unsubscribeQueries(ws: WebSocket, queries: readonly TodoQueryName[]): void {
     const socketSubscriptions = this.subscriptions.get(ws);
     if (!socketSubscriptions) {
       return;
     }
 
-    for (const name of selectors) {
+    for (const name of queries) {
       const subscriptionId = socketSubscriptions.get(name);
       if (subscriptionId !== undefined) {
         this.engine.unsubscribe(subscriptionId);
@@ -419,29 +417,13 @@ export class TodoStore extends DurableObject<Env> {
     }
   }
 
-  private async addTodo(title: string): Promise<MutationResponse> {
-    return this.publishMutation("addTodo", title);
-  }
-
-  private async toggleTodo(id: number): Promise<MutationResponse> {
-    return this.publishMutation("toggleTodo", id);
-  }
-
-  private async deleteTodo(id: number): Promise<MutationResponse> {
-    return this.publishMutation("deleteTodo", id);
-  }
-
-  private async clearCompleted(): Promise<MutationResponse> {
-    return this.publishMutation("clearCompleted");
-  }
-
-  private async publishMutation<Name extends keyof TodoMutators>(
-    mutator: Name,
-    ...params: Parameters<TodoMutators[Name]["run"]>
+  private async publishMutation<Name extends keyof TodoMutations>(
+    mutation: Name,
+    ...params: Parameters<TodoMutations[Name]["run"]>
   ): Promise<MutationResponse> {
-    const result = await this.engine.mutate(mutator, ...params);
+    const result = await this.engine.mutate(mutation, ...params);
     for (const queryResult of result.results) {
-      this.sendPublishedSelection(queryResult);
+      this.sendPublishedQueryResult(queryResult);
     }
     return { metadata: result.metadata };
   }
