@@ -1,26 +1,30 @@
 import { expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/index.js";
-import type { Broker, Selector, SubscribeCallback, SubscriptionId } from "../src/index.js";
+import type { Broker, Selector, SubscriptionId } from "../src/index.js";
 
 test("exports Broker contract through SyncEngine", () => {
-  const broker: Broker = new SyncEngine();
-  const selector: Selector<[], number> = {
-    tables: ["numbers"],
-    run: () => 1,
+  const selectors = {
+    numbers: {
+      tables: ["numbers"],
+      run: () => 1,
+    } satisfies Selector<[], number>,
   };
-  const subscribeCallback: SubscribeCallback<[], number> = (result, subscribedSelector, params) => {
-    void result;
-    void subscribedSelector;
-    void params;
+  const mutators = {
+    noop: {
+      tables: [],
+      run: () => ({}),
+    } satisfies Selector<[], Record<string, never>>,
   };
+  const broker: Broker = new SyncEngine({ selectors, mutators });
 
-  const subscriptionId: SubscriptionId = broker.subscribe(selector, [], subscribeCallback);
+  const subscriptionId: SubscriptionId = broker.subscribe("numbers");
 
   expect(subscriptionId).toBeTypeOf("number");
 
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "publish",
+    "snapshot",
     "subscribe",
     "unsubscribe",
   ]);

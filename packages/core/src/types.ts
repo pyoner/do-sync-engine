@@ -1,5 +1,7 @@
 export type MaybePromise<T> = T | PromiseLike<T>;
 export type TableKey = string;
+export type SubscriptionId = number;
+export type OperationKey = string;
 
 export interface Selector<
   Params extends unknown[] = unknown[],
@@ -10,16 +12,6 @@ export interface Selector<
   run(...params: Params): MaybePromise<Result>;
 }
 
-export type SubscribeCallback<
-  Params extends unknown[] = unknown[],
-  Result = unknown,
-  Table = TableKey,
-> = (
-  result: Result,
-  selector: Selector<Params, Result, Table>,
-  params: readonly [...Params],
-) => MaybePromise<void>;
-
 export interface Mutator<
   Params extends unknown[] = unknown[],
   Metadata = unknown,
@@ -29,21 +21,46 @@ export interface Mutator<
   run(...params: Params): MaybePromise<Metadata>;
 }
 
-export type SubscriptionId = number;
-export interface Broker<Table = TableKey> {
-  subscribe<Result>(
-    selector: Selector<[], Result, Table>,
-    params?: [],
-    callback?: SubscribeCallback<[], Result, Table>,
-  ): SubscriptionId;
-  subscribe<Params extends [unknown, ...unknown[]], Result>(
-    selector: Selector<Params, Result, Table>,
-    params: Params,
-    callback?: SubscribeCallback<Params, Result, Table>,
-  ): SubscriptionId;
+export type SelectorRegistry<Table = TableKey> = Record<string, Selector<any[], unknown, Table>>;
+
+export type MutatorRegistry<Table = TableKey> = Record<string, Mutator<any[], unknown, Table>>;
+
+export interface SubscriptionState<SelectorName extends string = string> {
+  id: SubscriptionId;
+  selector: SelectorName;
+  params: readonly unknown[];
+}
+
+export interface BrokerSnapshot<SelectorName extends string = string> {
+  nextSubscriptionId: SubscriptionId;
+  subscriptions: readonly SubscriptionState<SelectorName>[];
+}
+
+export interface SelectionResult<SelectorName extends string = string, Result = unknown> {
+  subscriptionId: SubscriptionId;
+  selector: SelectorName;
+  params: readonly unknown[];
+  result: Result;
+}
+
+export interface PublishResult<
+  Metadata = unknown,
+  SelectorName extends string = string,
+  Result = unknown,
+> {
+  metadata: Metadata;
+  selections: readonly SelectionResult<SelectorName, Result>[];
+}
+
+export interface SyncEngineOptions<Table = TableKey> {
+  selectors: SelectorRegistry<Table>;
+  mutators: MutatorRegistry<Table>;
+  snapshot?: BrokerSnapshot;
+}
+
+export interface Broker {
+  subscribe(selector: OperationKey, params?: readonly unknown[]): SubscriptionId;
   unsubscribe(subscriptionId: SubscriptionId): boolean;
-  publish<Params extends unknown[], Metadata>(
-    mutator: Mutator<Params, Metadata, Table>,
-    ...params: Params
-  ): Promise<void>;
+  publish(mutator: OperationKey, ...params: unknown[]): Promise<PublishResult>;
+  snapshot(): BrokerSnapshot;
 }

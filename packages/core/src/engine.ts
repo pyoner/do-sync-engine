@@ -1,82 +1,157 @@
 import type {
   Broker,
-  Mutator,
-  Selector,
-  SubscribeCallback,
+  BrokerSnapshot,
+  MutatorRegistry,
+  OperationKey,
+  PublishResult,
+  SelectionResult,
+  SelectorRegistry,
   SubscriptionId,
+  SubscriptionState,
+  SyncEngineOptions,
   TableKey,
 } from "./types";
 
-interface TrackedSelectorCall<Table> {
-  selector: Selector<unknown[], unknown, Table>;
-  params: readonly unknown[];
-  tables: readonly Table[];
-  callback?: SubscribeCallback<unknown[], unknown, Table>;
+function cloneOrThrow<T>(value: T, label: string): T {
+  try {
+    return structuredClone(value);
+  } catch (cause) {
+    throw new TypeError(`${label} must support structuredClone`, { cause });
+  }
 }
 
-export class SyncEngine<Table = TableKey> implements Broker<Table> {
-  private nextSubscriptionId: SubscriptionId = 1;
-  private subscriptions = new Map<SubscriptionId, TrackedSelectorCall<Table>>();
+interface ValidatedSnapshot {
+  nextSubscriptionId: SubscriptionId;
+  subscriptions: SubscriptionState[];
+}
 
-  subscribe<Result>(
-    selector: Selector<[], Result, Table>,
-    params?: [],
-    callback?: SubscribeCallback<[], Result, Table>,
-  ): SubscriptionId;
-  subscribe<Params extends [unknown, ...unknown[]], Result>(
-    selector: Selector<Params, Result, Table>,
-    params: Params,
-    callback?: SubscribeCallback<Params, Result, Table>,
-  ): SubscriptionId;
-  subscribe<Params extends unknown[], Result>(
-    selector: Selector<Params, Result, Table>,
-    ...rest: Params extends []
-      ? [params?: [], callback?: SubscribeCallback<[], Result, Table>]
-      : [params: Params, callback?: SubscribeCallback<Params, Result, Table>]
-  ): SubscriptionId {
-    const [params, callback] = rest as [
-      Params | undefined,
-      SubscribeCallback<Params, Result, Table> | undefined,
-    ];
-    const subscriptionId = this.nextSubscriptionId;
-    this.nextSubscriptionId += 1;
-    const subscription: TrackedSelectorCall<Table> = {
-      selector: selector as Selector<unknown[], unknown, Table>,
-      params: [...(params ?? [])],
-      tables: [...selector.tables],
-    };
-    if (callback !== undefined) {
-      subscription.callback = callback as SubscribeCallback<unknown[], unknown, Table>;
+function validateSnapshot(
+  snapshot: BrokerSnapshot,
+  knownSelectors: Set<string>,
+): ValidatedSnapshot {
+  const cloned = cloneOrThrow(snapshot, "Broker snapshot");
+
+  if (!Number.isInteger(cloned.nextSubscriptionId) || cloned.nextSubscriptionId < 1) {
+    throw new TypeError("Broker snapshot nextSubscriptionId must be a positive integer");
+  }
+
+  if (!Array.isArray(cloned.subscriptions)) {
+    throw new TypeError("Broker snapshot subscriptions must be an array");
+  }
+
+  const seenIds = new Set<SubscriptionId>();
+  for (const sub of cloned.subscriptions) {
+    if (!Number.isInteger(sub.id) || sub.id < 1) {
+      throw new TypeError("Subscription id must be a positive integer");
     }
-    this.subscriptions.set(subscriptionId, subscription);
-    return subscriptionId;
+    if (seenIds.has(sub.id)) {
+      throw new TypeError(`Duplicate subscription id: ${sub.id}`);
+    }
+    seenIds.add(sub.id);
+
+    if (!Array.isArray(sub.params)) {
+      throw new TypeError("Subscription params must be an array");
+    }
+
+    if (typeof sub.selector !== "string") {
+      throw new TypeError("Subscription selector must be a string");
+    }
+
+    if (!knownSelectors.has(sub.selector)) {
+      throw new ReferenceError(`Unknown selector: ${sub.selector}`);
+    }
+  }
+
+  return cloned as ValidatedSnapshot;
+}
+
+export class SyncEngine<Table = TableKey> implements Broker {
+  private readonly knownSelectors: ReadonlyMap<OperationKey, SelectorRegistry<Table>[OperationKey]>;
+  private readonly knownMutators: ReadonlyMap<OperationKey, MutatorRegistry<Table>[OperationKey]>;
+  private nextSubscriptionId: SubscriptionId;
+  private subscriptions: SubscriptionState[] = [];
+
+  constructor(options: SyncEngineOptions<Table>) {
+    this.knownSelectors = new Map(Object.entries(options.selectors));
+    this.knownMutators = new Map(Object.entries(options.mutators));
+
+    if (options.snapshot === undefined) {
+      this.nextSubscriptionId = 1;
+      this.subscriptions = [];
+    } else {
+      const knownSelectorNames = new Set(this.knownSelectors.keys());
+      const snap = validateSnapshot(options.snapshot, knownSelectorNames);
+
+      const highestId = snap.subscriptions.reduce((max, sub) => Math.max(max, sub.id), 0);
+      this.nextSubscriptionId = Math.max(snap.nextSubscriptionId, highestId + 1, 1);
+      this.subscriptions = snap.subscriptions;
+    }
+  }
+
+  subscribe(selector: OperationKey, params?: readonly unknown[]): SubscriptionId {
+    if (!this.knownSelectors.has(selector)) {
+      throw new ReferenceError(`Unknown selector: ${selector}`);
+    }
+
+    const clonedParams = cloneOrThrow(params ?? [], "Subscription params");
+
+    const id = this.nextSubscriptionId++;
+    this.subscriptions.push({ id, selector, params: clonedParams });
+    return id;
   }
 
   unsubscribe(subscriptionId: SubscriptionId): boolean {
-    return this.subscriptions.delete(subscriptionId);
+    const index = this.subscriptions.findIndex((sub) => sub.id === subscriptionId);
+    if (index === -1) return false;
+    this.subscriptions.splice(index, 1);
+    return true;
   }
 
-  async publish<Params extends unknown[], Metadata>(
-    mutator: Mutator<Params, Metadata, Table>,
-    ...params: Params
-  ): Promise<void> {
-    await mutator.run(...params);
-    const tables = [...new Set(mutator.tables)];
-    const touchedTables = new Set(tables);
+  snapshot(): BrokerSnapshot {
+    const snap: BrokerSnapshot = {
+      nextSubscriptionId: this.nextSubscriptionId,
+      subscriptions: [...this.subscriptions],
+    };
+    return cloneOrThrow(snap, "Broker snapshot");
+  }
 
-    // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot required for unsubscribe-safe publish iteration
-    for (const [subscriptionId, subscription] of [...this.subscriptions]) {
-      if (!this.subscriptions.has(subscriptionId)) {
-        continue;
-      }
-
-      const isAffected = subscription.tables.some((table) => touchedTables.has(table));
-      if (!isAffected) {
-        continue;
-      }
-
-      const result = await subscription.selector.run(...subscription.params);
-      await subscription.callback?.(result, subscription.selector, subscription.params);
+  async publish(mutator: OperationKey, ...params: unknown[]): Promise<PublishResult> {
+    const mutatorDef = this.knownMutators.get(mutator);
+    if (mutatorDef === undefined) {
+      throw new ReferenceError(`Unknown mutator: ${mutator}`);
     }
+
+    const metadata = await mutatorDef.run(...params);
+    // Intentionally erased by MutatorRegistry type; safe because registry key was already validated
+    const mutatorTables: readonly unknown[] = mutatorDef.tables;
+    const touchedTables = new Set(mutatorTables);
+
+    // Shallow-copy subscriptions for safe iteration (destroyed subscriptions skipped)
+    const snapshot = [...this.subscriptions];
+    const selections: SelectionResult[] = [];
+
+    for (const sub of snapshot) {
+      if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
+
+      const selectorDef = this.knownSelectors.get(sub.selector);
+      if (selectorDef === undefined) continue;
+
+      // Intentionally erased by SelectorRegistry type; safe because registry key was already validated
+      const selectorTables: readonly unknown[] = selectorDef.tables;
+      const isAffected = selectorTables.some((table) => touchedTables.has(table));
+      if (!isAffected) continue;
+
+      // Registry erases param types intentionally; subscription stores only clone-safe data
+      const selectorParams: readonly unknown[] = sub.params;
+      const result = await selectorDef.run(...(selectorParams as never[]));
+      selections.push({
+        subscriptionId: sub.id,
+        selector: sub.selector,
+        params: sub.params,
+        result,
+      });
+    }
+
+    return { metadata, selections };
   }
 }

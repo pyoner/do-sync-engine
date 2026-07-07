@@ -32,13 +32,15 @@ describe("SyncEngine", () => {
   let engine: SyncEngine;
   let allUsers: Selector<[], SqlRow[]>;
   let userById: Selector<[number], SqlRow[]>;
+  let postsOnly: Selector<[], SqlRow[]>;
+  let asyncUsers: Selector<[], SqlRow[]>;
+  let failingUsers: Selector<[], SqlRow[]>;
   let insertUser: Mutator<[string], MutationMetadata>;
   let updateUserName: Mutator<[string, number], MutationMetadata>;
 
   beforeEach(() => {
     storage = new NodeSqliteStorage();
     setupDb(storage);
-    engine = new SyncEngine();
 
     const allUsersSql = "SELECT * FROM users ORDER BY id";
     allUsers = {
@@ -52,6 +54,27 @@ describe("SyncEngine", () => {
       run: (id) => storage.query(userByIdSql, id),
     };
 
+    const postsOnlySql = "SELECT * FROM posts ORDER BY id";
+    postsOnly = {
+      tables: readTablesFromSql(postsOnlySql),
+      run: () => storage.query(postsOnlySql),
+    };
+
+    const asyncUsersSql = "SELECT * FROM users ORDER BY id";
+    asyncUsers = {
+      tables: readTablesFromSql(asyncUsersSql),
+      run: async () => {
+        return storage.query(asyncUsersSql);
+      },
+    };
+
+    failingUsers = {
+      tables: ["users"],
+      run: () => {
+        throw new Error("selector failed");
+      },
+    };
+
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
     insertUser = {
       tables: writeTablesFromSql(insertUserSql),
@@ -63,138 +86,129 @@ describe("SyncEngine", () => {
       tables: writeTablesFromSql(updateUserNameSql),
       run: (name, id) => storage.execute(updateUserNameSql, name, id),
     };
+
+    engine = new SyncEngine({
+      selectors: { allUsers, userById, postsOnly, asyncUsers, failingUsers },
+      mutators: { insertUser, updateUserName },
+    });
   });
 
   describe("Broker", () => {
-    test("publish runs matching selector callback and resolves void", async () => {
-      const callbackResults: SqlRow[][] = [];
-      const selector: Selector<[], SqlRow[]> = {
-        tables: [...allUsers.tables],
-        run: () => allUsers.run(),
-      };
+    test("publish runs matching selector and returns metadata + selections", async () => {
+      engine.subscribe("allUsers");
+      const result = await engine.publish("insertUser", "charlie");
 
-      engine.subscribe(selector, [], (result) => {
-        callbackResults.push(result);
-      });
-
-      const publishResult = await engine.publish(insertUser, "charlie");
-
-      expect(publishResult).toBeUndefined();
-      expect(callbackResults).toHaveLength(1);
-      expect(callbackResults[0].some((row) => row.name === "charlie")).toBe(true);
+      expect(result.metadata).toHaveProperty("rowsAffected");
+      expect(result.selections).toHaveLength(1);
+      const selection = result.selections[0];
+      expect(selection.selector).toBe("allUsers");
+      expect(Array.isArray(selection.result)).toBe(true);
+      expect((selection.result as SqlRow[]).some((row) => row.name === "charlie")).toBe(true);
     });
 
     test("publish skips subscriptions whose tables do not overlap", async () => {
-      const postsOnlySql = "SELECT * FROM posts ORDER BY id";
       let runCount = 0;
-      let callbackCount = 0;
-      const postsOnly: Selector<[], SqlRow[]> = {
-        tables: readTablesFromSql(postsOnlySql),
+      const countingSelector: Selector<[], SqlRow[]> = {
+        tables: [...postsOnly.tables],
         run: () => {
           runCount += 1;
-          return storage.query(postsOnlySql);
+          return storage.query("SELECT * FROM posts ORDER BY id");
         },
       };
-
-      engine.subscribe(postsOnly, [], () => {
-        callbackCount += 1;
+      engine = new SyncEngine({
+        selectors: { postsOnly: countingSelector, allUsers },
+        mutators: { insertUser },
       });
-      await engine.publish(insertUser, "charlie");
+      engine.subscribe("postsOnly");
+      engine.subscribe("allUsers");
+
+      const result = await engine.publish("insertUser", "charlie");
 
       expect(runCount).toBe(0);
-      expect(callbackCount).toBe(0);
+      expect(result.selections).toHaveLength(1);
+      expect(result.selections[0].selector).toBe("allUsers");
     });
 
     test("publish does not run selectors that were never subscribed", async () => {
       let runCount = 0;
-      const inactiveSelector: Selector<[], SqlRow[]> = {
+      const trackingSelector: Selector<[], SqlRow[]> = {
         tables: ["users"],
         run: () => {
           runCount += 1;
           return storage.query("SELECT * FROM users ORDER BY id");
         },
       };
+      engine = new SyncEngine({
+        selectors: { users: trackingSelector, allUsers },
+        mutators: { insertUser },
+      });
 
-      void inactiveSelector;
-
-      await engine.publish(insertUser, "charlie");
+      await engine.publish("insertUser", "charlie");
 
       expect(runCount).toBe(0);
     });
 
-    test("unsubscribe stops future publications", async () => {
-      let callbackCount = 0;
-      const selector: Selector<[], SqlRow[]> = {
-        tables: [...allUsers.tables],
-        run: () => allUsers.run(),
-      };
-
-      const subscriptionId = engine.subscribe(selector, [], () => {
-        callbackCount += 1;
-      });
-      expect(subscriptionId).toBeTypeOf("number");
-      expect(engine.unsubscribe(subscriptionId)).toBe(true);
-
-      await engine.publish(insertUser, "charlie");
-      expect(callbackCount).toBe(0);
-
-      expect(engine.unsubscribe(subscriptionId)).toBe(false);
-      await engine.publish(insertUser, "dave");
-      expect(callbackCount).toBe(0);
+    test("unsubscribe returns true when removing, false otherwise", async () => {
+      const id = engine.subscribe("allUsers");
+      expect(engine.unsubscribe(id)).toBe(true);
+      expect(engine.unsubscribe(id)).toBe(false);
     });
 
-    test("parameterized subscriptions pass tuple params to run and subscribe callback receives result selector and params", async () => {
+    test("unsubscribe stops future publications from producing selections", async () => {
+      const id = engine.subscribe("allUsers");
+      expect(engine.unsubscribe(id)).toBe(true);
+
+      const result = await engine.publish("insertUser", "charlie");
+      expect(result.selections).toHaveLength(0);
+
+      // Still no selections after second publish
+      const result2 = await engine.publish("insertUser", "dave");
+      expect(result2.selections).toHaveLength(0);
+    });
+
+    test("parameterized subscriptions pass tuple params to selector.run and return them in selection", async () => {
       const runParams: number[] = [];
-      let callbackResult: SqlRow[] = [];
-      let callbackSelector: Selector<[number], SqlRow[]> | undefined;
-      let callbackParams: readonly [number] | undefined;
-      const selector: Selector<[number], SqlRow[]> = {
+      const trackingSelector: Selector<[number], SqlRow[]> = {
         tables: [...userById.tables],
         run: (id) => {
           runParams.push(id);
           return storage.query("SELECT * FROM users WHERE id = ?", id);
         },
       };
-
-      engine.subscribe(selector, [2], (result, subscribedSelector, params) => {
-        callbackResult = result;
-        callbackSelector = subscribedSelector;
-        callbackParams = params;
+      engine = new SyncEngine({
+        selectors: { userById: trackingSelector },
+        mutators: { updateUserName },
       });
-      await engine.publish(updateUserName, "bob_updated", 2);
+      engine.subscribe("userById", [2]);
+      const result = await engine.publish("updateUserName", "bob_updated", 2);
 
       expect(runParams).toEqual([2]);
-      expect(callbackResult).toHaveLength(1);
-      expect(callbackResult[0].name).toBe("bob_updated");
-      expect(callbackSelector).toBe(selector);
-      expect(callbackParams).toEqual([2]);
+      expect(result.selections).toHaveLength(1);
+      expect(result.selections[0].subscriptionId).toBe(1);
+      expect(result.selections[0].selector).toBe("userById");
+      expect(result.selections[0].params).toEqual([2]);
+      const rows = result.selections[0].result as SqlRow[];
+      expect(rows).toHaveLength(1);
+      expect(rows[0].name).toBe("bob_updated");
     });
 
-    test("duplicate subscriptions are independent", async () => {
-      let callbackCount = 0;
-      const selector: Selector<[], SqlRow[]> = {
-        tables: [...allUsers.tables],
-        run: () => allUsers.run(),
-      };
+    test("duplicate subscriptions are independent and produce duplicate selections", async () => {
+      const firstId = engine.subscribe("allUsers");
+      const secondId = engine.subscribe("allUsers");
+      expect(firstId).not.toBe(secondId);
 
-      const firstSubscriptionId = engine.subscribe(selector, [], () => {
-        callbackCount += 1;
-      });
-      const secondSubscriptionId = engine.subscribe(selector, [], () => {
-        callbackCount += 1;
-      });
-      expect(firstSubscriptionId).not.toBe(secondSubscriptionId);
+      const result = await engine.publish("insertUser", "charlie");
+      expect(result.selections).toHaveLength(2);
+      expect(result.selections[0].subscriptionId).toBe(firstId);
+      expect(result.selections[1].subscriptionId).toBe(secondId);
 
-      await engine.publish(insertUser, "charlie");
-      expect(callbackCount).toBe(2);
-
-      expect(engine.unsubscribe(firstSubscriptionId)).toBe(true);
-      await engine.publish(insertUser, "dave");
-      expect(callbackCount).toBe(3);
-      expect(engine.unsubscribe(secondSubscriptionId)).toBe(true);
+      engine.unsubscribe(firstId);
+      const result2 = await engine.publish("insertUser", "dave");
+      expect(result2.selections).toHaveLength(1);
+      expect(result2.selections[0].subscriptionId).toBe(secondId);
     });
 
-    test("publish awaits async mutator, selector, and callback", async () => {
+    test("publish awaits async mutator and selector before resolving", async () => {
       const createDeferred = () => {
         let resolve!: () => void;
         const promise = new Promise<void>((res) => {
@@ -205,30 +219,30 @@ describe("SyncEngine", () => {
 
       const mutatorGate = createDeferred();
       const selectorGate = createDeferred();
-      const callbackGate = createDeferred();
       let publishResolved = false;
-      let callbackRows: SqlRow[] = [];
 
-      const asyncSelector: Selector<[], SqlRow[]> = {
-        tables: ["users"],
-        run: async () => {
-          await selectorGate.promise;
-          return storage.query("SELECT * FROM users ORDER BY id");
-        },
-      };
-      const asyncMutator: Mutator<[string], MutationMetadata> = {
+      const gatedMutator: Mutator<[string], MutationMetadata> = {
         tables: ["users"],
         run: async (name) => {
           await mutatorGate.promise;
           return storage.execute("INSERT INTO users (name) VALUES (?)", name);
         },
       };
-
-      engine.subscribe(asyncSelector, [], async (result) => {
-        await callbackGate.promise;
-        callbackRows = result;
+      const gatedSelector: Selector<[], SqlRow[]> = {
+        tables: ["users"],
+        run: async () => {
+          await selectorGate.promise;
+          return storage.query("SELECT * FROM users ORDER BY id");
+        },
+      };
+      engine = new SyncEngine({
+        selectors: { gated: gatedSelector, allUsers },
+        mutators: { gatedMutator },
       });
-      const publishPromise = engine.publish(asyncMutator, "charlie").then(() => {
+
+      engine.subscribe("gated");
+      const resultPromise = engine.publish("gatedMutator", "charlie");
+      const publishPromise = resultPromise.then(() => {
         publishResolved = true;
       });
 
@@ -240,44 +254,153 @@ describe("SyncEngine", () => {
       expect(publishResolved).toBe(false);
 
       selectorGate.resolve();
-      await Promise.resolve();
-      expect(publishResolved).toBe(false);
-
-      callbackGate.resolve();
       await publishPromise;
 
-      expect(callbackRows).toHaveLength(3);
-      expect(callbackRows[2].name).toBe("charlie");
+      expect(publishResolved).toBe(true);
+      const result = await resultPromise;
+      expect(result.selections).toHaveLength(1);
+      const rows = result.selections[0].result as SqlRow[];
+      expect(rows).toHaveLength(3);
     });
 
-    test("publish rejects when a selector callback fails", async () => {
-      const selector: Selector<[], SqlRow[]> = {
-        tables: [...allUsers.tables],
-        run: () => allUsers.run(),
-      };
+    test("publish rejects when a selector fails", async () => {
+      engine.subscribe("failingUsers");
+      await expect(engine.publish("insertUser", "charlie")).rejects.toThrow("selector failed");
+    });
 
-      engine.subscribe(selector, [], () => {
-        throw new Error("callback failed");
+    test("subscribed selector without delivery callback returns a selection", async () => {
+      engine.subscribe("allUsers");
+      const result = await engine.publish("insertUser", "charlie");
+      expect(result.selections).toHaveLength(1);
+      expect(result.selections[0].selector).toBe("allUsers");
+      const rows = result.selections[0].result as SqlRow[];
+      expect(rows.some((row) => row.name === "charlie")).toBe(true);
+    });
+
+    test("subscribe rejects unknown selector key", () => {
+      expect(() => engine.subscribe("nonexistent")).toThrow("Unknown selector");
+    });
+
+    test("publish rejects unknown mutator key", async () => {
+      await expect(engine.publish("nonexistent")).rejects.toThrow("Unknown mutator");
+    });
+  });
+
+  describe("structuredClone", () => {
+    test("snapshot survives structuredClone and restore", () => {
+      engine.subscribe("userById", [2]);
+      const snap = engine.snapshot();
+      const cloned = structuredClone(snap);
+
+      const restored = new SyncEngine({
+        selectors: { allUsers, userById, postsOnly, asyncUsers, failingUsers },
+        mutators: { insertUser, updateUserName },
+        snapshot: cloned,
       });
 
-      await expect(engine.publish(insertUser, "charlie")).rejects.toThrow("callback failed");
+      // Mutating original snapshot does not affect restored
+      return restored.publish("updateUserName", "bob_updated", 2).then((result) => {
+        expect(result.selections).toHaveLength(1);
+        const rows = result.selections[0].result as SqlRow[];
+        expect(rows).toHaveLength(1);
+        expect(rows[0].name).toBe("bob_updated");
+      });
     });
 
-    test("subscribe without callback still runs matching selector", async () => {
-      let runCount = 0;
-      const selector: Selector<[], SqlRow[]> = {
-        tables: ["users"],
-        run: () => {
-          runCount += 1;
-          return storage.query("SELECT * FROM users ORDER BY id");
-        },
-      };
+    test("subscribe rejects non-cloneable params", () => {
+      expect(() => engine.subscribe("userById", [() => 1] as never)).toThrow(
+        "Subscription params must support structuredClone",
+      );
+    });
 
-      engine.subscribe(selector);
-      const publishResult = await engine.publish(insertUser, "charlie");
+    test("snapshot is detached", () => {
+      engine.subscribe("allUsers");
+      const snap = engine.snapshot();
+      // Mutate the returned snapshot
+      (snap as unknown as { nextSubscriptionId: number }).nextSubscriptionId = 999;
+      (snap as unknown as { subscriptions: unknown[] }).subscriptions = [];
 
-      expect(publishResult).toBeUndefined();
-      expect(runCount).toBe(1);
+      // Engine state should be unchanged
+      const snap2 = engine.snapshot();
+      expect(snap2.nextSubscriptionId).toBe(2); // one subscribe used id 1, so next is 2
+      expect(snap2.subscriptions).toHaveLength(1);
+    });
+
+    test("constructor rejects snapshot with non-positive nextSubscriptionId", () => {
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: { nextSubscriptionId: 0, subscriptions: [] },
+          }),
+      ).toThrow("Broker snapshot nextSubscriptionId must be a positive integer");
+    });
+
+    test("constructor rejects snapshot with non-array subscriptions", () => {
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: { nextSubscriptionId: 1, subscriptions: null as never },
+          }),
+      ).toThrow("Broker snapshot subscriptions must be an array");
+    });
+
+    test("constructor rejects snapshot with duplicate subscription ids", () => {
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: {
+              nextSubscriptionId: 3,
+              subscriptions: [
+                { id: 1, selector: "allUsers", params: [] },
+                { id: 1, selector: "allUsers", params: [] },
+              ],
+            },
+          }),
+      ).toThrow("Duplicate subscription id: 1");
+    });
+
+    test("constructor rejects snapshot with unknown selector", () => {
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: {
+              nextSubscriptionId: 2,
+              subscriptions: [{ id: 1, selector: "unknown", params: [] }],
+            },
+          }),
+      ).toThrow("Unknown selector: unknown");
+    });
+
+    test("constructor throws TypeError for non-cloneable snapshot", () => {
+      const fn = () => {};
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: {
+              nextSubscriptionId: 1,
+              subscriptions: [{ id: 1, selector: "allUsers", params: [] }],
+            },
+          }),
+      ).not.toThrow(); // This one should work
+      // A snapshot containing a function should fail
+      expect(
+        () =>
+          new SyncEngine({
+            selectors: { allUsers },
+            mutators: { insertUser },
+            snapshot: { nextSubscriptionId: fn as never, subscriptions: [] },
+          }),
+      ).toThrow("Broker snapshot must support structuredClone");
     });
   });
 

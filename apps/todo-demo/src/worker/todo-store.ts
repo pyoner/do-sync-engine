@@ -1,6 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Broker, Mutator, Selector, SubscriptionId } from "@do-sync-engine/core";
+import type {
+  Broker,
+  Mutator,
+  Selector,
+  SelectionResult,
+  SubscriptionId,
+} from "@do-sync-engine/core";
 import type {
   ClientMessage,
   MutationResponse as WireMutationResponse,
@@ -154,9 +160,12 @@ export class TodoStore extends DurableObject<Env> {
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA);
       const storage = new DoSyncStorage(this.ctx.storage.sql);
-      this.engine = new SyncEngine();
       this.selectors = createSelectors(storage);
       this.mutators = createMutators(storage);
+      this.engine = new SyncEngine({
+        selectors: { ...this.selectors },
+        mutators: { ...this.mutators },
+      });
 
       for (const ws of this.ctx.getWebSockets()) {
         this.subscriptions.set(ws, new Map());
@@ -346,23 +355,26 @@ export class TodoStore extends DurableObject<Env> {
     } as ServerMessage;
     this.send(ws, message);
   }
+  private sendPublishedSelection(selection: SelectionResult<TodoSelectorName>): void {
+    for (const [ws, socketSubscriptions] of this.subscriptions) {
+      const subId = socketSubscriptions.get(selection.selector);
+      if (subId === selection.subscriptionId) {
+        this.sendSelectorResult(ws, selection.selector, selection.result as never);
+        return; // at most one socket per selector name
+      }
+    }
+  }
 
   private async subscribeSelector<Name extends TodoSelectorName>(
     ws: WebSocket,
     socketSubscriptions: Map<TodoSelectorName, SubscriptionId>,
     name: Name,
   ): Promise<void> {
-    const selector = this.selectors[name];
     if (!socketSubscriptions.has(name)) {
-      socketSubscriptions.set(
-        name,
-        this.engine.subscribe(selector, [], (result) => {
-          this.sendSelectorResult(ws, name, result);
-        }),
-      );
+      socketSubscriptions.set(name, this.engine.subscribe(name, []));
     }
 
-    const result = await selector.run();
+    const result = await this.selectors[name].run();
     this.sendSelectorResult(ws, name, result);
   }
 
@@ -415,41 +427,29 @@ export class TodoStore extends DurableObject<Env> {
   }
 
   private async addTodo(title: string): Promise<MutationResponse> {
-    return this.publishMutation(this.mutators.addTodo, title);
+    return this.publishMutation("addTodo", title);
   }
 
   private async toggleTodo(id: number): Promise<MutationResponse> {
-    return this.publishMutation(this.mutators.toggleTodo, id);
+    return this.publishMutation("toggleTodo", id);
   }
 
   private async deleteTodo(id: number): Promise<MutationResponse> {
-    return this.publishMutation(this.mutators.deleteTodo, id);
+    return this.publishMutation("deleteTodo", id);
   }
 
   private async clearCompleted(): Promise<MutationResponse> {
-    return this.publishMutation(this.mutators.clearCompleted);
+    return this.publishMutation("clearCompleted");
   }
 
-  private async publishMutation<Params extends unknown[]>(
-    mutator: Mutator<Params, MutationMetadata>,
-    ...params: Params
+  private async publishMutation(
+    mutator: keyof TodoMutators & string,
+    ...params: unknown[]
   ): Promise<MutationResponse> {
-    let metadata: MutationMetadata | undefined;
-
-    const capturingMutator: Mutator<Params, MutationMetadata> = {
-      tables: mutator.tables,
-      run: async (...runParams) => {
-        metadata = await mutator.run(...runParams);
-        return metadata;
-      },
-    };
-
-    await this.engine.publish(capturingMutator, ...params);
-
-    if (metadata === undefined) {
-      throw new Error("Mutation did not produce metadata");
+    const result = await this.engine.publish(mutator, ...params);
+    for (const selection of result.selections) {
+      this.sendPublishedSelection(selection as SelectionResult<TodoSelectorName>);
     }
-
-    return { metadata };
+    return { metadata: result.metadata as MutationMetadata };
   }
 }
