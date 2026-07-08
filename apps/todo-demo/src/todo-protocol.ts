@@ -184,7 +184,7 @@ export function parseClientMessage(message: string): ClientMessageParseResult {
 
   const clientMessageEnvelopeSchema = z
     .object({ requestId: requestIdSchema, type: z.unknown().optional() })
-    .passthrough();
+    .loose();
   const envelope = clientMessageEnvelopeSchema.safeParse(value);
   if (!envelope.success) {
     return { error: "requestId required" };
