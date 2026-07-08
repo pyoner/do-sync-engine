@@ -1,17 +1,19 @@
 import type {
   Mutation,
   MutationMap,
-  MutationResult,
+  OperationParams,
+  OperationResult,
   Query,
   QueryMap,
   QueryResult,
   Snapshot,
+  StringKey,
   Subscription,
   SubscriptionId,
+  SyncEngineInterface,
+  SyncEngineMutationResult,
   SyncEngineOptions,
 } from "./types";
-
-type StringKey<T> = Extract<keyof T, string>;
 
 function cloneOrThrow<T>(value: T, label: string): T {
   try {
@@ -69,16 +71,18 @@ function validateSnapshot<QueryName extends string = string>(
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
-> {
-  private readonly queries: ReadonlyMap<string, Query<any[], unknown>>;
-  private readonly mutations: ReadonlyMap<string, Mutation<any[], unknown>>;
+> implements SyncEngineInterface<Queries, Mutations> {
+  private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
+  private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private nextSubscriptionId: SubscriptionId;
   private subscriptions: Subscription<StringKey<Queries>>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
-    this.queries = new Map(Object.entries(options.queries) as [string, Query<any[], unknown>][]);
+    this.queries = new Map(
+      Object.entries(options.queries) as [string, Query<unknown[], unknown>][],
+    );
     this.mutations = new Map(
-      Object.entries(options.mutations) as [string, Mutation<any[], unknown>][],
+      Object.entries(options.mutations) as [string, Mutation<unknown[], unknown>][],
     );
 
     if (options.snapshot === undefined) {
@@ -96,7 +100,7 @@ export class SyncEngine<
 
   subscribe<Name extends StringKey<Queries>>(
     query: Name,
-    ...params: Parameters<Queries[Name]["run"]>
+    ...params: OperationParams<Queries[Name]>
   ): SubscriptionId {
     if (!this.queries.has(query)) {
       throw new ReferenceError(`Unknown query: ${query}`);
@@ -126,8 +130,8 @@ export class SyncEngine<
 
   async mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
-    ...params: Parameters<Mutations[Name]["run"]>
-  ): Promise<MutationResult<Awaited<ReturnType<Mutations[Name]["run"]>>, StringKey<Queries>>> {
+    ...params: OperationParams<Mutations[Name]>
+  ): Promise<SyncEngineMutationResult<Queries, OperationResult<Mutations[Name]>>> {
     const mutationDef = this.mutations.get(mutation);
     if (mutationDef === undefined) {
       throw new ReferenceError(`Unknown mutation: ${mutation}`);
@@ -157,9 +161,9 @@ export class SyncEngine<
       });
     }
 
-    return { metadata, results } as MutationResult<
-      Awaited<ReturnType<Mutations[Name]["run"]>>,
-      StringKey<Queries>
+    return { metadata, results } as SyncEngineMutationResult<
+      Queries,
+      OperationResult<Mutations[Name]>
     >;
   }
 }

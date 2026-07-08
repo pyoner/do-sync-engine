@@ -1,6 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Mutation, Query, QueryResult, SubscriptionId } from "@do-sync-engine/core";
+import type {
+  Mutation,
+  OperationParams,
+  Query,
+  QueryResult,
+  StringKey,
+  SubscriptionId,
+} from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
   MutationMetadata,
@@ -323,9 +330,9 @@ export class TodoStore extends DurableObject<Env> {
     }
   }
 
-  private async publishMutation<Name extends keyof TodoMutations>(
+  private async publishMutation<Name extends StringKey<TodoMutations>>(
     mutation: Name,
-    ...params: Parameters<TodoMutations[Name]["run"]>
+    ...params: OperationParams<TodoMutations[Name]>
   ): Promise<MutationResponse> {
     const result = await this.engine.mutate(mutation, ...params);
     for (const queryResult of result.results) {

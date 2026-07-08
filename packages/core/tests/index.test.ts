@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/index.js";
-import type { Mutation, Query, SubscriptionId } from "../src/index.js";
+import type { Mutation, Query, SubscriptionId, SyncEngineInterface } from "../src/index.js";
 
 test("exports typed SyncEngine API", () => {
   const queries = {
@@ -46,15 +46,30 @@ test("typed query/mutation params and results", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine = new SyncEngine({ queries, mutations });
+  const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine({
+    queries,
+    mutations,
+  });
 
-  engine.subscribe("numbers");
+  const subscriptionId: SubscriptionId = engine.subscribe("numbers");
   const result = await engine.mutate("noop");
+  expect(subscriptionId).toBeTypeOf("number");
   expect(result.results).toHaveLength(1);
   expect(result.results[0].result).toEqual([1, 2, 3]);
   expect(result.metadata).toEqual({ ok: true });
 
   const metadata: { ok: boolean } = result.metadata;
+  if (false as boolean) {
+    // @ts-expect-error — "missing" is not a known query on the interface type
+    void engine.subscribe("missing");
+    // @ts-expect-error — query expects no params
+    void engine.subscribe("numbers", 1);
+    // @ts-expect-error — mutation expects no params
+    void engine.mutate("noop", 1);
+    // @ts-expect-error — mutation metadata keeps its boolean payload type
+    const wrongMetadata: { ok: string } = result.metadata;
+    void wrongMetadata;
+  }
   expect(metadata.ok).toBe(true);
 });
 
