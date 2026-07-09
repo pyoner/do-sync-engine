@@ -14,3 +14,8 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+## Default Agent Skills
+
+- Use the Caveman skill by default for terse, filler-free communication. Default mode: full.
+- Use the Ponytail skill by default for minimal, YAGNI implementation. Default mode: full.
