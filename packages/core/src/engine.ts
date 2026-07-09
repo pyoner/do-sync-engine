@@ -11,8 +11,9 @@ import type {
   Subscription,
   SubscriptionId,
   SyncEngineInterface,
-  SyncEngineMutationResult,
   SyncEngineOptions,
+  SyncEngineQueryResult,
+  SyncEngineSyncResult,
 } from "./types";
 
 function cloneOrThrow<T>(value: T, label: string): T {
@@ -131,18 +132,51 @@ export class SyncEngine<
   async mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     ...params: OperationParams<Mutations[Name]>
-  ): Promise<SyncEngineMutationResult<Queries, OperationResult<Mutations[Name]>>> {
+  ): Promise<readonly string[]> {
     const mutationDef = this.mutations.get(mutation);
     if (mutationDef === undefined) {
       throw new ReferenceError(`Unknown mutation: ${mutation}`);
     }
 
-    const metadata = await mutationDef.run(...params);
-    const changedTables = new Set(mutationDef.tables);
+    await mutationDef.run(...params);
+    return [...mutationDef.tables];
+  }
 
-    // Shallow-copy subscriptions for safe iteration (destroyed subscriptions skipped)
+  publish<Name extends StringKey<Queries>>(
+    query: Name,
+    value: OperationResult<Queries[Name]>,
+  ): readonly QueryResult<Name, OperationResult<Queries[Name]>>[] {
+    if (!this.queries.has(query)) {
+      throw new ReferenceError(`Unknown query: ${query}`);
+    }
+
     const snapshot = [...this.subscriptions];
-    const results: QueryResult<StringKey<Queries>>[] = [];
+    const results: QueryResult<Name, OperationResult<Queries[Name]>>[] = [];
+
+    for (const sub of snapshot) {
+      if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
+      if (sub.query !== query) continue;
+
+      results.push({
+        subscriptionId: sub.id,
+        query,
+        params: sub.params,
+        result: value,
+      });
+    }
+
+    return results;
+  }
+
+  async sync<Name extends StringKey<Mutations>>(
+    mutation: Name,
+    ...params: OperationParams<Mutations[Name]>
+  ): Promise<SyncEngineSyncResult<Queries>> {
+    const affectedTables = await this.mutate(mutation, ...params);
+    const changedTables = new Set(affectedTables);
+
+    const snapshot = [...this.subscriptions];
+    const results: SyncEngineQueryResult<Queries>[] = [];
 
     for (const sub of snapshot) {
       if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
@@ -152,18 +186,17 @@ export class SyncEngine<
       const isAffected = queryDef.tables.some((table) => changedTables.has(table));
       if (!isAffected) continue;
 
-      const result = await queryDef.run(...sub.params);
-      results.push({
-        subscriptionId: sub.id,
-        query: sub.query,
-        params: sub.params,
-        result,
-      });
+      const value = (await queryDef.run(...sub.params)) as OperationResult<
+        Queries[StringKey<Queries>]
+      >;
+
+      const published = this.publish(sub.query, value);
+      const match = published.find((r) => r.subscriptionId === sub.id);
+      if (match) {
+        results.push(match);
+      }
     }
 
-    return { metadata, results } as SyncEngineMutationResult<
-      Queries,
-      OperationResult<Mutations[Name]>
-    >;
+    return { affectedTables, results } as SyncEngineSyncResult<Queries>;
   }
 }

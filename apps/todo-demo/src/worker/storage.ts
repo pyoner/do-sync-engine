@@ -1,4 +1,7 @@
-import type { MutationMetadata } from "../todo-protocol";
+export interface MutationMetadata {
+  rowsAffected: number;
+  lastInsertRowid: number;
+}
 
 export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
 export type SqlRow = Record<string, SqlValue>;

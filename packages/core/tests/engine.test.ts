@@ -94,11 +94,35 @@ describe("SyncEngine", () => {
   });
 
   describe("queries and mutations", () => {
-    test("mutate runs matching query and returns metadata + results", async () => {
-      engine.subscribe("allUsers");
-      const result = await engine.mutate("insertUser", "charlie");
+    test("mutate runs only the mutation and returns affected tables", async () => {
+      let queryRunCount = 0;
+      const trackingQuery: Query<[], SqlRow[]> = {
+        tables: ["users"],
+        run: () => {
+          queryRunCount += 1;
+          throw new Error("query should not run");
+        },
+      };
+      engine = new SyncEngine({
+        queries: { users: trackingQuery, allUsers },
+        mutations: { insertUser },
+      });
+      engine.subscribe("users");
 
-      expect(result.metadata).toHaveProperty("rowsAffected");
+      const result = await engine.mutate("insertUser", "charlie");
+      expect(result).toEqual(["users"]);
+
+      const rows = storage.query("SELECT * FROM users ORDER BY id");
+      expect(rows.some((row: SqlRow) => row.name === "charlie")).toBe(true);
+
+      expect(queryRunCount).toBe(0);
+    });
+
+    test("sync runs matching query and returns affected tables + results", async () => {
+      engine.subscribe("allUsers");
+      const result = await engine.sync("insertUser", "charlie");
+
+      expect(result.affectedTables).toEqual(["users"]);
       expect(result.results).toHaveLength(1);
       const queryResult = result.results[0];
       expect(queryResult.query).toBe("allUsers");
@@ -106,7 +130,7 @@ describe("SyncEngine", () => {
       expect((queryResult.result as SqlRow[]).some((row) => row.name === "charlie")).toBe(true);
     });
 
-    test("mutate skips subscriptions whose tables do not overlap", async () => {
+    test("sync skips subscriptions whose tables do not overlap", async () => {
       let runCount = 0;
       const countingQuery: Query<[], SqlRow[]> = {
         tables: [...postsOnly.tables],
@@ -122,14 +146,14 @@ describe("SyncEngine", () => {
       engine.subscribe("postsOnly");
       engine.subscribe("allUsers");
 
-      const result = await engine.mutate("insertUser", "charlie");
+      const result = await engine.sync("insertUser", "charlie");
 
       expect(runCount).toBe(0);
       expect(result.results).toHaveLength(1);
       expect(result.results[0].query).toBe("allUsers");
     });
 
-    test("mutate does not run queries that were never subscribed", async () => {
+    test("sync does not run queries that were never subscribed", async () => {
       let runCount = 0;
       const trackingQuery: Query<[], SqlRow[]> = {
         tables: ["users"],
@@ -143,7 +167,7 @@ describe("SyncEngine", () => {
         mutations: { insertUser },
       });
 
-      await engine.mutate("insertUser", "charlie");
+      await engine.sync("insertUser", "charlie");
 
       expect(runCount).toBe(0);
     });
@@ -154,15 +178,15 @@ describe("SyncEngine", () => {
       expect(engine.unsubscribe(id)).toBe(false);
     });
 
-    test("unsubscribe stops future mutations from producing results", async () => {
+    test("unsubscribe stops future sync from producing results", async () => {
       const id = engine.subscribe("allUsers");
       expect(engine.unsubscribe(id)).toBe(true);
 
-      const result = await engine.mutate("insertUser", "charlie");
+      const result = await engine.sync("insertUser", "charlie");
       expect(result.results).toHaveLength(0);
 
-      // Still no results after second mutate
-      const result2 = await engine.mutate("insertUser", "dave");
+      // Still no results after second sync
+      const result2 = await engine.sync("insertUser", "dave");
       expect(result2.results).toHaveLength(0);
     });
 
@@ -180,7 +204,7 @@ describe("SyncEngine", () => {
         mutations: { updateUserName },
       });
       engine.subscribe("userById", 2);
-      const result = await engine.mutate("updateUserName", "bob_updated", 2);
+      const result = await engine.sync("updateUserName", "bob_updated", 2);
 
       expect(runParams).toEqual([2]);
       expect(result.results).toHaveLength(1);
@@ -197,18 +221,18 @@ describe("SyncEngine", () => {
       const secondId = engine.subscribe("allUsers");
       expect(firstId).not.toBe(secondId);
 
-      const result = await engine.mutate("insertUser", "charlie");
+      const result = await engine.sync("insertUser", "charlie");
       expect(result.results).toHaveLength(2);
       expect(result.results[0].subscriptionId).toBe(firstId);
       expect(result.results[1].subscriptionId).toBe(secondId);
 
       engine.unsubscribe(firstId);
-      const result2 = await engine.mutate("insertUser", "dave");
+      const result2 = await engine.sync("insertUser", "dave");
       expect(result2.results).toHaveLength(1);
       expect(result2.results[0].subscriptionId).toBe(secondId);
     });
 
-    test("mutate awaits async mutation and query before resolving", async () => {
+    test("sync awaits async mutation and query before resolving", async () => {
       const createDeferred = () => {
         let resolve!: () => void;
         const promise = new Promise<void>((res) => {
@@ -219,7 +243,7 @@ describe("SyncEngine", () => {
 
       const mutatorGate = createDeferred();
       const queryGate = createDeferred();
-      let mutateResolved = false;
+      let syncResolved = false;
 
       const gatedMutation: Mutation<[string], MutationMetadata> = {
         tables: ["users"],
@@ -241,36 +265,36 @@ describe("SyncEngine", () => {
       });
 
       engine.subscribe("gated");
-      const resultPromise = engine.mutate("gatedMutator", "charlie");
-      const mutatePromise = resultPromise.then(() => {
-        mutateResolved = true;
+      const resultPromise = engine.sync("gatedMutator", "charlie");
+      const syncPromise = resultPromise.then(() => {
+        syncResolved = true;
       });
 
       await Promise.resolve();
-      expect(mutateResolved).toBe(false);
+      expect(syncResolved).toBe(false);
 
       mutatorGate.resolve();
       await Promise.resolve();
-      expect(mutateResolved).toBe(false);
+      expect(syncResolved).toBe(false);
 
       queryGate.resolve();
-      await mutatePromise;
+      await syncPromise;
 
-      expect(mutateResolved).toBe(true);
+      expect(syncResolved).toBe(true);
       const result = await resultPromise;
       expect(result.results).toHaveLength(1);
       const rows = result.results[0].result as SqlRow[];
       expect(rows).toHaveLength(3);
     });
 
-    test("mutate rejects when a query fails", async () => {
+    test("sync rejects when a query fails", async () => {
       engine.subscribe("failingUsers");
-      await expect(engine.mutate("insertUser", "charlie")).rejects.toThrow("query failed");
+      await expect(engine.sync("insertUser", "charlie")).rejects.toThrow("query failed");
     });
 
     test("subscribed query without delivery callback returns a queryResult", async () => {
       engine.subscribe("allUsers");
-      const result = await engine.mutate("insertUser", "charlie");
+      const result = await engine.sync("insertUser", "charlie");
       expect(result.results).toHaveLength(1);
       expect(result.results[0].query).toBe("allUsers");
       const rows = result.results[0].result as SqlRow[];
@@ -283,6 +307,56 @@ describe("SyncEngine", () => {
 
     test("mutate rejects unknown mutation key", async () => {
       await expect(engine.mutate("nonexistent")).rejects.toThrow("Unknown mutation");
+    });
+
+    test("publish returns supplied values for active subscriptions", async () => {
+      const firstId = engine.subscribe("allUsers");
+      const secondId = engine.subscribe("allUsers");
+
+      const cachedUsers = [{ id: 99, name: "cached" }];
+      const published = engine.publish("allUsers", cachedUsers);
+      expect(published).toHaveLength(2);
+      expect(published[0].subscriptionId).toBe(firstId);
+      expect(published[0].result).toBe(cachedUsers);
+      expect(published[1].subscriptionId).toBe(secondId);
+      expect(published[1].result).toBe(cachedUsers);
+
+      engine.unsubscribe(firstId);
+      const published2 = engine.publish("allUsers", cachedUsers);
+      expect(published2).toHaveLength(1);
+      expect(published2[0].subscriptionId).toBe(secondId);
+    });
+
+    test("publish rejects unknown query key", () => {
+      expect(() => engine.publish("nonexistent" as never, [])).toThrow("Unknown query");
+    });
+
+    test("sync uses mutate and publish", async () => {
+      engine.subscribe("allUsers");
+
+      let mutateCallCount = 0;
+      let publishCallCount = 0;
+
+      const originalMutate = engine.mutate.bind(engine);
+      const originalPublish = engine.publish.bind(engine);
+
+      engine.mutate = (async (mutation: string, ...params: unknown[]) => {
+        mutateCallCount++;
+        return originalMutate(mutation, ...params);
+      }) as typeof engine.mutate;
+
+      engine.publish = ((query: string, value: unknown) => {
+        publishCallCount++;
+        return originalPublish(query, value);
+      }) as typeof engine.publish;
+
+      const result = await engine.sync("insertUser", "charlie");
+
+      expect(mutateCallCount).toBe(1);
+      expect(publishCallCount).toBe(1);
+      expect(result.results).toHaveLength(1);
+      const rows = result.results[0].result as SqlRow[];
+      expect(rows.some((row: SqlRow) => row.name === "charlie")).toBe(true);
     });
   });
 
@@ -301,7 +375,8 @@ describe("SyncEngine", () => {
       });
 
       // Mutating original snapshot does not affect restored
-      return restored.mutate("updateUserName", "bob_updated", 2).then((result) => {
+      return restored.sync("updateUserName", "bob_updated", 2).then((result) => {
+        expect(result.affectedTables).toEqual(["users"]);
         expect(result.results).toHaveLength(1);
         const rows = result.results[0].result as SqlRow[];
         expect(rows).toHaveLength(1);

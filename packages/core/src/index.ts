@@ -2,7 +2,6 @@ export { SyncEngine } from "./engine";
 export type {
   Mutation,
   MutationMap,
-  MutationResult,
   OperationParams,
   OperationResult,
   Query,
@@ -12,8 +11,9 @@ export type {
   StringKey,
   Subscription,
   SubscriptionId,
-  SyncEngineMutationResult,
   SyncEngineQueryResult,
+  SyncEngineSyncResult,
   SyncEngineInterface,
   SyncEngineOptions,
+  SyncResult,
 } from "./types";

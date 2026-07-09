@@ -16,13 +16,7 @@ export type TodoSummary = z.infer<typeof todoSummarySchema>;
 export const todoCountSchema = z.object({ total_count: z.number() });
 export type TodoCount = z.infer<typeof todoCountSchema>;
 
-export const mutationMetadataSchema = z.object({
-  rowsAffected: z.number(),
-  lastInsertRowid: z.number().nullable(),
-});
-export type MutationMetadata = z.infer<typeof mutationMetadataSchema>;
-
-export const mutationResponseSchema = z.object({ metadata: mutationMetadataSchema });
+export const mutationResponseSchema = z.object({ affectedTables: z.array(z.string()) });
 export type MutationResponse = z.infer<typeof mutationResponseSchema>;
 
 export const TODO_QUERY_NAMES = [

@@ -6,7 +6,7 @@ Minimal sync engine for Cloudflare Durable Objects: subscribe to queries, apply 
 
 ```ts
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Mutation, Query, QueryResult } from "@do-sync-engine/core";
+import type { Mutation, Query } from "@do-sync-engine/core";
 
 // Define query and mutation handlers
 const queries = {
@@ -28,10 +28,18 @@ const engine = new SyncEngine({ queries, mutations });
 // Subscribe to a query
 const subId = engine.subscribe("allTodos");
 
-// Run a mutation — subscribed queries whose tables overlap are re-run
-const result = await engine.mutate("addTodo", "Buy milk");
-// result.results[0] is a QueryResult with the re-run query data
-// result.metadata is the mutation return value
+// Run a mutation — returns affected tables only
+const affectedTables = await engine.mutate("addTodo", "Buy milk");
+// affectedTables is ["todos"]
+
+// Sync runs the mutation and re-runs overlapping subscribed queries
+const synced = await engine.sync("addTodo", "Buy eggs");
+// synced.affectedTables is ["todos"]
+// synced.results contains QueryResult entries for overlapping subscriptions
+
+// Publish pre-computed query results to active subscriptions
+const published = engine.publish("allTodos", await queries.allTodos.run());
+// published contains QueryResult entries for current allTodos subscriptions
 
 // Unsubscribe
 engine.unsubscribe(subId);

@@ -219,8 +219,7 @@
   {#if lastMutation}
     <div class="recompute-panel">
       <h2>Last mutation</h2>
-      <p class="meta">Rows affected: {lastMutation.metadata.rowsAffected}</p>
-      <p class="meta">Last insert rowid: {lastMutation.metadata.lastInsertRowid ?? "n/a"}</p>
+      <p class="meta">Affected tables: {lastMutation.affectedTables.join(", ") || "none"}</p>
     </div>
   {/if}
 

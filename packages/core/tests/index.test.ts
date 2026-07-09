@@ -24,8 +24,10 @@ test("exports typed SyncEngine API", () => {
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "mutate",
+    "publish",
     "snapshot",
     "subscribe",
+    "sync",
     "unsubscribe",
   ]);
 
@@ -52,13 +54,19 @@ test("typed query/mutation params and results", async () => {
   });
 
   const subscriptionId: SubscriptionId = engine.subscribe("numbers");
-  const result = await engine.mutate("noop");
+  const affectedTables = await engine.mutate("noop");
   expect(subscriptionId).toBeTypeOf("number");
-  expect(result.results).toHaveLength(1);
-  expect(result.results[0].result).toEqual([1, 2, 3]);
-  expect(result.metadata).toEqual({ ok: true });
+  expect(affectedTables).toEqual(["numbers"]);
 
-  const metadata: { ok: boolean } = result.metadata;
+  const syncResult = await engine.sync("noop");
+  expect(syncResult.affectedTables).toEqual(["numbers"]);
+  expect(syncResult.results[0].result).toEqual([1, 2, 3]);
+
+  const published = engine.publish("numbers", [1, 2, 3]);
+  expect(published).toHaveLength(1);
+  expect(published[0].subscriptionId).toBe(subscriptionId);
+  expect(published[0].result).toEqual([1, 2, 3]);
+
   if (false as boolean) {
     // @ts-expect-error — "missing" is not a known query on the interface type
     void engine.subscribe("missing");
@@ -66,11 +74,11 @@ test("typed query/mutation params and results", async () => {
     void engine.subscribe("numbers", 1);
     // @ts-expect-error — mutation expects no params
     void engine.mutate("noop", 1);
-    // @ts-expect-error — mutation metadata keeps its boolean payload type
-    const wrongMetadata: { ok: string } = result.metadata;
-    void wrongMetadata;
+    // @ts-expect-error — sync expects no params
+    void engine.sync("noop", 1);
+    // @ts-expect-error — publish expects correct value type
+    void engine.publish("numbers", ["bad"]);
   }
-  expect(metadata.ok).toBe(true);
 });
 
 test("type errors for wrong query name or wrong param types", () => {
@@ -95,10 +103,16 @@ test("type errors for wrong query name or wrong param types", () => {
     void engine.subscribe("missing");
     // @ts-expect-error — mutate expects no params but 1 is given
     void engine.mutate("noop", 1);
+    // @ts-expect-error — sync expects no params but 1 is given
+    void engine.sync("noop", 1);
+    // @ts-expect-error — publish expects correct value type
+    void engine.publish("numbers", ["bad"]);
   }
 
   // Confirm the valid calls still work
   engine.subscribe("numbers", 42);
   engine.unsubscribe(engine.subscribe("numbers", 42));
   void engine.mutate("noop");
+  void engine.sync("noop");
+  engine.publish("numbers", 42);
 });

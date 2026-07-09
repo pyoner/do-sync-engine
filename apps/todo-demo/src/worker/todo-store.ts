@@ -10,13 +10,12 @@ import type {
 } from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
-  MutationMetadata,
   MutationResponse,
   ServerMessage,
   TodoQueryName,
   TodoQueryResults,
 } from "../todo-protocol";
-import { DurableObjectSqlStorage } from "./storage";
+import { DurableObjectSqlStorage, type MutationMetadata } from "./storage";
 
 type TodoQueries = {
   [Name in TodoQueryName]: Query<[], TodoQueryResults[Name]>;
@@ -334,10 +333,10 @@ export class TodoStore extends DurableObject<Env> {
     mutation: Name,
     ...params: OperationParams<TodoMutations[Name]>
   ): Promise<MutationResponse> {
-    const result = await this.engine.mutate(mutation, ...params);
+    const result = await this.engine.sync(mutation, ...params);
     for (const queryResult of result.results) {
       this.sendPublishedQueryResult(queryResult);
     }
-    return { metadata: result.metadata };
+    return { affectedTables: [...result.affectedTables] };
   }
 }

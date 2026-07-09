@@ -52,24 +52,19 @@ export interface QueryResult<QueryName extends string = string, Result = unknown
   result: Result;
 }
 
-export interface MutationResult<
-  Metadata = unknown,
-  QueryName extends string = string,
-  Result = unknown,
-> {
-  metadata: Metadata;
-  results: readonly QueryResult<QueryName, Result>[];
-}
-
 export type SyncEngineQueryResult<Queries extends QueryMap<Queries>> = QueryResult<
   StringKey<Queries>,
   OperationResult<Queries[StringKey<Queries>]>
 >;
+export interface SyncResult<QueryName extends string = string, Result = unknown> {
+  affectedTables: readonly string[];
+  results: readonly QueryResult<QueryName, Result>[];
+}
 
-export type SyncEngineMutationResult<
-  Queries extends QueryMap<Queries>,
-  Metadata = unknown,
-> = MutationResult<Metadata, StringKey<Queries>, OperationResult<Queries[StringKey<Queries>]>>;
+export type SyncEngineSyncResult<Queries extends QueryMap<Queries>> = SyncResult<
+  StringKey<Queries>,
+  OperationResult<Queries[StringKey<Queries>]>
+>;
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -93,5 +88,13 @@ export interface SyncEngineInterface<
   mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     ...params: OperationParams<Mutations[Name]>
-  ): Promise<SyncEngineMutationResult<Queries, OperationResult<Mutations[Name]>>>;
+  ): Promise<readonly string[]>;
+  publish<Name extends StringKey<Queries>>(
+    query: Name,
+    value: OperationResult<Queries[Name]>,
+  ): readonly QueryResult<Name, OperationResult<Queries[Name]>>[];
+  sync<Name extends StringKey<Mutations>>(
+    mutation: Name,
+    ...params: OperationParams<Mutations[Name]>
+  ): Promise<SyncEngineSyncResult<Queries>>;
 }
