@@ -23,6 +23,27 @@ function cloneOrThrow<T>(value: T, label: string): T {
     throw new TypeError(`${label} must support structuredClone`, { cause });
   }
 }
+function assertKnownQuery(query: string, knownQueries: { has(query: string): boolean }): void {
+  if (!knownQueries.has(query)) {
+    throw new ReferenceError(`Unknown query: ${query}`);
+  }
+}
+
+function hasSubscription<QueryName extends string>(
+  subscriptions: readonly Subscription<QueryName>[],
+  subscriptionId: SubscriptionId,
+): boolean {
+  return subscriptions.some((subscription) => subscription.id === subscriptionId);
+}
+
+function* activeSubscriptions<QueryName extends string>(
+  subscriptions: readonly Subscription<QueryName>[],
+): Iterable<Subscription<QueryName>> {
+  const subscriptionSnapshot = Array.from(subscriptions);
+  for (const subscription of subscriptionSnapshot) {
+    if (hasSubscription(subscriptions, subscription.id)) yield subscription;
+  }
+}
 
 interface ValidatedSnapshot<QueryName extends string = string> {
   nextSubscriptionId: SubscriptionId;
@@ -31,42 +52,40 @@ interface ValidatedSnapshot<QueryName extends string = string> {
 
 function validateSnapshot<QueryName extends string = string>(
   snapshot: Snapshot<QueryName>,
-  knownQueries: Set<string>,
+  knownQueryNames: Set<string>,
 ): ValidatedSnapshot<QueryName> {
-  const cloned = cloneOrThrow(snapshot, "Snapshot");
+  const snapshotCopy = cloneOrThrow(snapshot, "Snapshot");
 
-  if (!Number.isInteger(cloned.nextSubscriptionId) || cloned.nextSubscriptionId < 1) {
+  if (!Number.isInteger(snapshotCopy.nextSubscriptionId) || snapshotCopy.nextSubscriptionId < 1) {
     throw new TypeError("Snapshot nextSubscriptionId must be a positive integer");
   }
 
-  if (!Array.isArray(cloned.subscriptions)) {
+  if (!Array.isArray(snapshotCopy.subscriptions)) {
     throw new TypeError("Snapshot subscriptions must be an array");
   }
 
-  const seenIds = new Set<SubscriptionId>();
-  for (const sub of cloned.subscriptions) {
-    if (!Number.isInteger(sub.id) || sub.id < 1) {
+  const seenSubscriptionIds = new Set<SubscriptionId>();
+  for (const subscription of snapshotCopy.subscriptions) {
+    if (!Number.isInteger(subscription.id) || subscription.id < 1) {
       throw new TypeError("Subscription id must be a positive integer");
     }
-    if (seenIds.has(sub.id)) {
-      throw new TypeError(`Duplicate subscription id: ${sub.id}`);
+    if (seenSubscriptionIds.has(subscription.id)) {
+      throw new TypeError(`Duplicate subscription id: ${subscription.id}`);
     }
-    seenIds.add(sub.id);
+    seenSubscriptionIds.add(subscription.id);
 
-    if (!Array.isArray(sub.params)) {
+    if (!Array.isArray(subscription.params)) {
       throw new TypeError("Subscription params must be an array");
     }
 
-    if (typeof sub.query !== "string") {
+    if (typeof subscription.query !== "string") {
       throw new TypeError("Subscription query must be a string");
     }
 
-    if (!knownQueries.has(sub.query)) {
-      throw new ReferenceError(`Unknown query: ${sub.query}`);
-    }
+    assertKnownQuery(subscription.query, knownQueryNames);
   }
 
-  return cloned as ValidatedSnapshot<QueryName>;
+  return snapshotCopy as ValidatedSnapshot<QueryName>;
 }
 
 export class SyncEngine<
@@ -75,7 +94,7 @@ export class SyncEngine<
 > implements SyncEngineInterface<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private nextSubscriptionId: SubscriptionId;
+  private nextSubscriptionId: SubscriptionId = 1;
   private subscriptions: Subscription<StringKey<Queries>>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -86,16 +105,18 @@ export class SyncEngine<
       Object.entries(options.mutations) as [string, Mutation<unknown[], unknown>][],
     );
 
-    if (options.snapshot === undefined) {
-      this.nextSubscriptionId = 1;
-      this.subscriptions = [];
-    } else {
+    if (options.snapshot !== undefined) {
       const knownQueryNames = new Set(this.queries.keys());
-      const snap = validateSnapshot(options.snapshot, knownQueryNames);
-
-      const highestId = snap.subscriptions.reduce((max, sub) => Math.max(max, sub.id), 0);
-      this.nextSubscriptionId = Math.max(snap.nextSubscriptionId, highestId + 1, 1);
-      this.subscriptions = snap.subscriptions;
+      const validatedSnapshot = validateSnapshot(options.snapshot, knownQueryNames);
+      const highestSubscriptionId = validatedSnapshot.subscriptions.reduce(
+        (max, subscription) => Math.max(max, subscription.id),
+        0,
+      );
+      this.nextSubscriptionId = Math.max(
+        validatedSnapshot.nextSubscriptionId,
+        highestSubscriptionId + 1,
+      );
+      this.subscriptions = validatedSnapshot.subscriptions;
     }
   }
 
@@ -103,64 +124,60 @@ export class SyncEngine<
     query: Name,
     ...params: OperationParams<Queries[Name]>
   ): SubscriptionId {
-    if (!this.queries.has(query)) {
-      throw new ReferenceError(`Unknown query: ${query}`);
-    }
+    assertKnownQuery(query, this.queries);
 
-    const clonedParams = cloneOrThrow([...params], "Subscription params");
+    const subscriptionParams = cloneOrThrow([...params], "Subscription params");
 
-    const id = this.nextSubscriptionId++;
-    this.subscriptions.push({ id, query, params: clonedParams });
-    return id;
+    const subscriptionId = this.nextSubscriptionId++;
+    this.subscriptions.push({ id: subscriptionId, query, params: subscriptionParams });
+    return subscriptionId;
   }
 
   unsubscribe(subscriptionId: SubscriptionId): boolean {
-    const index = this.subscriptions.findIndex((sub) => sub.id === subscriptionId);
-    if (index === -1) return false;
-    this.subscriptions.splice(index, 1);
+    const subscriptionIndex = this.subscriptions.findIndex(
+      (subscription) => subscription.id === subscriptionId,
+    );
+    if (subscriptionIndex === -1) return false;
+    this.subscriptions.splice(subscriptionIndex, 1);
     return true;
   }
 
   snapshot(): Snapshot<StringKey<Queries>> {
-    const snap: Snapshot<StringKey<Queries>> = {
+    const engineSnapshot: Snapshot<StringKey<Queries>> = {
       nextSubscriptionId: this.nextSubscriptionId,
       subscriptions: [...this.subscriptions],
     };
-    return cloneOrThrow(snap, "Snapshot");
+    return cloneOrThrow(engineSnapshot, "Snapshot");
   }
 
   async mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     ...params: OperationParams<Mutations[Name]>
   ): Promise<readonly string[]> {
-    const mutationDef = this.mutations.get(mutation);
-    if (mutationDef === undefined) {
+    const mutationDefinition = this.mutations.get(mutation);
+    if (mutationDefinition === undefined) {
       throw new ReferenceError(`Unknown mutation: ${mutation}`);
     }
 
-    await mutationDef.run(...params);
-    return [...mutationDef.tables];
+    await mutationDefinition.run(...params);
+    return [...mutationDefinition.tables];
   }
 
   publish<Name extends StringKey<Queries>>(
     query: Name,
     value: OperationResult<Queries[Name]>,
   ): readonly QueryResult<Name, OperationResult<Queries[Name]>>[] {
-    if (!this.queries.has(query)) {
-      throw new ReferenceError(`Unknown query: ${query}`);
-    }
+    assertKnownQuery(query, this.queries);
 
-    const snapshot = [...this.subscriptions];
     const results: QueryResult<Name, OperationResult<Queries[Name]>>[] = [];
 
-    for (const sub of snapshot) {
-      if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
-      if (sub.query !== query) continue;
+    for (const subscription of activeSubscriptions(this.subscriptions)) {
+      if (subscription.query !== query) continue;
 
       results.push({
-        subscriptionId: sub.id,
+        subscriptionId: subscription.id,
         query,
-        params: sub.params,
+        params: subscription.params,
         result: value,
       });
     }
@@ -175,25 +192,22 @@ export class SyncEngine<
     const affectedTables = await this.mutate(mutation, ...params);
     const changedTables = new Set(affectedTables);
 
-    const snapshot = [...this.subscriptions];
     const results: SyncEngineQueryResult<Queries>[] = [];
 
-    for (const sub of snapshot) {
-      if (!this.subscriptions.some((s) => s.id === sub.id)) continue;
+    for (const subscription of activeSubscriptions(this.subscriptions)) {
+      const queryDefinition = this.queries.get(subscription.query);
+      if (queryDefinition === undefined) continue;
+      const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
+      if (!touchesChangedTable) continue;
 
-      const queryDef = this.queries.get(sub.query);
-      if (queryDef === undefined) continue;
-      const isAffected = queryDef.tables.some((table) => changedTables.has(table));
-      if (!isAffected) continue;
-
-      const value = (await queryDef.run(...sub.params)) as OperationResult<
+      const value = (await queryDefinition.run(...subscription.params)) as OperationResult<
         Queries[StringKey<Queries>]
       >;
 
-      const published = this.publish(sub.query, value);
-      const match = published.find((r) => r.subscriptionId === sub.id);
-      if (match) {
-        results.push(match);
+      const publishedResults = this.publish(subscription.query, value);
+      const queryResult = publishedResults.find((r) => r.subscriptionId === subscription.id);
+      if (queryResult) {
+        results.push(queryResult);
       }
     }
 
