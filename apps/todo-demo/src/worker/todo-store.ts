@@ -4,7 +4,6 @@ import type {
   Mutation,
   OperationParams,
   Query,
-  QueryResult,
   StringKey,
   SubscriptionId,
 } from "@do-sync-engine/core";
@@ -123,6 +122,7 @@ function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
 export class TodoStore extends DurableObject<Env> {
   private engine!: SyncEngine<TodoQueries, TodoMutations>;
   private queries!: TodoQueries;
+  private mutations!: TodoMutations;
   private subscriptions = new Map<WebSocket, Map<TodoQueryName, SubscriptionId>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -131,10 +131,10 @@ export class TodoStore extends DurableObject<Env> {
       this.ctx.storage.sql.exec(SCHEMA);
       const storage = new DurableObjectSqlStorage(this.ctx.storage.sql);
       this.queries = createQueries(storage);
-      const mutations = createMutations(storage);
+      this.mutations = createMutations(storage);
       this.engine = new SyncEngine({
         queries: { ...this.queries },
-        mutations: { ...mutations },
+        mutations: { ...this.mutations },
       });
       for (const ws of this.ctx.getWebSockets()) {
         this.subscriptions.set(ws, new Map());
@@ -185,28 +185,28 @@ export class TodoStore extends DurableObject<Env> {
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.publishMutation("addTodo", parsed.title),
+            mutation: await this.publishMutation("addTodo", [parsed.title]),
           });
           return;
         case "toggleTodo":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.publishMutation("toggleTodo", parsed.todoId),
+            mutation: await this.publishMutation("toggleTodo", [parsed.todoId]),
           });
           return;
         case "deleteTodo":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.publishMutation("deleteTodo", parsed.todoId),
+            mutation: await this.publishMutation("deleteTodo", [parsed.todoId]),
           });
           return;
         case "clearCompleted":
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.publishMutation("clearCompleted"),
+            mutation: await this.publishMutation("clearCompleted", []),
           });
           return;
       }
@@ -260,24 +260,18 @@ export class TodoStore extends DurableObject<Env> {
     this.send(ws, message);
   }
 
-  private sendPublishedQueryResult(selection: QueryResult<TodoQueryName>): void {
-    // subscription ids are unique
-    for (const [ws, socketSubscriptions] of this.subscriptions) {
-      const subId = socketSubscriptions.get(selection.query);
-      if (subId === selection.subscriptionId) {
-        this.sendQueryResult(ws, selection.query, selection.result as never);
-        return; // at most one socket per query name
-      }
-    }
-  }
-
   private async subscribeQuery(
     ws: WebSocket,
     socketSubscriptions: Map<TodoQueryName, SubscriptionId>,
     name: TodoQueryName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
-      socketSubscriptions.set(name, this.engine.subscribe(name));
+      socketSubscriptions.set(
+        name,
+        this.engine.subscribe(name, [], (selection) => {
+          this.sendQueryResult(ws, selection.query, selection.result as never);
+        }),
+      );
     }
 
     const result = await this.queries[name].run();
@@ -331,12 +325,9 @@ export class TodoStore extends DurableObject<Env> {
 
   private async publishMutation<Name extends StringKey<TodoMutations>>(
     mutation: Name,
-    ...params: OperationParams<TodoMutations[Name]>
+    params: OperationParams<TodoMutations[Name]>,
   ): Promise<MutationResponse> {
-    const result = await this.engine.sync(mutation, ...params);
-    for (const queryResult of result.results) {
-      this.sendPublishedQueryResult(queryResult);
-    }
-    return { affectedTables: [...result.affectedTables] };
+    await this.engine.sync(mutation, params);
+    return { affectedTables: [...this.mutations[mutation].tables] };
   }
 }

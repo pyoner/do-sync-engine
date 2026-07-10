@@ -1,8 +1,24 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/engine.js";
 import { NodeSqliteStorage } from "./helpers.js";
-import type { Mutation, Query, Snapshot } from "../src/index.js";
+import type { Mutation, Query, QueryCallback, QueryResult, Snapshot } from "../src/index.js";
 import type { MutationMetadata, SqlRow } from "./helpers.js";
+
+function captureQueryResult<Name extends string, Result>() {
+  const results: QueryResult<Name, Result>[] = [];
+  const callback: QueryCallback<Name, unknown> = (result) => {
+    results.push(result as QueryResult<Name, Result>);
+  };
+  return { callback, results };
+}
+
+const noopCallback: QueryCallback = () => {};
+
+function asFixtureCallback<Name extends string, Result>(
+  callback: QueryCallback<Name, Result>,
+): QueryCallback<Name, unknown> {
+  return callback as QueryCallback<Name, unknown>;
+}
 
 function setupDb(storage: NodeSqliteStorage) {
   storage.exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
@@ -29,7 +45,7 @@ function writeTablesFromSql(sql: string) {
 
 describe("SyncEngine", () => {
   let storage: NodeSqliteStorage;
-  let engine: SyncEngine;
+  let engine: SyncEngine<any, any>;
   let allUsers: Query<[], SqlRow[]>;
   let userById: Query<[number], SqlRow[]>;
   let postsOnly: Query<[], SqlRow[]>;
@@ -107,9 +123,9 @@ describe("SyncEngine", () => {
         queries: { users: trackingQuery, allUsers },
         mutations: { insertUser },
       });
-      engine.subscribe("users");
+      engine.subscribe("users", [], noopCallback);
 
-      const result = await engine.mutate("insertUser", "charlie");
+      const result = await engine.mutate("insertUser", ["charlie"]);
       expect(result).toEqual(["users"]);
 
       const rows = storage.query("SELECT * FROM users ORDER BY id");
@@ -118,16 +134,17 @@ describe("SyncEngine", () => {
       expect(queryRunCount).toBe(0);
     });
 
-    test("sync runs matching query and returns affected tables + results", async () => {
-      engine.subscribe("allUsers");
-      const result = await engine.sync("insertUser", "charlie");
+    test("sync runs matching query and delivers callback payload", async () => {
+      const captured = captureQueryResult<"allUsers", SqlRow[]>();
+      const subscriptionId = engine.subscribe("allUsers", [], asFixtureCallback(captured.callback));
+      await engine.sync("insertUser", ["charlie"]);
 
-      expect(result.affectedTables).toEqual(["users"]);
-      expect(result.results).toHaveLength(1);
-      const queryResult = result.results[0];
+      expect(captured.results).toHaveLength(1);
+      const queryResult = captured.results[0];
+      expect(queryResult.subscriptionId).toBe(subscriptionId);
       expect(queryResult.query).toBe("allUsers");
-      expect(Array.isArray(queryResult.result)).toBe(true);
-      expect((queryResult.result as SqlRow[]).some((row) => row.name === "charlie")).toBe(true);
+      expect(queryResult.params).toEqual([]);
+      expect(queryResult.result.some((row) => row.name === "charlie")).toBe(true);
     });
 
     test("sync skips subscriptions whose tables do not overlap", async () => {
@@ -143,14 +160,17 @@ describe("SyncEngine", () => {
         queries: { postsOnly: countingQuery, allUsers },
         mutations: { insertUser },
       });
-      engine.subscribe("postsOnly");
-      engine.subscribe("allUsers");
+      const postsResults = captureQueryResult<"postsOnly", SqlRow[]>();
+      const usersResults = captureQueryResult<"allUsers", SqlRow[]>();
+      engine.subscribe("postsOnly", [], asFixtureCallback(postsResults.callback));
+      engine.subscribe("allUsers", [], asFixtureCallback(usersResults.callback));
 
-      const result = await engine.sync("insertUser", "charlie");
+      await engine.sync("insertUser", ["charlie"]);
 
       expect(runCount).toBe(0);
-      expect(result.results).toHaveLength(1);
-      expect(result.results[0].query).toBe("allUsers");
+      expect(postsResults.results).toEqual([]);
+      expect(usersResults.results).toHaveLength(1);
+      expect(usersResults.results[0].query).toBe("allUsers");
     });
 
     test("sync does not run queries that were never subscribed", async () => {
@@ -167,30 +187,29 @@ describe("SyncEngine", () => {
         mutations: { insertUser },
       });
 
-      await engine.sync("insertUser", "charlie");
+      await engine.sync("insertUser", ["charlie"]);
 
       expect(runCount).toBe(0);
     });
 
     test("unsubscribe returns true when removing, false otherwise", async () => {
-      const id = engine.subscribe("allUsers");
+      const id = engine.subscribe("allUsers", [], noopCallback);
       expect(engine.unsubscribe(id)).toBe(true);
       expect(engine.unsubscribe(id)).toBe(false);
     });
 
     test("unsubscribe stops future sync from producing results", async () => {
-      const id = engine.subscribe("allUsers");
+      const captured = captureQueryResult<"allUsers", SqlRow[]>();
+      const id = engine.subscribe("allUsers", [], asFixtureCallback(captured.callback));
       expect(engine.unsubscribe(id)).toBe(true);
 
-      const result = await engine.sync("insertUser", "charlie");
-      expect(result.results).toHaveLength(0);
+      await engine.sync("insertUser", ["charlie"]);
+      await engine.sync("insertUser", ["dave"]);
 
-      // Still no results after second sync
-      const result2 = await engine.sync("insertUser", "dave");
-      expect(result2.results).toHaveLength(0);
+      expect(captured.results).toEqual([]);
     });
 
-    test("parameterized subscriptions pass rest params to query.run and return them in queryResult", async () => {
+    test("parameterized subscriptions pass explicit params to query.run and callback payload", async () => {
       const runParams: number[] = [];
       const trackingQuery: Query<[number], SqlRow[]> = {
         tables: [...userById.tables],
@@ -203,36 +222,43 @@ describe("SyncEngine", () => {
         queries: { userById: trackingQuery },
         mutations: { updateUserName },
       });
-      engine.subscribe("userById", 2);
-      const result = await engine.sync("updateUserName", "bob_updated", 2);
+      const captured = captureQueryResult<"userById", SqlRow[]>();
+      const subscriptionId = engine.subscribe(
+        "userById",
+        [2],
+        asFixtureCallback(captured.callback),
+      );
+      await engine.sync("updateUserName", ["bob_updated", 2]);
 
       expect(runParams).toEqual([2]);
-      expect(result.results).toHaveLength(1);
-      expect(result.results[0].subscriptionId).toBe(1);
-      expect(result.results[0].query).toBe("userById");
-      expect(result.results[0].params).toEqual([2]);
-      const rows = result.results[0].result as SqlRow[];
-      expect(rows).toHaveLength(1);
-      expect(rows[0].name).toBe("bob_updated");
+      expect(captured.results).toHaveLength(1);
+      const queryResult = captured.results[0];
+      expect(queryResult.subscriptionId).toBe(subscriptionId);
+      expect(queryResult.query).toBe("userById");
+      expect(queryResult.params).toEqual([2]);
+      expect(queryResult.result).toHaveLength(1);
+      expect(queryResult.result[0].name).toBe("bob_updated");
     });
 
-    test("duplicate subscriptions are independent and produce duplicate results", async () => {
-      const firstId = engine.subscribe("allUsers");
-      const secondId = engine.subscribe("allUsers");
+    test("duplicate subscriptions are independent and produce duplicate callbacks", async () => {
+      const captured = captureQueryResult<"allUsers", SqlRow[]>();
+      const firstId = engine.subscribe("allUsers", [], asFixtureCallback(captured.callback));
+      const secondId = engine.subscribe("allUsers", [], asFixtureCallback(captured.callback));
       expect(firstId).not.toBe(secondId);
 
-      const result = await engine.sync("insertUser", "charlie");
-      expect(result.results).toHaveLength(2);
-      expect(result.results[0].subscriptionId).toBe(firstId);
-      expect(result.results[1].subscriptionId).toBe(secondId);
+      await engine.sync("insertUser", ["charlie"]);
+      expect(captured.results).toHaveLength(2);
+      expect(captured.results[0].subscriptionId).toBe(firstId);
+      expect(captured.results[1].subscriptionId).toBe(secondId);
 
+      captured.results.length = 0;
       engine.unsubscribe(firstId);
-      const result2 = await engine.sync("insertUser", "dave");
-      expect(result2.results).toHaveLength(1);
-      expect(result2.results[0].subscriptionId).toBe(secondId);
+      await engine.sync("insertUser", ["dave"]);
+      expect(captured.results).toHaveLength(1);
+      expect(captured.results[0].subscriptionId).toBe(secondId);
     });
 
-    test("sync awaits async mutation and query before resolving", async () => {
+    test("sync awaits async mutation, query, and callback before resolving", async () => {
       const createDeferred = () => {
         let resolve!: () => void;
         const promise = new Promise<void>((res) => {
@@ -243,7 +269,14 @@ describe("SyncEngine", () => {
 
       const mutatorGate = createDeferred();
       const queryGate = createDeferred();
+      const callbackGate = createDeferred();
+      let callbackStartedResolve!: () => void;
+      const callbackStarted = new Promise<void>((resolve) => {
+        callbackStartedResolve = resolve;
+      });
       let syncResolved = false;
+      let callbackFinished = false;
+      let callbackPayload: QueryResult<"gated", SqlRow[]> | undefined;
 
       const gatedMutation: Mutation<[string], MutationMetadata> = {
         tables: ["users"],
@@ -259,14 +292,20 @@ describe("SyncEngine", () => {
           return storage.query("SELECT * FROM users ORDER BY id");
         },
       };
+      const callback: QueryCallback<"gated", SqlRow[]> = async (result) => {
+        callbackStartedResolve();
+        await callbackGate.promise;
+        callbackPayload = result;
+        callbackFinished = true;
+      };
       engine = new SyncEngine({
         queries: { gated: gatedQuery, allUsers },
         mutations: { gatedMutator: gatedMutation },
       });
 
-      engine.subscribe("gated");
-      const resultPromise = engine.sync("gatedMutator", "charlie");
-      const syncPromise = resultPromise.then(() => {
+      engine.subscribe("gated", [], asFixtureCallback(callback));
+      const resultPromise: Promise<void> = engine.sync("gatedMutator", ["charlie"]);
+      void resultPromise.then(() => {
         syncResolved = true;
       });
 
@@ -278,29 +317,34 @@ describe("SyncEngine", () => {
       expect(syncResolved).toBe(false);
 
       queryGate.resolve();
-      await syncPromise;
+      await callbackStarted;
+      expect(callbackFinished).toBe(false);
+      expect(syncResolved).toBe(false);
+
+      callbackGate.resolve();
+      await resultPromise;
 
       expect(syncResolved).toBe(true);
-      const result = await resultPromise;
-      expect(result.results).toHaveLength(1);
-      const rows = result.results[0].result as SqlRow[];
-      expect(rows).toHaveLength(3);
+      expect(callbackFinished).toBe(true);
+      expect(callbackPayload?.query).toBe("gated");
+      expect(callbackPayload?.params).toEqual([]);
+      expect(callbackPayload?.result).toHaveLength(3);
     });
 
     test("sync rejects when a query fails", async () => {
-      engine.subscribe("failingUsers");
-      await expect(engine.sync("insertUser", "charlie")).rejects.toThrow("query failed");
+      engine.subscribe("failingUsers", [], noopCallback);
+      await expect(engine.sync("insertUser", ["charlie"])).rejects.toThrow("query failed");
     });
 
     test("subscribe rejects unknown query key", () => {
-      expect(() => engine.subscribe("nonexistent")).toThrow("Unknown query");
+      expect(() => engine.subscribe("nonexistent", [], noopCallback)).toThrow("Unknown query");
     });
 
     test("mutate rejects unknown mutation key", async () => {
-      await expect(engine.mutate("nonexistent")).rejects.toThrow("Unknown mutation");
+      await expect(engine.mutate("nonexistent", [])).rejects.toThrow("Unknown mutation");
     });
 
-    test("sync omits a result when the subscription is removed while its query runs", async () => {
+    test("sync omits a callback when the subscription is removed while its query runs", async () => {
       let queryStartedResolve!: () => void;
       let queryGateResolve!: () => void;
       const queryStarted = new Promise<void>((resolve) => {
@@ -324,54 +368,79 @@ describe("SyncEngine", () => {
         mutations: { insertUser },
       });
 
-      const subscriptionId = engine.subscribe("gated");
-      const resultPromise = engine.sync("insertUser", "charlie");
+      const captured = captureQueryResult<"gated", SqlRow[]>();
+      const subscriptionId = engine.subscribe("gated", [], asFixtureCallback(captured.callback));
+      const resultPromise: Promise<void> = engine.sync("insertUser", ["charlie"]);
 
       await queryStarted;
       expect(engine.unsubscribe(subscriptionId)).toBe(true);
 
       queryGateResolve();
-      const result = await resultPromise;
-      expect(result.results).toEqual([]);
+      await resultPromise;
+      expect(captured.results).toEqual([]);
     });
   });
 
   describe("structuredClone", () => {
-    test("snapshot survives structuredClone and restore", () => {
-      engine.subscribe("userById", 2);
+    test("snapshot restore has no callbacks until a fresh subscription", async () => {
+      const original = captureQueryResult<"userById", SqlRow[]>();
+      engine.subscribe("userById", [2], asFixtureCallback(original.callback));
       const snap = engine.snapshot();
       const cloned = structuredClone(snap) as Snapshot<
         "allUsers" | "userById" | "postsOnly" | "asyncUsers" | "failingUsers"
       >;
 
+      expect(cloned.subscriptions).toEqual([{ id: 1, query: "userById", params: [2] }]);
+
+      let restoredQueryRuns = 0;
+      const trackedUserById: Query<[number], SqlRow[]> = {
+        ...userById,
+        run: (id) => {
+          restoredQueryRuns += 1;
+          return userById.run(id);
+        },
+      };
       const restored = new SyncEngine({
-        queries: { allUsers, userById, postsOnly, asyncUsers, failingUsers },
+        queries: {
+          allUsers,
+          userById: trackedUserById,
+          postsOnly,
+          asyncUsers,
+          failingUsers,
+        },
         mutations: { insertUser, updateUserName },
         snapshot: cloned,
       });
 
-      // Mutating original snapshot does not affect restored
-      return restored.sync("updateUserName", "bob_updated", 2).then((result) => {
-        expect(result.affectedTables).toEqual(["users"]);
-        expect(result.results).toHaveLength(1);
-        const rows = result.results[0].result as SqlRow[];
-        expect(rows).toHaveLength(1);
-        expect(rows[0].name).toBe("bob_updated");
-      });
+      await restored.sync("updateUserName", ["bob_updated", 2]);
+      expect(restoredQueryRuns).toBe(0);
+      expect(original.results).toEqual([]);
+
+      const restoredResults = captureQueryResult<"userById", SqlRow[]>();
+      const subscriptionId = restored.subscribe("userById", [2], restoredResults.callback);
+      await restored.sync("updateUserName", ["bob_updated_again", 2]);
+
+      expect(restoredQueryRuns).toBe(1);
+      expect(restoredResults.results).toHaveLength(1);
+      expect(restoredResults.results[0].subscriptionId).toBe(subscriptionId);
+      expect(restoredResults.results[0].result[0].name).toBe("bob_updated_again");
     });
 
     test("subscribe rejects non-cloneable params", () => {
-      expect(() => engine.subscribe("userById", (() => 1) as never)).toThrow(
+      expect(() => engine.subscribe("userById", [(() => 1) as never], noopCallback)).toThrow(
         "Subscription params must support structuredClone",
       );
     });
 
     test("snapshot is detached", () => {
-      engine.subscribe("allUsers");
+      engine.subscribe("allUsers", [], noopCallback);
       const snap = engine.snapshot();
-      // Mutate the returned snapshot
-      (snap as unknown as { nextSubscriptionId: number }).nextSubscriptionId = 999;
-      (snap as unknown as { subscriptions: unknown[] }).subscriptions = [];
+      const mutableSnapshot = snap as unknown as {
+        nextSubscriptionId: number;
+        subscriptions: unknown[];
+      };
+      mutableSnapshot.nextSubscriptionId = 999;
+      mutableSnapshot.subscriptions = [];
 
       // Engine state should be unchanged
       const snap2 = engine.snapshot();

@@ -3,15 +3,15 @@ import type {
   Mutation,
   MutationMap,
   OperationParams,
+  OperationResult,
   Query,
+  QueryCallback,
   QueryMap,
   Snapshot,
   StringKey,
   Subscription,
   SubscriptionId,
   SyncEngineOptions,
-  SyncEngineQueryResult,
-  SyncEngineSyncResult,
 } from "./types";
 
 function cloneOrThrow<T>(value: T, label: string): T {
@@ -93,6 +93,7 @@ export class SyncEngine<
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private nextSubscriptionId: SubscriptionId = 1;
+  private callbacks = new Map<SubscriptionId, QueryCallback<StringKey<Queries>, unknown>>();
   private subscriptions: Subscription<StringKey<Queries>>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -121,7 +122,8 @@ export class SyncEngine<
 
   subscribe<Name extends StringKey<Queries>>(
     query: Name,
-    ...params: OperationParams<Queries[Name]>
+    params: OperationParams<Queries[Name]>,
+    callback: QueryCallback<Name, OperationResult<Queries[Name]>>,
   ): SubscriptionId {
     assertKnownQuery(query, this.queries);
 
@@ -129,6 +131,7 @@ export class SyncEngine<
 
     const subscriptionId = this.nextSubscriptionId++;
     this.subscriptions.push({ id: subscriptionId, query, params: subscriptionParams });
+    this.callbacks.set(subscriptionId, callback as QueryCallback<StringKey<Queries>, unknown>);
     return subscriptionId;
   }
 
@@ -138,9 +141,9 @@ export class SyncEngine<
     );
     if (subscriptionIndex === -1) return false;
     this.subscriptions.splice(subscriptionIndex, 1);
+    this.callbacks.delete(subscriptionId);
     return true;
   }
-
   snapshot(): Snapshot<StringKey<Queries>> {
     const engineSnapshot: Snapshot<StringKey<Queries>> = {
       nextSubscriptionId: this.nextSubscriptionId,
@@ -151,7 +154,7 @@ export class SyncEngine<
 
   async mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
-    ...params: OperationParams<Mutations[Name]>
+    params: OperationParams<Mutations[Name]>,
   ): Promise<readonly string[]> {
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) {
@@ -162,44 +165,36 @@ export class SyncEngine<
     return [...mutationDefinition.tables];
   }
 
-  protected publish(
-    subscriptionId: SubscriptionId,
-    value: unknown,
-  ): SyncEngineQueryResult<Queries> | undefined {
+  protected async publish(subscriptionId: SubscriptionId, value: unknown): Promise<void> {
     const subscription = this.subscriptions.find(({ id }) => id === subscriptionId);
-    if (subscription === undefined) return undefined;
+    const callback = this.callbacks.get(subscriptionId);
+    if (subscription === undefined || callback === undefined) return;
 
-    return {
+    await callback({
       subscriptionId,
       query: subscription.query,
       params: subscription.params,
       result: value,
-    } as SyncEngineQueryResult<Queries>;
+    });
   }
 
   async sync<Name extends StringKey<Mutations>>(
     mutation: Name,
-    ...params: OperationParams<Mutations[Name]>
-  ): Promise<SyncEngineSyncResult<Queries>> {
-    const affectedTables = await this.mutate(mutation, ...params);
+    params: OperationParams<Mutations[Name]>,
+  ): Promise<void> {
+    const affectedTables = await this.mutate(mutation, params);
     const changedTables = new Set(affectedTables);
 
-    const results: SyncEngineQueryResult<Queries>[] = [];
-
     for (const subscription of activeSubscriptions(this.subscriptions)) {
+      if (!this.callbacks.has(subscription.id)) continue;
+
       const queryDefinition = this.queries.get(subscription.query);
       if (queryDefinition === undefined) continue;
       const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
       if (!touchesChangedTable) continue;
 
       const value = await queryDefinition.run(...subscription.params);
-
-      const result = this.publish(subscription.id, value);
-      if (result !== undefined) {
-        results.push(result);
-      }
+      await this.publish(subscription.id, value);
     }
-
-    return { affectedTables, results } as SyncEngineSyncResult<Queries>;
   }
 }

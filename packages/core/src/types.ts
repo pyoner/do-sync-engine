@@ -22,6 +22,10 @@ export type OperationResult<OperationDef> = OperationDef extends {
   ? Awaited<Result>
   : never;
 
+export type QueryCallback<QueryName extends string = string, Result = unknown> = (
+  result: QueryResult<QueryName, Result>,
+) => void | PromiseLike<void>;
+
 export type StringKey<T> = Extract<keyof T, string>;
 
 export type QueryMap<Queries extends object = Record<string, Query<unknown[], unknown>>> = {
@@ -52,20 +56,6 @@ export interface QueryResult<QueryName extends string = string, Result = unknown
   result: Result;
 }
 
-export type SyncEngineQueryResult<Queries extends QueryMap<Queries>> = QueryResult<
-  StringKey<Queries>,
-  OperationResult<Queries[StringKey<Queries>]>
->;
-export interface SyncResult<QueryName extends string = string, Result = unknown> {
-  affectedTables: readonly string[];
-  results: readonly QueryResult<QueryName, Result>[];
-}
-
-export type SyncEngineSyncResult<Queries extends QueryMap<Queries>> = SyncResult<
-  StringKey<Queries>,
-  OperationResult<Queries[StringKey<Queries>]>
->;
-
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -79,23 +69,21 @@ export abstract class SyncEngineBase<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
-  protected abstract publish(
-    subscriptionId: SubscriptionId,
-    value: unknown,
-  ): SyncEngineQueryResult<Queries> | undefined;
+  protected abstract publish(subscriptionId: SubscriptionId, value: unknown): Promise<void>;
 
   abstract subscribe<Name extends StringKey<Queries>>(
     query: Name,
-    ...params: OperationParams<Queries[Name]>
+    params: OperationParams<Queries[Name]>,
+    callback: QueryCallback<Name, OperationResult<Queries[Name]>>,
   ): SubscriptionId;
   abstract unsubscribe(subscriptionId: SubscriptionId): boolean;
   abstract snapshot(): Snapshot<StringKey<Queries>>;
   abstract mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
-    ...params: OperationParams<Mutations[Name]>
+    params: OperationParams<Mutations[Name]>,
   ): Promise<readonly string[]>;
   abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
-    ...params: OperationParams<Mutations[Name]>
-  ): Promise<SyncEngineSyncResult<Queries>>;
+    params: OperationParams<Mutations[Name]>,
+  ): Promise<void>;
 }

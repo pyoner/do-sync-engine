@@ -1,6 +1,6 @@
 # @do-sync-engine/core
 
-Minimal sync engine for Cloudflare Durable Objects: subscribe to queries, apply mutations, and get typed results.
+Minimal sync engine for Cloudflare Durable Objects: subscribe to queries, apply mutations, and receive typed pushed updates.
 
 ## Usage
 
@@ -25,17 +25,17 @@ const mutations = {
 
 const engine = new SyncEngine({ queries, mutations });
 
-// Subscribe to a query
-const subId = engine.subscribe("allTodos");
+// Subscribe to a query and receive updates after each matching sync
+const subId = engine.subscribe("allTodos", [], ({ result }) => {
+  console.log(result);
+});
 
 // Run a mutation — returns affected tables only
-const affectedTables = await engine.mutate("addTodo", "Buy milk");
+const affectedTables = await engine.mutate("addTodo", ["Buy milk"]);
 // affectedTables is ["todos"]
 
-// Sync runs the mutation and re-runs overlapping subscribed queries
-const synced = await engine.sync("addTodo", "Buy eggs");
-// synced.affectedTables is ["todos"]
-// synced.results contains QueryResult entries for overlapping subscriptions
+// Sync runs the mutation and pushes overlapping query results to callbacks
+await engine.sync("addTodo", ["Buy eggs"]);
 
 // Unsubscribe
 engine.unsubscribe(subId);
@@ -43,6 +43,7 @@ engine.unsubscribe(subId);
 // Snapshot & restore
 const snap = engine.snapshot();
 const restored = new SyncEngine({ queries, mutations, snapshot: snap });
+// Snapshot data does not include callbacks; subscribe again after restore to receive updates.
 ```
 
 ## Development
