@@ -75,7 +75,7 @@ export interface SyncEngineOptions<
   snapshot?: Snapshot<StringKey<Queries>>;
 }
 
-export abstract class SyncEngineInterface<
+export abstract class SyncEngineBase<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {

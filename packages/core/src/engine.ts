@@ -1,4 +1,4 @@
-import { SyncEngineInterface } from "./types";
+import { SyncEngineBase } from "./types";
 import type {
   Mutation,
   MutationMap,
@@ -89,7 +89,7 @@ function validateSnapshot<QueryName extends string = string>(
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
-> extends SyncEngineInterface<Queries, Mutations> {
+> extends SyncEngineBase<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private nextSubscriptionId: SubscriptionId = 1;
