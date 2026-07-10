@@ -37,10 +37,6 @@ const synced = await engine.sync("addTodo", "Buy eggs");
 // synced.affectedTables is ["todos"]
 // synced.results contains QueryResult entries for overlapping subscriptions
 
-// Publish pre-computed query results to active subscriptions
-const published = engine.publish("allTodos", await queries.allTodos.run());
-// published contains QueryResult entries for current allTodos subscriptions
-
 // Unsubscribe
 engine.unsubscribe(subId);
 

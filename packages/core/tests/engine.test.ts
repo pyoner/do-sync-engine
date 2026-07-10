@@ -300,28 +300,6 @@ describe("SyncEngine", () => {
       await expect(engine.mutate("nonexistent")).rejects.toThrow("Unknown mutation");
     });
 
-    test("publish returns supplied values for active subscriptions", async () => {
-      const firstId = engine.subscribe("allUsers");
-      const secondId = engine.subscribe("allUsers");
-
-      const cachedUsers = [{ id: 99, name: "cached" }];
-      const published = engine.publish("allUsers", cachedUsers);
-      expect(published).toHaveLength(2);
-      expect(published[0].subscriptionId).toBe(firstId);
-      expect(published[0].result).toBe(cachedUsers);
-      expect(published[1].subscriptionId).toBe(secondId);
-      expect(published[1].result).toBe(cachedUsers);
-
-      engine.unsubscribe(firstId);
-      const published2 = engine.publish("allUsers", cachedUsers);
-      expect(published2).toHaveLength(1);
-      expect(published2[0].subscriptionId).toBe(secondId);
-    });
-
-    test("publish rejects unknown query key", () => {
-      expect(() => engine.publish("nonexistent" as never, [])).toThrow("Unknown query");
-    });
-
     test("sync omits a result when the subscription is removed while its query runs", async () => {
       let queryStartedResolve!: () => void;
       let queryGateResolve!: () => void;

@@ -75,25 +75,26 @@ export interface SyncEngineOptions<
   snapshot?: Snapshot<StringKey<Queries>>;
 }
 
-export interface SyncEngineInterface<
+export abstract class SyncEngineInterface<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
-  subscribe<Name extends StringKey<Queries>>(
+  protected abstract publish(
+    subscriptionId: SubscriptionId,
+    value: unknown,
+  ): SyncEngineQueryResult<Queries> | undefined;
+
+  abstract subscribe<Name extends StringKey<Queries>>(
     query: Name,
     ...params: OperationParams<Queries[Name]>
   ): SubscriptionId;
-  unsubscribe(subscriptionId: SubscriptionId): boolean;
-  snapshot(): Snapshot<StringKey<Queries>>;
-  mutate<Name extends StringKey<Mutations>>(
+  abstract unsubscribe(subscriptionId: SubscriptionId): boolean;
+  abstract snapshot(): Snapshot<StringKey<Queries>>;
+  abstract mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     ...params: OperationParams<Mutations[Name]>
   ): Promise<readonly string[]>;
-  publish<Name extends StringKey<Queries>>(
-    query: Name,
-    value: OperationResult<Queries[Name]>,
-  ): readonly QueryResult<Name, OperationResult<Queries[Name]>>[];
-  sync<Name extends StringKey<Mutations>>(
+  abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     ...params: OperationParams<Mutations[Name]>
   ): Promise<SyncEngineSyncResult<Queries>>;
