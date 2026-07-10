@@ -126,7 +126,7 @@ export class SyncEngine<
   ): SubscriptionId {
     assertKnownQuery(query, this.queries);
 
-    const subscriptionParams = cloneOrThrow([...params], "Subscription params");
+    const subscriptionParams = cloneOrThrow(params, "Subscription params");
 
     const subscriptionId = this.nextSubscriptionId++;
     this.subscriptions.push({ id: subscriptionId, query, params: subscriptionParams });
@@ -145,7 +145,7 @@ export class SyncEngine<
   snapshot(): Snapshot<StringKey<Queries>> {
     const engineSnapshot: Snapshot<StringKey<Queries>> = {
       nextSubscriptionId: this.nextSubscriptionId,
-      subscriptions: [...this.subscriptions],
+      subscriptions: this.subscriptions,
     };
     return cloneOrThrow(engineSnapshot, "Snapshot");
   }
@@ -171,7 +171,7 @@ export class SyncEngine<
 
     const results: QueryResult<Name, OperationResult<Queries[Name]>>[] = [];
 
-    for (const subscription of activeSubscriptions(this.subscriptions)) {
+    for (const subscription of this.subscriptions) {
       if (subscription.query !== query) continue;
 
       results.push({
@@ -204,11 +204,14 @@ export class SyncEngine<
         Queries[StringKey<Queries>]
       >;
 
-      const publishedResults = this.publish(subscription.query, value);
-      const queryResult = publishedResults.find((r) => r.subscriptionId === subscription.id);
-      if (queryResult) {
-        results.push(queryResult);
-      }
+      if (!hasSubscription(this.subscriptions, subscription.id)) continue;
+
+      results.push({
+        subscriptionId: subscription.id,
+        query: subscription.query,
+        params: subscription.params,
+        result: value,
+      });
     }
 
     return { affectedTables, results } as SyncEngineSyncResult<Queries>;

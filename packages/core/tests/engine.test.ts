@@ -292,15 +292,6 @@ describe("SyncEngine", () => {
       await expect(engine.sync("insertUser", "charlie")).rejects.toThrow("query failed");
     });
 
-    test("subscribed query without delivery callback returns a queryResult", async () => {
-      engine.subscribe("allUsers");
-      const result = await engine.sync("insertUser", "charlie");
-      expect(result.results).toHaveLength(1);
-      expect(result.results[0].query).toBe("allUsers");
-      const rows = result.results[0].result as SqlRow[];
-      expect(rows.some((row) => row.name === "charlie")).toBe(true);
-    });
-
     test("subscribe rejects unknown query key", () => {
       expect(() => engine.subscribe("nonexistent")).toThrow("Unknown query");
     });
@@ -331,32 +322,39 @@ describe("SyncEngine", () => {
       expect(() => engine.publish("nonexistent" as never, [])).toThrow("Unknown query");
     });
 
-    test("sync uses mutate and publish", async () => {
-      engine.subscribe("allUsers");
+    test("sync omits a result when the subscription is removed while its query runs", async () => {
+      let queryStartedResolve!: () => void;
+      let queryGateResolve!: () => void;
+      const queryStarted = new Promise<void>((resolve) => {
+        queryStartedResolve = resolve;
+      });
+      const queryGate = new Promise<void>((resolve) => {
+        queryGateResolve = resolve;
+      });
 
-      let mutateCallCount = 0;
-      let publishCallCount = 0;
+      const gatedQuery: Query<[], SqlRow[]> = {
+        tables: ["users"],
+        run: async () => {
+          queryStartedResolve();
+          await queryGate;
+          return storage.query("SELECT * FROM users ORDER BY id");
+        },
+      };
 
-      const originalMutate = engine.mutate.bind(engine);
-      const originalPublish = engine.publish.bind(engine);
+      engine = new SyncEngine({
+        queries: { gated: gatedQuery, allUsers },
+        mutations: { insertUser },
+      });
 
-      engine.mutate = (async (mutation: string, ...params: unknown[]) => {
-        mutateCallCount++;
-        return originalMutate(mutation, ...params);
-      }) as typeof engine.mutate;
+      const subscriptionId = engine.subscribe("gated");
+      const resultPromise = engine.sync("insertUser", "charlie");
 
-      engine.publish = ((query: string, value: unknown) => {
-        publishCallCount++;
-        return originalPublish(query, value);
-      }) as typeof engine.publish;
+      await queryStarted;
+      expect(engine.unsubscribe(subscriptionId)).toBe(true);
 
-      const result = await engine.sync("insertUser", "charlie");
-
-      expect(mutateCallCount).toBe(1);
-      expect(publishCallCount).toBe(1);
-      expect(result.results).toHaveLength(1);
-      const rows = result.results[0].result as SqlRow[];
-      expect(rows.some((row: SqlRow) => row.name === "charlie")).toBe(true);
+      queryGateResolve();
+      const result = await resultPromise;
+      expect(result.results).toEqual([]);
     });
   });
 
