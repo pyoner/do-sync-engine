@@ -23,6 +23,19 @@ test("exports canonical topic and listener APIs", async () => {
     } satisfies Mutation<[], { ok: boolean }>,
   };
   const engine = new SyncEngine({ queries, mutations });
+
+  if (false as boolean) {
+    // @ts-expect-error — snapshot is no longer a constructor option
+    new SyncEngine({ queries, mutations, snapshot: { subscriptions: [] } });
+    // @ts-expect-error — snapshot is no longer an engine method
+    engine.snapshot();
+    // @ts-expect-error — Snapshot is no longer exported
+    const removedSnapshot = undefined as import("../src/index.js").Snapshot;
+    // @ts-expect-error — Subscription is no longer exported
+    const removedSubscription = undefined as import("../src/index.js").Subscription;
+    void removedSnapshot;
+    void removedSubscription;
+  }
   const topic = await engine.createTopic("numbers", []);
 
   expect(topic).toEqual({
@@ -39,7 +52,6 @@ test("exports canonical topic and listener APIs", async () => {
     "createTopic",
     "mutate",
     "publish",
-    "snapshot",
     "subscribe",
     "sync",
     "unsubscribe",

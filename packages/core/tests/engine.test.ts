@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/engine.js";
-import type { Mutation, Publish, Query, Snapshot, Topic } from "../src/index.js";
+import type { Mutation, Publish, Query, Topic } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
 import type { MutationMetadata, SqlRow } from "./helpers.js";
 
@@ -318,62 +318,5 @@ describe("SyncEngine topics and events", () => {
       `Topic hash collision: ${validTopic.hash}`,
     );
     await expect(engine.createTopic("allUsers", [1n] as never)).rejects.toThrow();
-  });
-
-  test("snapshot keeps detached topic bindings and restores without callbacks", async () => {
-    const topic = await engine.createTopic("userById", [2]);
-    const original = captureEvents();
-    engine.subscribe(topic, original.publish);
-    const snapshot = engine.snapshot();
-    expect(snapshot).toEqual({ subscriptions: [{ topic }] });
-
-    (snapshot.subscriptions[0].topic.params as number[])[0] = 99;
-    expect(engine.snapshot()).toEqual({ subscriptions: [{ topic }] });
-
-    let restoredRuns = 0;
-    const trackedUserById: Query<[number], SqlRow[]> = {
-      ...userById,
-      run: (id) => {
-        restoredRuns += 1;
-        return userById.run(id);
-      },
-    };
-    const restored = new SyncEngine({
-      queries: { userById: trackedUserById },
-      mutations: { updateUserName },
-      snapshot: engine.snapshot() as Snapshot<"userById">,
-    });
-    await restored.sync("updateUserName", ["bob_updated", 2]);
-    expect(restoredRuns).toBe(0);
-
-    const restoredEvents = captureEvents();
-    restored.subscribe(topic as Topic<"userById", [number]>, restoredEvents.publish);
-    await restored.sync("updateUserName", ["bob_updated_again", 2]);
-    expect(restoredRuns).toBe(1);
-    expect(restoredEvents.events).toEqual([
-      expect.objectContaining({ topic, value: expect.any(Array) }),
-    ]);
-  });
-
-  test("rejects malformed and duplicate snapshot topics", async () => {
-    const topic = await engine.createTopic("allUsers", []);
-    const makeEngine = (snapshot: Snapshot<"allUsers">) =>
-      new SyncEngine({ queries: { allUsers }, mutations: { insertUser }, snapshot });
-    expect(() => makeEngine({ subscriptions: null as never })).toThrow(
-      "Snapshot subscriptions must be an array",
-    );
-    expect(() =>
-      makeEngine({
-        subscriptions: [{ topic: { ...topic, hash: "bad" } }],
-      }),
-    ).toThrow("Topic hash must be 64 lowercase hexadecimal characters");
-    expect(() =>
-      makeEngine({
-        subscriptions: [{ topic: { ...topic, name: "missing" } }],
-      } as unknown as Snapshot<"allUsers">),
-    ).toThrow("Unknown query: missing");
-    expect(() => makeEngine({ subscriptions: [{ topic }, { topic: { ...topic } }] })).toThrow(
-      `Duplicate subscription topic hash: ${topic.hash}`,
-    );
   });
 });

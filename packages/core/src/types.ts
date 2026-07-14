@@ -45,21 +45,12 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
 
 export type SubscriptionId = number;
 
-export interface Subscription<QueryName extends string = string> {
-  topic: Topic<QueryName>;
-}
-
-export interface Snapshot<QueryName extends string = string> {
-  subscriptions: readonly Subscription<QueryName>[];
-}
-
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
   queries: Queries;
   mutations: Mutations;
-  snapshot?: Snapshot<StringKey<Queries>>;
 }
 
 export abstract class SyncEngineBase<
@@ -75,7 +66,6 @@ export abstract class SyncEngineBase<
     listener: Listener,
   ): SubscriptionId;
   abstract unsubscribe(subscriptionId: SubscriptionId): boolean;
-  abstract snapshot(): Snapshot<StringKey<Queries>>;
   abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,

@@ -6,9 +6,7 @@ import type {
   Listener,
   Query,
   QueryMap,
-  Snapshot,
   StringKey,
-  Subscription,
   SubscriptionId,
   SyncEngineOptions,
   Topic,
@@ -65,37 +63,6 @@ function validateTopic(
   return candidate as Topic<string, readonly unknown[]>;
 }
 
-interface ValidatedSnapshot<QueryName extends string = string> {
-  subscriptions: Subscription<QueryName>[];
-}
-
-function validateSnapshot<QueryName extends string = string>(
-  snapshot: Snapshot<QueryName>,
-  knownQueryNames: Set<string>,
-): ValidatedSnapshot<QueryName> {
-  const snapshotCopy = cloneOrThrow(snapshot, "Snapshot") as Snapshot<QueryName>;
-  if (typeof snapshotCopy !== "object" || snapshotCopy === null) {
-    throw new TypeError("Snapshot must be an object");
-  }
-  if (!Array.isArray(snapshotCopy.subscriptions)) {
-    throw new TypeError("Snapshot subscriptions must be an array");
-  }
-
-  const seenTopicHashes = new Set<string>();
-  for (const subscription of snapshotCopy.subscriptions) {
-    if (typeof subscription !== "object" || subscription === null) {
-      throw new TypeError("Subscription must be an object");
-    }
-    const topic = validateTopic(subscription.topic, knownQueryNames);
-    if (seenTopicHashes.has(topic.hash)) {
-      throw new TypeError(`Duplicate subscription topic hash: ${topic.hash}`);
-    }
-    seenTopicHashes.add(topic.hash);
-  }
-
-  return snapshotCopy as ValidatedSnapshot<QueryName>;
-}
-
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -105,7 +72,7 @@ export class SyncEngine<
   private nextSubscriptionId: SubscriptionId = 1;
   private readonly listenerHashes = new Map<SubscriptionId, string>();
   private readonly listeners = new Map<string, Map<SubscriptionId, Listener>>();
-  private subscriptions: Subscription<StringKey<Queries>>[] = [];
+  private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
     super();
@@ -115,12 +82,6 @@ export class SyncEngine<
     this.mutations = new Map(
       Object.entries(options.mutations) as [string, Mutation<unknown[], unknown>][],
     );
-
-    if (options.snapshot !== undefined) {
-      const knownQueryNames = new Set(this.queries.keys());
-      const validatedSnapshot = validateSnapshot(options.snapshot, knownQueryNames);
-      this.subscriptions = validatedSnapshot.subscriptions;
-    }
   }
 
   async createTopic<Name extends StringKey<Queries>>(
@@ -139,23 +100,16 @@ export class SyncEngine<
     const clonedTopic = cloneOrThrow(topic, "Topic");
     const validatedTopic = validateTopic(clonedTopic, this.queries);
     if (typeof listener !== "function") {
-      throw new TypeError("Publish must be a function");
+      throw new TypeError("Listener must be a function");
     }
 
-    const existingSubscription = this.subscriptions.find(
-      (subscription) => subscription.topic.hash === validatedTopic.hash,
-    );
-    if (existingSubscription === undefined) {
-      this.subscriptions.push({
-        topic: validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>,
-      });
+    const existingTopic = this.topics.find((topic) => topic.hash === validatedTopic.hash);
+    if (existingTopic === undefined) {
+      this.topics.push(validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>);
     } else {
-      const existingParams = JSON.stringify(existingSubscription.topic.params);
+      const existingParams = JSON.stringify(existingTopic.params);
       const nextParams = JSON.stringify(validatedTopic.params);
-      if (
-        existingSubscription.topic.name !== validatedTopic.name ||
-        existingParams !== nextParams
-      ) {
+      if (existingTopic.name !== validatedTopic.name || existingParams !== nextParams) {
         throw new RangeError(`Topic hash collision: ${validatedTopic.hash}`);
       }
     }
@@ -165,8 +119,8 @@ export class SyncEngine<
       listenersForTopic = new Map();
       this.listeners.set(validatedTopic.hash, listenersForTopic);
     }
-    for (const [subscriptionId, listener] of listenersForTopic) {
-      if (listener === listener) return subscriptionId;
+    for (const [subscriptionId, existingListener] of listenersForTopic) {
+      if (existingListener === listener) return subscriptionId;
     }
 
     const subscriptionId = this.nextSubscriptionId++;
@@ -186,10 +140,6 @@ export class SyncEngine<
       if (listenersForTopic.size === 0) this.listeners.delete(hash);
     }
     return true;
-  }
-
-  snapshot(): Snapshot<StringKey<Queries>> {
-    return cloneOrThrow({ subscriptions: this.subscriptions }, "Snapshot");
   }
 
   protected async mutate<Name extends StringKey<Mutations>>(
@@ -222,18 +172,18 @@ export class SyncEngine<
   ): Promise<void> {
     const affectedTables = await this.mutate(mutation, params);
     const changedTables = new Set(affectedTables);
-    const subscriptionSnapshot = Array.from(this.subscriptions);
+    const topicsToSync = Array.from(this.topics);
 
-    for (const subscription of subscriptionSnapshot) {
-      if (!this.listeners.has(subscription.topic.hash)) continue;
+    for (const topic of topicsToSync) {
+      if (!this.listeners.has(topic.hash)) continue;
 
-      const queryDefinition = this.queries.get(subscription.topic.name);
+      const queryDefinition = this.queries.get(topic.name);
       if (queryDefinition === undefined) continue;
       const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
       if (!touchesChangedTable) continue;
 
-      const value = await queryDefinition.run(...subscription.topic.params);
-      await this.publish(subscription.topic, value);
+      const value = await queryDefinition.run(...topic.params);
+      await this.publish(topic, value);
     }
   }
 }

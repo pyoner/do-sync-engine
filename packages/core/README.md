@@ -40,16 +40,9 @@ await engine.sync("addTodo", ["Buy eggs"]);
 
 // Unsubscribe one listener without removing the topic binding.
 engine.unsubscribe(listenerId);
-
-// Snapshot & restore
-const snap = engine.snapshot();
-const restored = new SyncEngine({ queries, mutations, snapshot: snap });
-// Snapshots retain topic bindings, never listener callbacks; subscribe again after restore.
 ```
 
 A `Topic` contains the query `name`, executable `params`, and a `hash`. The hash is the lowercase hexadecimal SHA-256 digest of `JSON.stringify({ name, params })`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by its hash. A single topic hash can have many listeners; each `SubscriptionId` identifies one listener for `unsubscribe`.
-
-Snapshots contain topic bindings only. They retain the query topics needed by `sync`, but never callbacks or listener IDs. Restored bindings run no queries until a listener subscribes to their matching topic.
 
 ## Development
 
