@@ -7,6 +7,7 @@
     "dev": "vp dev",
     "build": "vp build",
     "preview": "vp preview",
+    "test": "vp test",
     "deploy": "vp run build && wrangler deploy"
   },
   "dependencies": {
@@ -15,12 +16,14 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "latest",
+    "@cloudflare/vitest-pool-workers": "latest",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/node": "^24.13.2",
     "svelte": "^5.56.3",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
+    "vitest": "catalog:",
     "wrangler": "latest"
   }
 }
