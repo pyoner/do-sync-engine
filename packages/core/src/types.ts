@@ -22,9 +22,16 @@ export type OperationResult<OperationDef> = OperationDef extends {
   ? Awaited<Result>
   : never;
 
-export type QueryCallback<QueryName extends string = string, Result = unknown> = (
-  result: QueryResult<QueryName, Result>,
-) => void | PromiseLike<void>;
+export type Topic<
+  Name extends string = string,
+  Params extends readonly unknown[] = readonly unknown[],
+> = {
+  name: Name;
+  params: Params;
+  hash: string;
+};
+
+export type Listener = (topic: Topic, value: unknown) => void | PromiseLike<void>;
 
 export type StringKey<T> = Extract<keyof T, string>;
 
@@ -39,21 +46,11 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
 export type SubscriptionId = number;
 
 export interface Subscription<QueryName extends string = string> {
-  id: SubscriptionId;
-  query: QueryName;
-  params: readonly unknown[];
+  topic: Topic<QueryName>;
 }
 
 export interface Snapshot<QueryName extends string = string> {
-  nextSubscriptionId: SubscriptionId;
   subscriptions: readonly Subscription<QueryName>[];
-}
-
-export interface QueryResult<QueryName extends string = string, Result = unknown> {
-  subscriptionId: SubscriptionId;
-  query: QueryName;
-  params: readonly unknown[];
-  result: Result;
 }
 
 export interface SyncEngineOptions<
@@ -69,21 +66,26 @@ export abstract class SyncEngineBase<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
-  protected abstract publish(subscriptionId: SubscriptionId, value: unknown): Promise<void>;
-
-  abstract subscribe<Name extends StringKey<Queries>>(
-    query: Name,
+  abstract createTopic<Name extends StringKey<Queries>>(
+    name: Name,
     params: OperationParams<Queries[Name]>,
-    callback: QueryCallback<Name, OperationResult<Queries[Name]>>,
+  ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
+  abstract subscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener,
   ): SubscriptionId;
   abstract unsubscribe(subscriptionId: SubscriptionId): boolean;
   abstract snapshot(): Snapshot<StringKey<Queries>>;
-  abstract mutate<Name extends StringKey<Mutations>>(
-    mutation: Name,
-    params: OperationParams<Mutations[Name]>,
-  ): Promise<readonly string[]>;
   abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): Promise<void>;
+
+  // Helpers (protected methods)
+  protected abstract mutate<Name extends StringKey<Mutations>>(
+    mutation: Name,
+    params: OperationParams<Mutations[Name]>,
+  ): Promise<readonly string[]>;
+
+  protected abstract publish(topic: Topic, value: unknown): Promise<void>;
 }

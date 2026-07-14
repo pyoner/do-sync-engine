@@ -266,10 +266,11 @@ export class TodoStore extends DurableObject<Env> {
     name: TodoQueryName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
+      const topic = await this.engine.createTopic(name, []);
       socketSubscriptions.set(
         name,
-        this.engine.subscribe(name, [], (selection) => {
-          this.sendQueryResult(ws, selection.query, selection.result as never);
+        this.engine.subscribe(topic, (_publishedTopic, result) => {
+          this.sendQueryResult(ws, name, result as never);
         }),
       );
     }
