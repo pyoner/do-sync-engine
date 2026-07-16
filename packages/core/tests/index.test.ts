@@ -6,6 +6,7 @@ import type {
   Publish,
   Query,
   SubscriptionId,
+  Subscription,
   SyncEngineBase,
   Topic,
   TopicHash,
@@ -25,19 +26,6 @@ test("exports canonical topic and listener APIs", async () => {
     } satisfies Mutation<[], { ok: boolean }>,
   };
   const engine = new SyncEngine({ queries, mutations });
-
-  if (false as boolean) {
-    // @ts-expect-error — snapshot is no longer a constructor option
-    new SyncEngine({ queries, mutations, snapshot: { subscriptions: [] } });
-    // @ts-expect-error — snapshot is no longer an engine method
-    engine.snapshot();
-    // @ts-expect-error — Snapshot is no longer exported
-    const removedSnapshot = undefined as import("../src/index.js").Snapshot;
-    // @ts-expect-error — Subscription is no longer exported
-    const removedSubscription = undefined as import("../src/index.js").Subscription;
-    void removedSnapshot;
-    void removedSubscription;
-  }
 
   if (false as boolean) {
     const brandedString = undefined as unknown as Branded<string, "TestString">;
@@ -78,8 +66,8 @@ test("exports canonical topic and listener APIs", async () => {
   });
 
   const publish: Publish = () => {};
-  const subscriptionId: SubscriptionId = engine.subscribe(topic, publish);
-  expect(subscriptionId).toBeTypeOf("number");
+  const subscription: Subscription = engine.subscribe(topic, publish);
+  expect(subscription).toEqual({ topicHash, id: 1 });
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -89,8 +77,8 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
-  expect(engine.unsubscribe(subscriptionId)).toBe(true);
-  expect(engine.unsubscribe(subscriptionId)).toBe(false);
+  expect(engine.unsubscribe(subscription)).toBe(true);
+  expect(engine.unsubscribe(subscription)).toBe(false);
 });
 
 test("typed topic params, listener values, mutations, and sync", async () => {
@@ -119,10 +107,10 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     });
   };
 
-  const subscriptionId: SubscriptionId = engine.subscribe(topic, publish);
+  const subscription: Subscription = engine.subscribe(topic, publish);
   await engine.sync("noop", []);
 
-  expect(subscriptionId).toBeTypeOf("number");
+  expect(subscription.id).toBeTypeOf("number");
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -163,7 +151,7 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const firstId = engine.subscribe(topic, publish);
-  expect(firstId).toBeTypeOf("number");
-  expect(engine.unsubscribe(firstId)).toBe(true);
+  const subscription = engine.subscribe(topic, publish);
+  expect(subscription.id).toBeTypeOf("number");
+  expect(engine.unsubscribe(subscription)).toBe(true);
 });

@@ -5,7 +5,7 @@ import type {
   OperationParams,
   Query,
   StringKey,
-  SubscriptionId,
+  Subscription,
 } from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
@@ -123,7 +123,7 @@ export class TodoStore extends DurableObject<Env> {
   private engine!: SyncEngine<TodoQueries, TodoMutations>;
   private queries!: TodoQueries;
   private mutations!: TodoMutations;
-  private subscriptions = new Map<WebSocket, Map<TodoQueryName, SubscriptionId>>();
+  private subscriptions = new Map<WebSocket, Map<TodoQueryName, Subscription>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -262,7 +262,7 @@ export class TodoStore extends DurableObject<Env> {
 
   private async subscribeQuery(
     ws: WebSocket,
-    socketSubscriptions: Map<TodoQueryName, SubscriptionId>,
+    socketSubscriptions: Map<TodoQueryName, Subscription>,
     name: TodoQueryName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
@@ -300,9 +300,9 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     for (const name of queries) {
-      const subscriptionId = socketSubscriptions.get(name);
-      if (subscriptionId !== undefined) {
-        this.engine.unsubscribe(subscriptionId);
+      const subscription = socketSubscriptions.get(name);
+      if (subscription !== undefined) {
+        this.engine.unsubscribe(subscription);
       }
       socketSubscriptions.delete(name);
     }
@@ -313,8 +313,8 @@ export class TodoStore extends DurableObject<Env> {
   private clearSubscriptions(ws: WebSocket): void {
     const socketSubscriptions = this.subscriptions.get(ws);
     if (socketSubscriptions) {
-      for (const subscriptionId of socketSubscriptions.values()) {
-        this.engine.unsubscribe(subscriptionId);
+      for (const subscription of socketSubscriptions.values()) {
+        this.engine.unsubscribe(subscription);
       }
       this.subscriptions.delete(ws);
     }

@@ -8,6 +8,7 @@ import type {
   QueryMap,
   StringKey,
   SubscriptionId,
+  Subscription,
   SyncEngineOptions,
   Topic,
   TopicHash,
@@ -71,7 +72,6 @@ export class SyncEngine<
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private nextSubscriptionId: SubscriptionId = 1 as SubscriptionId;
-  private readonly listenerTopicHashes = new Map<SubscriptionId, TopicHash>();
   private readonly listeners = new Map<TopicHash, Map<SubscriptionId, Listener>>();
   private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
@@ -97,7 +97,7 @@ export class SyncEngine<
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener,
-  ): SubscriptionId {
+  ): Subscription {
     const clonedTopic = cloneOrThrow(topic, "Topic");
     const validatedTopic = validateTopic(clonedTopic, this.queries);
     if (typeof listener !== "function") {
@@ -121,26 +121,22 @@ export class SyncEngine<
       this.listeners.set(validatedTopic.hash, listenersForTopic);
     }
     for (const [subscriptionId, existingListener] of listenersForTopic) {
-      if (existingListener === listener) return subscriptionId;
+      if (existingListener === listener) {
+        return { topicHash: validatedTopic.hash, id: subscriptionId };
+      }
     }
 
     const subscriptionId = this.nextSubscriptionId;
     this.nextSubscriptionId = (subscriptionId + 1) as SubscriptionId;
     listenersForTopic.set(subscriptionId, listener);
-    this.listenerTopicHashes.set(subscriptionId, validatedTopic.hash);
-    return subscriptionId;
+    return { topicHash: validatedTopic.hash, id: subscriptionId };
   }
 
-  unsubscribe(subscriptionId: SubscriptionId): boolean {
-    const hash = this.listenerTopicHashes.get(subscriptionId);
-    if (hash === undefined) return false;
+  unsubscribe(subscription: Subscription): boolean {
+    const listenersForTopic = this.listeners.get(subscription.topicHash);
+    if (listenersForTopic === undefined || !listenersForTopic.delete(subscription.id)) return false;
 
-    this.listenerTopicHashes.delete(subscriptionId);
-    const listenersForTopic = this.listeners.get(hash);
-    if (listenersForTopic !== undefined) {
-      listenersForTopic.delete(subscriptionId);
-      if (listenersForTopic.size === 0) this.listeners.delete(hash);
-    }
+    if (listenersForTopic.size === 0) this.listeners.delete(subscription.topicHash);
     return true;
   }
 

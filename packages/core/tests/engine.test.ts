@@ -199,15 +199,15 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
-    const firstId = engine.subscribe(topic, first.publish);
-    expect(engine.subscribe(topic, first.publish)).toBe(firstId);
-    const secondId = engine.subscribe(topic, second.publish);
-    expect(secondId).not.toBe(firstId);
+    const firstSubscription = engine.subscribe(topic, first.publish);
+    expect(engine.subscribe(topic, first.publish)).toEqual(firstSubscription);
+    const secondSubscription = engine.subscribe(topic, second.publish);
+    expect(secondSubscription).not.toEqual(firstSubscription);
 
     await engine.sync("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
-    expect(engine.unsubscribe(firstId)).toBe(true);
+    expect(engine.unsubscribe(firstSubscription)).toBe(true);
     await engine.sync("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
@@ -296,10 +296,10 @@ describe("SyncEngine topics and events", () => {
     engine = new SyncEngine({ queries: { gatedQuery }, mutations: { insertUser } });
     const topic = await engine.createTopic("gatedQuery", []);
     const captured = captureEvents();
-    const id = engine.subscribe(topic, captured.publish);
+    const subscription = engine.subscribe(topic, captured.publish);
     const syncPromise = engine.sync("insertUser", ["charlie"]);
     await queryStarted.promise;
-    expect(engine.unsubscribe(id)).toBe(true);
+    expect(engine.unsubscribe(subscription)).toBe(true);
     queryGate.resolve();
     await syncPromise;
     expect(captured.events).toEqual([]);

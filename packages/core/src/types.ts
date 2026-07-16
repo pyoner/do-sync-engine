@@ -53,6 +53,7 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
 };
 
 export type SubscriptionId = Branded<number, "SubscriptionId">;
+export type Subscription = { topicHash: TopicHash; id: SubscriptionId };
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -73,8 +74,8 @@ export abstract class SyncEngineBase<
   abstract subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener,
-  ): SubscriptionId;
-  abstract unsubscribe(subscriptionId: SubscriptionId): boolean;
+  ): Subscription;
+  abstract unsubscribe(subscription: Subscription): boolean;
   abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
