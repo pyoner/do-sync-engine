@@ -71,7 +71,7 @@ export class SyncEngine<
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private nextSubscriptionId: SubscriptionId = 1 as SubscriptionId;
-  private readonly listenerHashes = new Map<SubscriptionId, TopicHash>();
+  private readonly listenerTopicHashes = new Map<SubscriptionId, TopicHash>();
   private readonly listeners = new Map<TopicHash, Map<SubscriptionId, Listener>>();
   private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
@@ -127,15 +127,15 @@ export class SyncEngine<
     const subscriptionId = this.nextSubscriptionId;
     this.nextSubscriptionId = (subscriptionId + 1) as SubscriptionId;
     listenersForTopic.set(subscriptionId, listener);
-    this.listenerHashes.set(subscriptionId, validatedTopic.hash);
+    this.listenerTopicHashes.set(subscriptionId, validatedTopic.hash);
     return subscriptionId;
   }
 
   unsubscribe(subscriptionId: SubscriptionId): boolean {
-    const hash = this.listenerHashes.get(subscriptionId);
+    const hash = this.listenerTopicHashes.get(subscriptionId);
     if (hash === undefined) return false;
 
-    this.listenerHashes.delete(subscriptionId);
+    this.listenerTopicHashes.delete(subscriptionId);
     const listenersForTopic = this.listeners.get(hash);
     if (listenersForTopic !== undefined) {
       listenersForTopic.delete(subscriptionId);
