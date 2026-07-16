@@ -1,12 +1,14 @@
 import { expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/index.js";
 import type {
+  Branded,
   Mutation,
   Publish,
   Query,
   SubscriptionId,
   SyncEngineBase,
   Topic,
+  TopicHash,
 } from "../src/index.js";
 
 test("exports canonical topic and listener APIs", async () => {
@@ -36,7 +38,38 @@ test("exports canonical topic and listener APIs", async () => {
     void removedSnapshot;
     void removedSubscription;
   }
+
+  if (false as boolean) {
+    const brandedString = undefined as unknown as Branded<string, "TestString">;
+    const stringValue: string = brandedString;
+    const brandedNumber = undefined as unknown as Branded<number, "TestNumber">;
+    const numberValue: number = brandedNumber;
+    const brandedBoolean = undefined as unknown as Branded<boolean, "TestBoolean">;
+    const booleanValue: boolean = brandedBoolean;
+    const brandedBigInt = undefined as unknown as Branded<bigint, "TestBigInt">;
+    const bigIntValue: bigint = brandedBigInt;
+    const brandedSymbol = undefined as unknown as Branded<symbol, "TestSymbol">;
+    const symbolValue: symbol = brandedSymbol;
+    // @ts-expect-error — raw numbers are not SubscriptionId values
+    const rawSubscriptionId: SubscriptionId = 1;
+    // @ts-expect-error — raw strings are not TopicHash values
+    const rawTopicHash: TopicHash = "hash";
+    const otherId = undefined as unknown as Branded<number, "OtherId">;
+    // @ts-expect-error — differently tagged numbers are not SubscriptionId values
+    const otherSubscriptionId: SubscriptionId = otherId;
+    void stringValue;
+    void numberValue;
+    void booleanValue;
+    void bigIntValue;
+    void symbolValue;
+    void rawSubscriptionId;
+    void rawTopicHash;
+    void otherSubscriptionId;
+  }
+
   const topic = await engine.createTopic("numbers", []);
+  const topicHash: TopicHash = topic.hash;
+  expect(topicHash).toBeTypeOf("string");
 
   expect(topic).toEqual({
     name: "numbers",

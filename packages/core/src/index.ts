@@ -1,6 +1,7 @@
 export { SyncEngine } from "./engine";
 export { SyncEngineBase } from "./types";
 export type {
+  Branded,
   Mutation,
   MutationMap,
   OperationParams,
@@ -12,4 +13,5 @@ export type {
   SubscriptionId,
   SyncEngineOptions,
   Topic,
+  TopicHash,
 } from "./types";

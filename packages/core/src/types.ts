@@ -1,3 +1,10 @@
+declare const brand: unique symbol;
+
+export type Branded<
+  Primitive extends string | number | boolean | bigint | symbol,
+  Tag extends string,
+> = Primitive & { readonly [brand]: Tag };
+
 type Operation<Params extends unknown[] = [], Result = unknown> = {
   tables: readonly string[];
   run(...params: Params): Result | PromiseLike<Result>;
@@ -22,13 +29,15 @@ export type OperationResult<OperationDef> = OperationDef extends {
   ? Awaited<Result>
   : never;
 
+export type TopicHash = Branded<string, "TopicHash">;
+
 export type Topic<
   Name extends string = string,
   Params extends readonly unknown[] = readonly unknown[],
 > = {
   name: Name;
   params: Params;
-  hash: string;
+  hash: TopicHash;
 };
 
 export type Listener = (topic: Topic, value: unknown) => void | PromiseLike<void>;
@@ -43,7 +52,7 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
   [Name in keyof Mutations]: Mutation<unknown[], unknown>;
 };
 
-export type SubscriptionId = number;
+export type SubscriptionId = Branded<number, "SubscriptionId">;
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,

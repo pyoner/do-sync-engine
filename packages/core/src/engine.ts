@@ -10,6 +10,7 @@ import type {
   SubscriptionId,
   SyncEngineOptions,
   Topic,
+  TopicHash,
 } from "./types";
 
 function cloneOrThrow<T>(value: T, label: string): T {
@@ -36,7 +37,7 @@ async function buildTopic<Name extends string, Params extends readonly unknown[]
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   const hash = Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
-  ).join("");
+  ).join("") as TopicHash;
   return { name, params, hash };
 }
 
@@ -69,9 +70,9 @@ export class SyncEngine<
 > extends SyncEngineBase<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private nextSubscriptionId: SubscriptionId = 1;
-  private readonly listenerHashes = new Map<SubscriptionId, string>();
-  private readonly listeners = new Map<string, Map<SubscriptionId, Listener>>();
+  private nextSubscriptionId: SubscriptionId = 1 as SubscriptionId;
+  private readonly listenerHashes = new Map<SubscriptionId, TopicHash>();
+  private readonly listeners = new Map<TopicHash, Map<SubscriptionId, Listener>>();
   private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -123,7 +124,8 @@ export class SyncEngine<
       if (existingListener === listener) return subscriptionId;
     }
 
-    const subscriptionId = this.nextSubscriptionId++;
+    const subscriptionId = this.nextSubscriptionId;
+    this.nextSubscriptionId = (subscriptionId + 1) as SubscriptionId;
     listenersForTopic.set(subscriptionId, listener);
     this.listenerHashes.set(subscriptionId, validatedTopic.hash);
     return subscriptionId;
