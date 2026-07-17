@@ -74,6 +74,7 @@ test("exports canonical topic and listener APIs", async () => {
     "createTopic",
     "mutate",
     "publish",
+    "query",
     "subscribe",
     "unsubscribe",
     "update",

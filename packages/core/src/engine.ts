@@ -3,6 +3,7 @@ import type {
   Mutation,
   MutationMap,
   OperationParams,
+  OperationResult,
   Listener,
   Query,
   QueryMap,
@@ -152,6 +153,18 @@ export class SyncEngine<
     return [...mutationDefinition.tables];
   }
 
+  protected async query<Name extends StringKey<Queries>>(
+    name: Name,
+    params: OperationParams<Queries[Name]>,
+  ): Promise<OperationResult<Queries[Name]>> {
+    const queryDefinition = this.queries.get(name);
+    if (queryDefinition === undefined) {
+      throw new ReferenceError(`Unknown query: ${name}`);
+    }
+
+    return (await queryDefinition.run(...params)) as OperationResult<Queries[Name]>;
+  }
+
   protected async publish(topic: Topic, value: unknown): Promise<void> {
     const listenersForTopic = this.listeners.get(topic.hash);
     if (listenersForTopic === undefined) return;
@@ -179,7 +192,10 @@ export class SyncEngine<
       const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
       if (!touchesChangedTable) continue;
 
-      const value = await queryDefinition.run(...topic.params);
+      const value = await this.query(
+        topic.name,
+        topic.params as OperationParams<Queries[StringKey<Queries>]>,
+      );
       await this.publish(topic, value);
     }
   }

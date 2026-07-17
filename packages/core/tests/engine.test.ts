@@ -18,6 +18,10 @@ class ExposedEngine extends SyncEngine<any, any> {
   exposePublish(topic: Topic, value: unknown) {
     return this.publish(topic, value);
   }
+
+  exposeQuery(name: string, params: unknown[]) {
+    return this.query(name, params);
+  }
 }
 
 function setupDb(storage: NodeSqliteStorage) {
@@ -114,6 +118,13 @@ describe("SyncEngine topics and events", () => {
     expect(equivalent).toEqual(first);
     expect(changedParams.hash).not.toBe(first.hash);
     expect(changedName.hash).not.toBe(first.hash);
+  });
+
+  test("runs queries through the protected helper", async () => {
+    const exposed = new ExposedEngine({ queries: { userById }, mutations: {} });
+
+    await expect(exposed.exposeQuery("missing", [])).rejects.toThrow("Unknown query: missing");
+    expect(await exposed.exposeQuery("userById", [2])).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("update runs matching topics once and fans out the same event", async () => {

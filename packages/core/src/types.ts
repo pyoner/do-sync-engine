@@ -87,5 +87,10 @@ export abstract class SyncEngineBase<
     params: OperationParams<Mutations[Name]>,
   ): Promise<readonly string[]>;
 
+  protected abstract query<Name extends StringKey<Queries>>(
+    name: Name,
+    params: OperationParams<Queries[Name]>,
+  ): Promise<OperationResult<Queries[Name]>>;
+
   protected abstract publish(topic: Topic, value: unknown): Promise<void>;
 }
