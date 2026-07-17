@@ -10,7 +10,7 @@ export type {
   Query,
   QueryMap,
   StringKey,
-  SubscriptionId,
+  ListenerId,
   Subscription,
   SyncEngineOptions,
   Topic,

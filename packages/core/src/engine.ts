@@ -7,7 +7,7 @@ import type {
   Query,
   QueryMap,
   StringKey,
-  SubscriptionId,
+  ListenerId,
   Subscription,
   SyncEngineOptions,
   Topic,
@@ -71,8 +71,8 @@ export class SyncEngine<
 > extends SyncEngineBase<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private nextSubscriptionId: SubscriptionId = 1 as SubscriptionId;
-  private readonly listeners = new Map<TopicHash, Map<SubscriptionId, Listener>>();
+  private nextListenerId: ListenerId = 1 as ListenerId;
+  private readonly listeners = new Map<TopicHash, Map<ListenerId, Listener>>();
   private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -120,21 +120,22 @@ export class SyncEngine<
       listenersForTopic = new Map();
       this.listeners.set(validatedTopic.hash, listenersForTopic);
     }
-    for (const [subscriptionId, existingListener] of listenersForTopic) {
+    for (const [listenerId, existingListener] of listenersForTopic) {
       if (existingListener === listener) {
-        return { topicHash: validatedTopic.hash, id: subscriptionId };
+        return { topicHash: validatedTopic.hash, listenerId };
       }
     }
 
-    const subscriptionId = this.nextSubscriptionId;
-    this.nextSubscriptionId = (subscriptionId + 1) as SubscriptionId;
-    listenersForTopic.set(subscriptionId, listener);
-    return { topicHash: validatedTopic.hash, id: subscriptionId };
+    const listenerId = this.nextListenerId;
+    this.nextListenerId = (listenerId + 1) as ListenerId;
+    listenersForTopic.set(listenerId, listener);
+    return { topicHash: validatedTopic.hash, listenerId };
   }
 
   unsubscribe(subscription: Subscription): boolean {
     const listenersForTopic = this.listeners.get(subscription.topicHash);
-    if (listenersForTopic === undefined || !listenersForTopic.delete(subscription.id)) return false;
+    if (listenersForTopic === undefined || !listenersForTopic.delete(subscription.listenerId))
+      return false;
 
     if (listenersForTopic.size === 0) this.listeners.delete(subscription.topicHash);
     return true;
@@ -158,8 +159,8 @@ export class SyncEngine<
     if (listenersForTopic === undefined) return;
 
     const listenerIds = Array.from(listenersForTopic.keys());
-    for (const subscriptionId of listenerIds) {
-      const listener = listenersForTopic.get(subscriptionId);
+    for (const listenerId of listenerIds) {
+      const listener = listenersForTopic.get(listenerId);
       if (listener !== undefined) await listener(topic, value);
     }
   }

@@ -5,7 +5,7 @@ import type {
   Mutation,
   Publish,
   Query,
-  SubscriptionId,
+  ListenerId,
   Subscription,
   SyncEngineBase,
   Topic,
@@ -38,21 +38,21 @@ test("exports canonical topic and listener APIs", async () => {
     const bigIntValue: bigint = brandedBigInt;
     const brandedSymbol = undefined as unknown as Branded<symbol, "TestSymbol">;
     const symbolValue: symbol = brandedSymbol;
-    // @ts-expect-error — raw numbers are not SubscriptionId values
-    const rawSubscriptionId: SubscriptionId = 1;
+    // @ts-expect-error — raw numbers are not ListenerId values
+    const rawListenerId: ListenerId = 1;
     // @ts-expect-error — raw strings are not TopicHash values
     const rawTopicHash: TopicHash = "hash";
     const otherId = undefined as unknown as Branded<number, "OtherId">;
-    // @ts-expect-error — differently tagged numbers are not SubscriptionId values
-    const otherSubscriptionId: SubscriptionId = otherId;
+    // @ts-expect-error — differently tagged numbers are not ListenerId values
+    const otherListenerId: ListenerId = otherId;
     void stringValue;
     void numberValue;
     void booleanValue;
     void bigIntValue;
     void symbolValue;
-    void rawSubscriptionId;
+    void rawListenerId;
     void rawTopicHash;
-    void otherSubscriptionId;
+    void otherListenerId;
   }
 
   const topic = await engine.createTopic("numbers", []);
@@ -67,7 +67,7 @@ test("exports canonical topic and listener APIs", async () => {
 
   const publish: Publish = () => {};
   const subscription: Subscription = engine.subscribe(topic, publish);
-  expect(subscription).toEqual({ topicHash, id: 1 });
+  expect(subscription).toEqual({ topicHash, listenerId: 1 });
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -110,7 +110,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const subscription: Subscription = engine.subscribe(topic, publish);
   await engine.sync("noop", []);
 
-  expect(subscription.id).toBeTypeOf("number");
+  expect(subscription.listenerId).toBeTypeOf("number");
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -152,6 +152,6 @@ test("typed createTopic params and listener handle", async () => {
   }
 
   const subscription = engine.subscribe(topic, publish);
-  expect(subscription.id).toBeTypeOf("number");
+  expect(subscription.listenerId).toBeTypeOf("number");
   expect(engine.unsubscribe(subscription)).toBe(true);
 });

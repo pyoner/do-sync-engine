@@ -52,8 +52,8 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
   [Name in keyof Mutations]: Mutation<unknown[], unknown>;
 };
 
-export type SubscriptionId = Branded<number, "SubscriptionId">;
-export type Subscription = { topicHash: TopicHash; id: SubscriptionId };
+export type ListenerId = Branded<number, "ListenerId">;
+export type Subscription = { topicHash: TopicHash; listenerId: ListenerId };
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
