@@ -7,7 +7,7 @@ export type Branded<
 
 type Operation<Params extends unknown[] = [], Result = unknown> = {
   tables: readonly string[];
-  run(...params: Params): Result | PromiseLike<Result>;
+  run(...params: Params): Result;
 };
 
 export type Query<Params extends unknown[] = [], Result = unknown> = Operation<Params, Result>;
@@ -26,7 +26,7 @@ export type OperationParams<OperationDef> = OperationDef extends {
 export type OperationResult<OperationDef> = OperationDef extends {
   run(...params: never[]): infer Result;
 }
-  ? Awaited<Result>
+  ? Result
   : never;
 
 export type TopicHash = Branded<string, "TopicHash">;
@@ -40,7 +40,7 @@ export type Topic<
   hash: TopicHash;
 };
 
-export type Listener = (topic: Topic, value: unknown) => void | PromiseLike<void>;
+export type Listener = (topic: Topic, value: unknown) => void;
 
 export type StringKey<T> = Extract<keyof T, string>;
 
@@ -79,18 +79,18 @@ export abstract class SyncEngineBase<
   abstract update<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Promise<void>;
+  ): void;
 
   // Helpers (protected methods)
   protected abstract mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Promise<readonly string[]>;
+  ): readonly string[];
 
   protected abstract query<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<OperationResult<Queries[Name]>>;
+  ): OperationResult<Queries[Name]>;
 
-  protected abstract publish(topic: Topic, value: unknown): Promise<void>;
+  protected abstract publish(topic: Topic, value: unknown): void;
 }

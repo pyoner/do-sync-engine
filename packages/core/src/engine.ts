@@ -140,47 +140,56 @@ export class SyncEngine<
     return true;
   }
 
-  protected async mutate<Name extends StringKey<Mutations>>(
+  protected mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Promise<readonly string[]> {
+  ): readonly string[] {
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) {
       throw new ReferenceError(`Unknown mutation: ${mutation}`);
     }
 
-    await mutationDefinition.run(...params);
+    mutationDefinition.run(...params);
     return [...mutationDefinition.tables];
   }
 
-  protected async query<Name extends StringKey<Queries>>(
+  protected query<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<OperationResult<Queries[Name]>> {
+  ): OperationResult<Queries[Name]> {
     const queryDefinition = this.queries.get(name);
     if (queryDefinition === undefined) {
       throw new ReferenceError(`Unknown query: ${name}`);
     }
 
-    return (await queryDefinition.run(...params)) as OperationResult<Queries[Name]>;
+    return queryDefinition.run(...params) as OperationResult<Queries[Name]>;
   }
 
-  protected async publish(topic: Topic, value: unknown): Promise<void> {
+  protected publish(topic: Topic, value: unknown): void {
     const listenersForTopic = this.listeners.get(topic.hash);
     if (listenersForTopic === undefined) return;
 
     const listenerIds = Array.from(listenersForTopic.keys());
     for (const listenerId of listenerIds) {
       const listener = listenersForTopic.get(listenerId);
-      if (listener !== undefined) await listener(topic, value);
+      if (listener === undefined) continue;
+      const result: unknown = listener(topic, value);
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        "then" in result &&
+        typeof result.then === "function"
+      ) {
+        throw new TypeError("Listener must be synchronous");
+      }
     }
   }
 
-  async update<Name extends StringKey<Mutations>>(
+  update<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Promise<void> {
-    const affectedTables = await this.mutate(mutation, params);
+  ): void {
+    const affectedTables = this.mutate(mutation, params);
     const changedTables = new Set(affectedTables);
     const topicsToSync = Array.from(this.topics);
 
@@ -192,11 +201,11 @@ export class SyncEngine<
       const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
       if (!touchesChangedTable) continue;
 
-      const value = await this.query(
+      const value = this.query(
         topic.name,
         topic.params as OperationParams<Queries[StringKey<Queries>]>,
       );
-      await this.publish(topic, value);
+      this.publish(topic, value);
     }
   }
 }

@@ -47,14 +47,6 @@ function writeTablesFromSql(sql: string) {
   return [];
 }
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 describe("SyncEngine topics and events", () => {
   let storage: NodeSqliteStorage;
   let allUsers: Query<[], SqlRow[]>;
@@ -120,11 +112,11 @@ describe("SyncEngine topics and events", () => {
     expect(changedName.hash).not.toBe(first.hash);
   });
 
-  test("runs queries through the protected helper", async () => {
+  test("runs queries through the protected helper", () => {
     const exposed = new ExposedEngine({ queries: { userById }, mutations: {} });
 
-    await expect(exposed.exposeQuery("missing", [])).rejects.toThrow("Unknown query: missing");
-    expect(await exposed.exposeQuery("userById", [2])).toEqual([{ id: 2, name: "bob" }]);
+    expect(() => exposed.exposeQuery("missing", [])).toThrow("Unknown query: missing");
+    expect(exposed.exposeQuery("userById", [2])).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("update runs matching topics once and fans out the same event", async () => {
@@ -134,7 +126,7 @@ describe("SyncEngine topics and events", () => {
     engine.subscribe(topic, first.publish);
     engine.subscribe(topic, second.publish);
 
-    await engine.update("insertUser", ["charlie"]);
+    engine.update("insertUser", ["charlie"]);
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
@@ -170,7 +162,7 @@ describe("SyncEngine topics and events", () => {
     engine.subscribe(topic, captured.publish);
     engine.subscribe(postsTopic, captured.publish);
 
-    await engine.update("updateUserName", ["bob_updated", 2]);
+    engine.update("updateUserName", ["bob_updated", 2]);
 
     expect(runParams).toEqual([2]);
     expect(postsRuns).toBe(0);
@@ -198,12 +190,12 @@ describe("SyncEngine topics and events", () => {
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
-    await engine.update("insertUser", ["charlie"]);
+    engine.update("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
 
     const failingTopic = await engine.createTopic("failingQuery", []);
     engine.subscribe(failingTopic, noopPublish);
-    await expect(engine.update("insertUser", ["dave"])).rejects.toThrow("query failed");
+    expect(() => engine.update("insertUser", ["dave"])).toThrow("query failed");
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
@@ -215,11 +207,11 @@ describe("SyncEngine topics and events", () => {
     const secondSubscription = engine.subscribe(topic, second.publish);
     expect(secondSubscription).not.toEqual(firstSubscription);
 
-    await engine.update("insertUser", ["charlie"]);
+    engine.update("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
     expect(engine.unsubscribe(firstSubscription)).toBe(true);
-    await engine.update("insertUser", ["dave"]);
+    engine.update("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
   });
@@ -236,84 +228,44 @@ describe("SyncEngine topics and events", () => {
     exposed.subscribe(usersTopic, users.publish);
     exposed.subscribe(postsTopic, posts.publish);
 
-    await exposed.exposePublish(usersTopic, 1);
+    exposed.exposePublish(usersTopic, 1);
     expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);
     expect(posts.events).toEqual([]);
   });
 
-  test("awaits mutation, query, and listener", async () => {
-    const mutationGate = createDeferred();
-    const queryGate = createDeferred();
-    const listenerGate = createDeferred();
-    let listenerStarted!: () => void;
-    const listenerStartedPromise = new Promise<void>((resolve) => {
-      listenerStarted = resolve;
-    });
-    let listenerDone = false;
-    const gatedQuery: Query<[], number> = {
+  test("runs mutation, query, and listener synchronously", async () => {
+    const calls: string[] = [];
+    const synchronousQuery: Query<[], number> = {
       tables: ["users"],
-      run: async () => {
-        await queryGate.promise;
+      run: () => {
+        calls.push("query");
         return 1;
       },
     };
-    const gatedMutation: Mutation<[], MutationMetadata> = {
+    const synchronousMutation: Mutation<[], MutationMetadata> = {
       tables: ["users"],
-      run: async () => {
-        await mutationGate.promise;
-        return storage.execute("INSERT INTO users (name) VALUES ('gated')");
+      run: () => {
+        calls.push("mutation");
+        return storage.execute("INSERT INTO users (name) VALUES ('synchronous')");
       },
     };
     engine = new SyncEngine({
-      queries: { gatedQuery },
-      mutations: { gatedMutation },
+      queries: { synchronousQuery },
+      mutations: { synchronousMutation },
     });
-    const topic = await engine.createTopic("gatedQuery", []);
-    engine.subscribe(topic, async () => {
-      listenerStarted();
-      await listenerGate.promise;
-      listenerDone = true;
-    });
+    const topic = await engine.createTopic("synchronousQuery", []);
+    engine.subscribe(topic, () => calls.push("listener"));
 
-    let updateResolved = false;
-    const updatePromise = engine.update("gatedMutation", []).then(() => {
-      updateResolved = true;
-    });
-    await Promise.resolve();
-    expect(updateResolved).toBe(false);
-    mutationGate.resolve();
-    await Promise.resolve();
-    expect(updateResolved).toBe(false);
-    queryGate.resolve();
-    await listenerStartedPromise;
-    expect(updateResolved).toBe(false);
-    listenerGate.resolve();
-    await updatePromise;
-    expect(updateResolved).toBe(true);
-    expect(listenerDone).toBe(true);
+    engine.update("synchronousMutation", []);
+
+    expect(calls).toEqual(["mutation", "query", "listener"]);
   });
 
-  test("unsubscribe during an in-flight query suppresses delivery", async () => {
-    const queryStarted = createDeferred();
-    const queryGate = createDeferred();
-    const gatedQuery: Query<[], SqlRow[]> = {
-      tables: ["users"],
-      run: async () => {
-        queryStarted.resolve();
-        await queryGate.promise;
-        return storage.query("SELECT * FROM users ORDER BY id");
-      },
-    };
-    engine = new SyncEngine({ queries: { gatedQuery }, mutations: { insertUser } });
-    const topic = await engine.createTopic("gatedQuery", []);
-    const captured = captureEvents();
-    const subscription = engine.subscribe(topic, captured.publish);
-    const updatePromise = engine.update("insertUser", ["charlie"]);
-    await queryStarted.promise;
-    expect(engine.unsubscribe(subscription)).toBe(true);
-    queryGate.resolve();
-    await updatePromise;
-    expect(captured.events).toEqual([]);
+  test("rejects asynchronous listeners", async () => {
+    const topic = await engine.createTopic("allUsers", []);
+    engine.subscribe(topic, () => Promise.resolve());
+
+    expect(() => engine.update("insertUser", ["charlie"])).toThrow("Listener must be synchronous");
   });
 
   test("validates manually supplied topics and hash collisions", async () => {

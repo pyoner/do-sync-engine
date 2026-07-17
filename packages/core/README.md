@@ -36,7 +36,7 @@ const affectedTables = await engine.mutate("addTodo", ["Buy milk"]);
 // affectedTables is ["todos"]
 
 // Update runs the mutation and publishes overlapping topic results.
-await engine.update("addTodo", ["Buy eggs"]);
+engine.update("addTodo", ["Buy eggs"]);
 
 // Unsubscribe one listener without removing the topic binding.
 engine.unsubscribe(subscription);

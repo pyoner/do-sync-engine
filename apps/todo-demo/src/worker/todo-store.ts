@@ -275,7 +275,7 @@ export class TodoStore extends DurableObject<Env> {
       );
     }
 
-    const result = await this.queries[name].run();
+    const result = this.queries[name].run();
     this.sendQueryResult(ws, name, result);
   }
 
@@ -328,7 +328,7 @@ export class TodoStore extends DurableObject<Env> {
     mutation: Name,
     params: OperationParams<TodoMutations[Name]>,
   ): Promise<MutationResponse> {
-    await this.engine.update(mutation, params);
+    this.engine.update(mutation, params);
     return { affectedTables: [...this.mutations[mutation].tables] };
   }
 }

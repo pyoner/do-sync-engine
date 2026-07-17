@@ -110,7 +110,7 @@ test("typed topic params, listener values, mutations, and update", async () => {
   };
 
   const subscription: Subscription = engine.subscribe(topic, publish);
-  await engine.update("noop", []);
+  engine.update("noop", []);
 
   expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
@@ -123,7 +123,7 @@ test("typed topic params, listener values, mutations, and update", async () => {
     // @ts-expect-error — subscribe callback must receive a topic and value
     void engine.subscribe(topic, (value: number) => value.toFixed());
     // @ts-expect-error — update expects no params
-    void engine.update("noop", [1]);
+    engine.update("noop", [1]);
   }
 });
 
