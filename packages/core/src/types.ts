@@ -52,7 +52,7 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
   [Name in keyof Mutations]: Mutation<unknown[], unknown>;
 };
 
-export type ListenerId = Branded<number, "ListenerId">;
+export type ListenerId = Branded<string, "ListenerId">;
 export type Subscription = { topicHash: TopicHash; listenerId: ListenerId };
 
 export interface SyncEngineOptions<

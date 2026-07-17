@@ -71,7 +71,6 @@ export class SyncEngine<
 > extends SyncEngineBase<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private nextListenerId: ListenerId = 1 as ListenerId;
   private readonly listeners = new Map<TopicHash, Map<ListenerId, Listener>>();
   private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
 
@@ -126,8 +125,7 @@ export class SyncEngine<
       }
     }
 
-    const listenerId = this.nextListenerId;
-    this.nextListenerId = (listenerId + 1) as ListenerId;
+    const listenerId = globalThis.crypto.randomUUID() as ListenerId;
     listenersForTopic.set(listenerId, listener);
     return { topicHash: validatedTopic.hash, listenerId };
   }

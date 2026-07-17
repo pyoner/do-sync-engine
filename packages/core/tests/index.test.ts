@@ -38,8 +38,8 @@ test("exports canonical topic and listener APIs", async () => {
     const bigIntValue: bigint = brandedBigInt;
     const brandedSymbol = undefined as unknown as Branded<symbol, "TestSymbol">;
     const symbolValue: symbol = brandedSymbol;
-    // @ts-expect-error — raw numbers are not ListenerId values
-    const rawListenerId: ListenerId = 1;
+    // @ts-expect-error — raw strings are not ListenerId values
+    const rawListenerId: ListenerId = "listener-id";
     // @ts-expect-error — raw strings are not TopicHash values
     const rawTopicHash: TopicHash = "hash";
     const otherId = undefined as unknown as Branded<number, "OtherId">;
@@ -67,7 +67,8 @@ test("exports canonical topic and listener APIs", async () => {
 
   const publish: Publish = () => {};
   const subscription: Subscription = engine.subscribe(topic, publish);
-  expect(subscription).toEqual({ topicHash, listenerId: 1 });
+  expect(subscription).toMatchObject({ topicHash });
+  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -110,7 +111,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const subscription: Subscription = engine.subscribe(topic, publish);
   await engine.sync("noop", []);
 
-  expect(subscription.listenerId).toBeTypeOf("number");
+  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -152,6 +153,6 @@ test("typed createTopic params and listener handle", async () => {
   }
 
   const subscription = engine.subscribe(topic, publish);
-  expect(subscription.listenerId).toBeTypeOf("number");
+  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(engine.unsubscribe(subscription)).toBe(true);
 });
