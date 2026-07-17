@@ -163,7 +163,7 @@ export class SyncEngine<
     }
   }
 
-  async sync<Name extends StringKey<Mutations>>(
+  async update<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): Promise<void> {

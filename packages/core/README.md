@@ -35,8 +35,8 @@ const subscription = engine.subscribe(topic, (publishedTopic, result) => {
 const affectedTables = await engine.mutate("addTodo", ["Buy milk"]);
 // affectedTables is ["todos"]
 
-// Sync runs the mutation and publishes overlapping topic results.
-await engine.sync("addTodo", ["Buy eggs"]);
+// Update runs the mutation and publishes overlapping topic results.
+await engine.update("addTodo", ["Buy eggs"]);
 
 // Unsubscribe one listener without removing the topic binding.
 engine.unsubscribe(subscription);

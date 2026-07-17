@@ -116,14 +116,14 @@ describe("SyncEngine topics and events", () => {
     expect(changedName.hash).not.toBe(first.hash);
   });
 
-  test("sync runs matching topics once and fans out the same event", async () => {
+  test("update runs matching topics once and fans out the same event", async () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
     engine.subscribe(topic, first.publish);
     engine.subscribe(topic, second.publish);
 
-    await engine.sync("insertUser", ["charlie"]);
+    await engine.update("insertUser", ["charlie"]);
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
@@ -159,7 +159,7 @@ describe("SyncEngine topics and events", () => {
     engine.subscribe(topic, captured.publish);
     engine.subscribe(postsTopic, captured.publish);
 
-    await engine.sync("updateUserName", ["bob_updated", 2]);
+    await engine.update("updateUserName", ["bob_updated", 2]);
 
     expect(runParams).toEqual([2]);
     expect(postsRuns).toBe(0);
@@ -187,12 +187,12 @@ describe("SyncEngine topics and events", () => {
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
-    await engine.sync("insertUser", ["charlie"]);
+    await engine.update("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
 
     const failingTopic = await engine.createTopic("failingQuery", []);
     engine.subscribe(failingTopic, noopPublish);
-    await expect(engine.sync("insertUser", ["dave"])).rejects.toThrow("query failed");
+    await expect(engine.update("insertUser", ["dave"])).rejects.toThrow("query failed");
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
@@ -204,11 +204,11 @@ describe("SyncEngine topics and events", () => {
     const secondSubscription = engine.subscribe(topic, second.publish);
     expect(secondSubscription).not.toEqual(firstSubscription);
 
-    await engine.sync("insertUser", ["charlie"]);
+    await engine.update("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
     expect(engine.unsubscribe(firstSubscription)).toBe(true);
-    await engine.sync("insertUser", ["dave"]);
+    await engine.update("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
   });
@@ -264,21 +264,21 @@ describe("SyncEngine topics and events", () => {
       listenerDone = true;
     });
 
-    let syncResolved = false;
-    const syncPromise = engine.sync("gatedMutation", []).then(() => {
-      syncResolved = true;
+    let updateResolved = false;
+    const updatePromise = engine.update("gatedMutation", []).then(() => {
+      updateResolved = true;
     });
     await Promise.resolve();
-    expect(syncResolved).toBe(false);
+    expect(updateResolved).toBe(false);
     mutationGate.resolve();
     await Promise.resolve();
-    expect(syncResolved).toBe(false);
+    expect(updateResolved).toBe(false);
     queryGate.resolve();
     await listenerStartedPromise;
-    expect(syncResolved).toBe(false);
+    expect(updateResolved).toBe(false);
     listenerGate.resolve();
-    await syncPromise;
-    expect(syncResolved).toBe(true);
+    await updatePromise;
+    expect(updateResolved).toBe(true);
     expect(listenerDone).toBe(true);
   });
 
@@ -297,11 +297,11 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("gatedQuery", []);
     const captured = captureEvents();
     const subscription = engine.subscribe(topic, captured.publish);
-    const syncPromise = engine.sync("insertUser", ["charlie"]);
+    const updatePromise = engine.update("insertUser", ["charlie"]);
     await queryStarted.promise;
     expect(engine.unsubscribe(subscription)).toBe(true);
     queryGate.resolve();
-    await syncPromise;
+    await updatePromise;
     expect(captured.events).toEqual([]);
   });
 

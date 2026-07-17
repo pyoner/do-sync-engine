@@ -75,14 +75,14 @@ test("exports canonical topic and listener APIs", async () => {
     "mutate",
     "publish",
     "subscribe",
-    "sync",
     "unsubscribe",
+    "update",
   ]);
   expect(engine.unsubscribe(subscription)).toBe(true);
   expect(engine.unsubscribe(subscription)).toBe(false);
 });
 
-test("typed topic params, listener values, mutations, and sync", async () => {
+test("typed topic params, listener values, mutations, and update", async () => {
   const queries = {
     numbers: {
       tables: ["numbers"],
@@ -109,7 +109,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   };
 
   const subscription: Subscription = engine.subscribe(topic, publish);
-  await engine.sync("noop", []);
+  await engine.update("noop", []);
 
   expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
@@ -121,8 +121,8 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     void engine.createTopic("numbers", [1]);
     // @ts-expect-error — subscribe callback must receive a topic and value
     void engine.subscribe(topic, (value: number) => value.toFixed());
-    // @ts-expect-error — sync expects no params
-    void engine.sync("noop", [1]);
+    // @ts-expect-error — update expects no params
+    void engine.update("noop", [1]);
   }
 });
 
