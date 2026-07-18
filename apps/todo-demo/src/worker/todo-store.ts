@@ -269,8 +269,8 @@ export class TodoStore extends DurableObject<Env> {
       const topic = await this.engine.createTopic(name, []);
       socketSubscriptions.set(
         name,
-        this.engine.subscribe(topic, (_publishedTopic, result) => {
-          this.sendQueryResult(ws, name, result as never);
+        this.engine.subscribe(topic, ({ value }) => {
+          this.sendQueryResult(ws, name, value as never);
         }),
       );
     }

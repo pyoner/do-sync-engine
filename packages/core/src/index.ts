@@ -7,6 +7,7 @@ export type {
   OperationParams,
   OperationResult,
   Listener as Publish,
+  ListenerEvent,
   Query,
   QueryMap,
   StringKey,

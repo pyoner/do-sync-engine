@@ -5,6 +5,7 @@ import type {
   OperationParams,
   OperationResult,
   Listener,
+  ListenerEvent,
   Query,
   QueryMap,
   StringKey,
@@ -165,15 +166,15 @@ export class SyncEngine<
     return queryDefinition.run(...params) as OperationResult<Queries[Name]>;
   }
 
-  protected publish(topic: Topic, value: unknown): void {
-    const listenersForTopic = this.listeners.get(topic.hash);
+  protected publish(event: ListenerEvent): void {
+    const listenersForTopic = this.listeners.get(event.topic.hash);
     if (listenersForTopic === undefined) return;
 
     const listenerIds = Array.from(listenersForTopic.keys());
     for (const listenerId of listenerIds) {
       const listener = listenersForTopic.get(listenerId);
       if (listener === undefined) continue;
-      const result: unknown = listener(topic, value);
+      const result: unknown = listener(event);
       if (
         result !== null &&
         typeof result === "object" &&
@@ -205,7 +206,7 @@ export class SyncEngine<
         topic.name,
         topic.params as OperationParams<Queries[StringKey<Queries>]>,
       );
-      this.publish(topic, value);
+      this.publish({ topic, value });
     }
   }
 }

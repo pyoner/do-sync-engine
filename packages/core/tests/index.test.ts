@@ -4,6 +4,7 @@ import type {
   Branded,
   Mutation,
   Publish,
+  ListenerEvent,
   Query,
   ListenerId,
   Subscription,
@@ -102,7 +103,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   });
   const topic: Topic<"numbers", []> = await engine.createTopic("numbers", []);
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
-  const publish: Publish = (publishedTopic, value) => {
+  const publish: Publish = ({ topic: publishedTopic, value }) => {
     events.push({
       topic: publishedTopic as Topic<"numbers", []>,
       value: value as number[],
@@ -120,7 +121,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     void engine.createTopic("missing", []);
     // @ts-expect-error — createTopic params must be an empty tuple
     void engine.createTopic("numbers", [1]);
-    // @ts-expect-error — subscribe callback must receive a topic and value
+    // @ts-expect-error — subscribe callback must receive a listener event
     void engine.subscribe(topic, (value: number) => value.toFixed());
     // @ts-expect-error — sync expects no params
     engine.sync("noop", [1]);
@@ -133,6 +134,11 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     const hash = topic.hash;
     // @ts-expect-error — Topic properties are readonly
     topic.hash = hash;
+    const event: ListenerEvent = { topic, value: [] };
+    // @ts-expect-error — ListenerEvent properties are readonly
+    event.topic = topic;
+    // @ts-expect-error — ListenerEvent properties are readonly
+    event.value = [];
   }
 });
 

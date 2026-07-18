@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine } from "../src/engine.js";
-import type { Mutation, Publish, Query, Topic } from "../src/index.js";
+import type { ListenerEvent, Mutation, Publish, Query } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
 import type { MutationMetadata, SqlRow } from "./helpers.js";
 
 function captureEvents() {
-  const events: Array<{ topic: Topic; value: unknown }> = [];
-  const publish: Publish = (topic, value) => {
-    events.push({ topic, value });
+  const events: ListenerEvent[] = [];
+  const publish: Publish = (event) => {
+    events.push(event);
   };
   return { events, publish };
 }
@@ -15,8 +15,8 @@ function captureEvents() {
 const noopPublish: Publish = () => {};
 
 class ExposedEngine extends SyncEngine<any, any> {
-  exposePublish(topic: Topic, value: unknown) {
-    return this.publish(topic, value);
+  exposePublish(event: ListenerEvent) {
+    return this.publish(event);
   }
 
   exposeQuery(name: string, params: unknown[]) {
@@ -228,7 +228,7 @@ describe("SyncEngine topics and events", () => {
     exposed.subscribe(usersTopic, users.publish);
     exposed.subscribe(postsTopic, posts.publish);
 
-    exposed.exposePublish(usersTopic, 1);
+    exposed.exposePublish({ topic: usersTopic, value: 1 });
     expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);
     expect(posts.events).toEqual([]);
   });

@@ -40,7 +40,12 @@ export type Topic<
   readonly hash: TopicHash;
 };
 
-export type Listener = (topic: Topic, value: unknown) => void;
+export type ListenerEvent = {
+  readonly topic: Topic;
+  readonly value: unknown;
+};
+
+export type Listener = (event: ListenerEvent) => void;
 
 export type StringKey<T> = Extract<keyof T, string>;
 
@@ -92,5 +97,5 @@ export abstract class SyncEngineBase<
     params: OperationParams<Queries[Name]>,
   ): OperationResult<Queries[Name]>;
 
-  protected abstract publish(topic: Topic, value: unknown): void;
+  protected abstract publish(event: ListenerEvent): void;
 }

@@ -27,8 +27,8 @@ const engine = new SyncEngine({ queries, mutations });
 
 // Create a canonical topic, then subscribe one or more listeners to it.
 const topic = await engine.createTopic("allTodos", []);
-const subscription = engine.subscribe(topic, (publishedTopic, result) => {
-  console.log(publishedTopic.hash, result);
+const subscription = engine.subscribe(topic, ({ topic, value }) => {
+  console.log(topic.hash, value);
 });
 
 // Sync runs the mutation and publishes results for subscribed topics whose tables overlap.
