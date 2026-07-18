@@ -35,9 +35,9 @@ export type Topic<
   Name extends string = string,
   Params extends readonly unknown[] = readonly unknown[],
 > = {
-  name: Name;
-  params: Params;
-  hash: TopicHash;
+  readonly name: Name;
+  readonly params: Params;
+  readonly hash: TopicHash;
 };
 
 export type Listener = (topic: Topic, value: unknown) => void;

@@ -124,6 +124,15 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     void engine.subscribe(topic, (value: number) => value.toFixed());
     // @ts-expect-error — sync expects no params
     engine.sync("noop", [1]);
+    const name = topic.name;
+    // @ts-expect-error — Topic properties are readonly
+    topic.name = name;
+    const params = topic.params;
+    // @ts-expect-error — Topic properties are readonly
+    topic.params = params;
+    const hash = topic.hash;
+    // @ts-expect-error — Topic properties are readonly
+    topic.hash = hash;
   }
 });
 
