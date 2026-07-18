@@ -1,6 +1,6 @@
 # @do-sync-engine/core
 
-Minimal sync engine for Cloudflare Durable Objects: subscribe to queries, apply mutations, and receive typed pushed updates.
+Minimal engine for synchronizing query subscribers after mutations.
 
 ## Usage
 
@@ -20,7 +20,7 @@ const mutations = {
   addTodo: {
     tables: ["todos"],
     run: (title: string) => db.execute("INSERT INTO todos (title) VALUES (?)", title),
-  } satisfies Mutation<[string], MutationMetadata>,
+  } satisfies Mutation<[string]>,
 };
 
 const engine = new SyncEngine({ queries, mutations });
@@ -31,18 +31,14 @@ const subscription = engine.subscribe(topic, (publishedTopic, result) => {
   console.log(publishedTopic.hash, result);
 });
 
-// Run a mutation — returns affected tables only
-const affectedTables = await engine.mutate("addTodo", ["Buy milk"]);
-// affectedTables is ["todos"]
-
-// Update runs the mutation and publishes overlapping topic results.
-engine.update("addTodo", ["Buy eggs"]);
+// Sync runs the mutation and publishes results for subscribed topics whose tables overlap.
+engine.sync("addTodo", ["Buy milk"]);
 
 // Unsubscribe one listener without removing the topic binding.
 engine.unsubscribe(subscription);
 ```
 
-A `Topic` contains the query `name`, executable `params`, and a `hash`. The hash is the lowercase hexadecimal SHA-256 digest of `JSON.stringify({ name, params })`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by its hash. A single topic hash can have many listeners; a `Subscription` contains the topic hash and listener ID required by `unsubscribe`.
+A `Topic` contains the query `name`, query `params`, and a `hash`. The hash is the lowercase hexadecimal SHA-256 digest of `JSON.stringify({ name, params })`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by its hash. A single topic hash can have many listeners; a `Subscription` contains the topic hash and listener ID required by `unsubscribe`.
 
 ## Development
 

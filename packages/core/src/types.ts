@@ -76,7 +76,7 @@ export abstract class SyncEngineBase<
     listener: Listener,
   ): Subscription;
   abstract unsubscribe(subscription: Subscription): boolean;
-  abstract update<Name extends StringKey<Mutations>>(
+  abstract sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): void;

@@ -185,7 +185,7 @@ export class SyncEngine<
     }
   }
 
-  update<Name extends StringKey<Mutations>>(
+  sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): void {

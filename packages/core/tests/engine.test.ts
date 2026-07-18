@@ -119,14 +119,14 @@ describe("SyncEngine topics and events", () => {
     expect(exposed.exposeQuery("userById", [2])).toEqual([{ id: 2, name: "bob" }]);
   });
 
-  test("update runs matching topics once and fans out the same event", async () => {
+  test("sync runs matching topics once and fans out the same event", async () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
     engine.subscribe(topic, first.publish);
     engine.subscribe(topic, second.publish);
 
-    engine.update("insertUser", ["charlie"]);
+    engine.sync("insertUser", ["charlie"]);
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
@@ -162,7 +162,7 @@ describe("SyncEngine topics and events", () => {
     engine.subscribe(topic, captured.publish);
     engine.subscribe(postsTopic, captured.publish);
 
-    engine.update("updateUserName", ["bob_updated", 2]);
+    engine.sync("updateUserName", ["bob_updated", 2]);
 
     expect(runParams).toEqual([2]);
     expect(postsRuns).toBe(0);
@@ -190,12 +190,12 @@ describe("SyncEngine topics and events", () => {
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
-    engine.update("insertUser", ["charlie"]);
+    engine.sync("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
 
     const failingTopic = await engine.createTopic("failingQuery", []);
     engine.subscribe(failingTopic, noopPublish);
-    expect(() => engine.update("insertUser", ["dave"])).toThrow("query failed");
+    expect(() => engine.sync("insertUser", ["dave"])).toThrow("query failed");
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
@@ -207,11 +207,11 @@ describe("SyncEngine topics and events", () => {
     const secondSubscription = engine.subscribe(topic, second.publish);
     expect(secondSubscription).not.toEqual(firstSubscription);
 
-    engine.update("insertUser", ["charlie"]);
+    engine.sync("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
     expect(engine.unsubscribe(firstSubscription)).toBe(true);
-    engine.update("insertUser", ["dave"]);
+    engine.sync("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
   });
@@ -256,7 +256,7 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("synchronousQuery", []);
     engine.subscribe(topic, () => calls.push("listener"));
 
-    engine.update("synchronousMutation", []);
+    engine.sync("synchronousMutation", []);
 
     expect(calls).toEqual(["mutation", "query", "listener"]);
   });
@@ -265,7 +265,7 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     engine.subscribe(topic, () => Promise.resolve());
 
-    expect(() => engine.update("insertUser", ["charlie"])).toThrow("Listener must be synchronous");
+    expect(() => engine.sync("insertUser", ["charlie"])).toThrow("Listener must be synchronous");
   });
 
   test("validates manually supplied topics and hash collisions", async () => {

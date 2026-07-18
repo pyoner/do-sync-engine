@@ -328,7 +328,7 @@ export class TodoStore extends DurableObject<Env> {
     mutation: Name,
     params: OperationParams<TodoMutations[Name]>,
   ): Promise<MutationResponse> {
-    this.engine.update(mutation, params);
+    this.engine.sync(mutation, params);
     return { affectedTables: [...this.mutations[mutation].tables] };
   }
 }
