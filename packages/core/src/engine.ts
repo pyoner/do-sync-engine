@@ -97,7 +97,9 @@ export class SyncEngine<
 
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-    listener: Listener,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
   ): Subscription {
     const clonedTopic = cloneOrThrow(topic, "Topic");
     const validatedTopic = validateTopic(clonedTopic, this.queries);
@@ -128,7 +130,7 @@ export class SyncEngine<
     }
 
     const listenerId = globalThis.crypto.randomUUID() as ListenerId;
-    listenersForTopic.set(listenerId, listener);
+    listenersForTopic.set(listenerId, listener as Listener);
     return { topicHash: validatedTopic.hash, listenerId };
   }
 

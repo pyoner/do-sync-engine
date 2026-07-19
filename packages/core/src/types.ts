@@ -40,12 +40,16 @@ export type Topic<
   readonly hash: TopicHash;
 };
 
-export type ListenerEvent = {
-  readonly topic: Topic;
-  readonly value: unknown;
+export type ListenerEvent<
+  Name extends string = string,
+  Params extends readonly unknown[] = readonly unknown[],
+  Value = unknown,
+> = {
+  readonly topic: Topic<Name, Params>;
+  readonly value: Value;
 };
 
-export type Listener = (event: ListenerEvent) => void;
+export type Listener<Event extends ListenerEvent = ListenerEvent> = (event: Event) => void;
 
 export type StringKey<T> = Extract<keyof T, string>;
 
@@ -78,7 +82,9 @@ export abstract class SyncEngineBase<
   ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
   abstract subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-    listener: Listener,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
   ): Subscription;
   abstract unsubscribe(subscription: Subscription): boolean;
   abstract sync<Name extends StringKey<Mutations>>(

@@ -103,14 +103,10 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   });
   const topic: Topic<"numbers", []> = await engine.createTopic("numbers", []);
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
-  const publish: Publish = ({ topic: publishedTopic, value }) => {
-    events.push({
-      topic: publishedTopic as Topic<"numbers", []>,
-      value: value as number[],
-    });
-  };
 
-  const subscription: Subscription = engine.subscribe(topic, publish);
+  const subscription: Subscription = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
+    events.push({ topic: publishedTopic, value });
+  });
   engine.sync("noop", []);
 
   expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
