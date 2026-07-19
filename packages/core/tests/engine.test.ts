@@ -216,6 +216,21 @@ describe("SyncEngine topics and events", () => {
     expect(second.events).toHaveLength(2);
   });
 
+  test("removes topics after their final listener unsubscribes", async () => {
+    const topic = await engine.createTopic("allUsers", []);
+    const first = captureEvents();
+    const second = captureEvents();
+    const firstListenerId = engine.subscribe(topic, first.publish);
+    const secondListenerId = engine.subscribe(topic, second.publish);
+    // Test-only access verifies the private topic lifecycle.
+    const topics = (engine as unknown as { topics: readonly unknown[] }).topics;
+
+    expect(engine.unsubscribe(firstListenerId)).toBe(true);
+    expect(topics).toHaveLength(1);
+    expect(engine.unsubscribe(secondListenerId)).toBe(true);
+    expect(topics).toEqual([]);
+  });
+
   test("listener dispatch is scoped by topic hash", async () => {
     const exposed = new ExposedEngine({
       queries: { allUsers, postsOnly },

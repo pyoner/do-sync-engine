@@ -134,10 +134,13 @@ export class SyncEngine<
   }
 
   unsubscribe(listenerId: ListenerId): boolean {
-    // ponytail: O(total listeners) scan; add a ListenerId-to-TopicHash index if unsubscribe gets hot
     for (const [topicHash, listenersForTopic] of this.listeners) {
       if (!listenersForTopic.delete(listenerId)) continue;
-      if (listenersForTopic.size === 0) this.listeners.delete(topicHash);
+      if (listenersForTopic.size === 0) {
+        this.listeners.delete(topicHash);
+        const topicIndex = this.topics.findIndex((topic) => topic.hash === topicHash);
+        if (topicIndex !== -1) this.topics.splice(topicIndex, 1);
+      }
       return true;
     }
     return false;
