@@ -10,7 +10,6 @@ import type {
   QueryMap,
   StringKey,
   ListenerId,
-  Subscription,
   SyncEngineOptions,
   Topic,
   TopicHash,
@@ -91,7 +90,7 @@ export class SyncEngine<
     params: OperationParams<Queries[Name]>,
   ): Promise<Topic<Name, OperationParams<Queries[Name]>>> {
     assertKnownQuery(name, this.queries);
-    const topicParams = cloneOrThrow(params, "Subscription params");
+    const topicParams = cloneOrThrow(params, "Topic params");
     return buildTopic(name, topicParams);
   }
 
@@ -100,7 +99,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Subscription {
+  ): ListenerId {
     const clonedTopic = cloneOrThrow(topic, "Topic");
     const validatedTopic = validateTopic(clonedTopic, this.queries);
     if (typeof listener !== "function") {
@@ -125,22 +124,23 @@ export class SyncEngine<
     }
     for (const [listenerId, existingListener] of listenersForTopic) {
       if (existingListener === listener) {
-        return { topicHash: validatedTopic.hash, listenerId };
+        return listenerId;
       }
     }
 
     const listenerId = globalThis.crypto.randomUUID() as ListenerId;
     listenersForTopic.set(listenerId, listener as Listener);
-    return { topicHash: validatedTopic.hash, listenerId };
+    return listenerId;
   }
 
-  unsubscribe(subscription: Subscription): boolean {
-    const listenersForTopic = this.listeners.get(subscription.topicHash);
-    if (listenersForTopic === undefined || !listenersForTopic.delete(subscription.listenerId))
-      return false;
-
-    if (listenersForTopic.size === 0) this.listeners.delete(subscription.topicHash);
-    return true;
+  unsubscribe(listenerId: ListenerId): boolean {
+    // ponytail: O(total listeners) scan; add a ListenerId-to-TopicHash index if unsubscribe gets hot
+    for (const [topicHash, listenersForTopic] of this.listeners) {
+      if (!listenersForTopic.delete(listenerId)) continue;
+      if (listenersForTopic.size === 0) this.listeners.delete(topicHash);
+      return true;
+    }
+    return false;
   }
 
   protected mutate<Name extends StringKey<Mutations>>(

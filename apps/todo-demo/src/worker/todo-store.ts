@@ -1,12 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type {
-  Mutation,
-  OperationParams,
-  Query,
-  StringKey,
-  Subscription,
-} from "@do-sync-engine/core";
+import type { Mutation, OperationParams, Query, StringKey, ListenerId } from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
   MutationResponse,
@@ -123,7 +117,7 @@ export class TodoStore extends DurableObject<Env> {
   private engine!: SyncEngine<TodoQueries, TodoMutations>;
   private queries!: TodoQueries;
   private mutations!: TodoMutations;
-  private subscriptions = new Map<WebSocket, Map<TodoQueryName, Subscription>>();
+  private subscriptions = new Map<WebSocket, Map<TodoQueryName, ListenerId>>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -262,7 +256,7 @@ export class TodoStore extends DurableObject<Env> {
 
   private async subscribeQuery(
     ws: WebSocket,
-    socketSubscriptions: Map<TodoQueryName, Subscription>,
+    socketSubscriptions: Map<TodoQueryName, ListenerId>,
     name: TodoQueryName,
   ): Promise<void> {
     if (!socketSubscriptions.has(name)) {
@@ -300,9 +294,9 @@ export class TodoStore extends DurableObject<Env> {
     }
 
     for (const name of queries) {
-      const subscription = socketSubscriptions.get(name);
-      if (subscription !== undefined) {
-        this.engine.unsubscribe(subscription);
+      const listenerId = socketSubscriptions.get(name);
+      if (listenerId !== undefined) {
+        this.engine.unsubscribe(listenerId);
       }
       socketSubscriptions.delete(name);
     }
@@ -313,8 +307,8 @@ export class TodoStore extends DurableObject<Env> {
   private clearSubscriptions(ws: WebSocket): void {
     const socketSubscriptions = this.subscriptions.get(ws);
     if (socketSubscriptions) {
-      for (const subscription of socketSubscriptions.values()) {
-        this.engine.unsubscribe(subscription);
+      for (const listenerId of socketSubscriptions.values()) {
+        this.engine.unsubscribe(listenerId);
       }
       this.subscriptions.delete(ws);
     }

@@ -7,7 +7,6 @@ import type {
   ListenerEvent,
   Query,
   ListenerId,
-  Subscription,
   SyncEngineBase,
   Topic,
   TopicHash,
@@ -67,9 +66,8 @@ test("exports canonical topic and listener APIs", async () => {
   });
 
   const publish: Publish = () => {};
-  const subscription: Subscription = engine.subscribe(topic, publish);
-  expect(subscription).toMatchObject({ topicHash });
-  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  const listenerId: ListenerId = engine.subscribe(topic, publish);
+  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -80,8 +78,8 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
-  expect(engine.unsubscribe(subscription)).toBe(true);
-  expect(engine.unsubscribe(subscription)).toBe(false);
+  expect(engine.unsubscribe(listenerId)).toBe(true);
+  expect(engine.unsubscribe(listenerId)).toBe(false);
 });
 
 test("typed topic params, listener values, mutations, and sync", async () => {
@@ -104,12 +102,12 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const topic: Topic<"numbers", []> = await engine.createTopic("numbers", []);
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
-  const subscription: Subscription = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
+  const listenerId = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
     events.push({ topic: publishedTopic, value });
   });
   engine.sync("noop", []);
 
-  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -164,7 +162,7 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const subscription = engine.subscribe(topic, publish);
-  expect(subscription.listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
-  expect(engine.unsubscribe(subscription)).toBe(true);
+  const listenerId = engine.subscribe(topic, publish);
+  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  expect(engine.unsubscribe(listenerId)).toBe(true);
 });

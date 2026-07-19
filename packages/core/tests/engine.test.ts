@@ -202,15 +202,15 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
-    const firstSubscription = engine.subscribe(topic, first.publish);
-    expect(engine.subscribe(topic, first.publish)).toEqual(firstSubscription);
-    const secondSubscription = engine.subscribe(topic, second.publish);
-    expect(secondSubscription).not.toEqual(firstSubscription);
+    const firstListenerId = engine.subscribe(topic, first.publish);
+    expect(engine.subscribe(topic, first.publish)).toEqual(firstListenerId);
+    const secondListenerId = engine.subscribe(topic, second.publish);
+    expect(secondListenerId).not.toEqual(firstListenerId);
 
     engine.sync("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
-    expect(engine.unsubscribe(firstSubscription)).toBe(true);
+    expect(engine.unsubscribe(firstListenerId)).toBe(true);
     engine.sync("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);

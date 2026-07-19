@@ -12,7 +12,6 @@ export type {
   QueryMap,
   StringKey,
   ListenerId,
-  Subscription,
   SyncEngineOptions,
   Topic,
   TopicHash,
