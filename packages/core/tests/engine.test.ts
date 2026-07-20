@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine, toTables } from "../src/index.js";
-import type { Listener, ListenerEvent, Mutation, Query, Table } from "../src/index.js";
+import type { Listener, ListenerEvent, Mutation, Query } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
+import { readTablesFromSql, writeTablesFromSql } from "@do-sync-engine/utils";
 import type { MutationMetadata, SqlRow } from "@do-sync-engine/utils";
 
 function captureEvents() {
@@ -30,21 +31,6 @@ function setupDb(storage: NodeSqliteStorage) {
   storage.exec(`INSERT INTO users (name) VALUES ('alice')`);
   storage.exec(`INSERT INTO users (name) VALUES ('bob')`);
   storage.exec(`INSERT INTO posts (user_id, title) VALUES (1, 'hello')`);
-}
-
-function readTablesFromSql(sql: string): Set<Table> {
-  const lower = sql.toLowerCase();
-  return toTables([
-    ...(/\b(from|join)\s+users\b/.test(lower) ? ["users"] : []),
-    ...(/\b(from|join)\s+posts\b/.test(lower) ? ["posts"] : []),
-  ]);
-}
-
-function writeTablesFromSql(sql: string): Set<Table> {
-  const lower = sql.toLowerCase();
-  if (/^\s*(insert\s+into|update|delete\s+from)\s+users\b/.test(lower)) return toTables(["users"]);
-  if (/^\s*(insert\s+into|update|delete\s+from)\s+posts\b/.test(lower)) return toTables(["posts"]);
-  return toTables([]);
 }
 
 describe("SyncEngine topics and events", () => {

@@ -1,13 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type {
-  Mutation,
-  OperationParams,
-  Query,
-  StringKey,
-  ListenerId,
-  Table,
-} from "@do-sync-engine/core";
+import { SyncEngine } from "@do-sync-engine/core";
+import type { Mutation, OperationParams, Query, StringKey, ListenerId } from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
   MutationResponse,
@@ -16,6 +9,7 @@ import type {
   TodoQueryResults,
 } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
+import { readTablesFromSql, writeTablesFromSql } from "@do-sync-engine/utils";
 import type { MutationMetadata, SqlDatabase } from "@do-sync-engine/utils";
 
 type TodoQueries = {
@@ -41,18 +35,6 @@ const SCHEMA = `
     created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )
 `;
-
-function readTablesFromSql(sql: string): Set<Table> {
-  const lower = sql.toLowerCase();
-  return toTables(/\b(from|join)\s+todos\b/.test(lower) ? ["todos"] : []);
-}
-
-function writeTablesFromSql(sql: string): Set<Table> {
-  const lower = sql.toLowerCase();
-  return toTables(
-    /^\s*(insert\s+into|update|delete\s+from)\s+todos\b/.test(lower) ? ["todos"] : [],
-  );
-}
 
 function createQueries(storage: SqlDatabase): TodoQueries {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
