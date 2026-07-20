@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Mutation, Query } from "@do-sync-engine/core";
+import type { MutationMetadata } from "@do-sync-engine/utils";
 
 export const TODO_WS_PATH = "/api/todos";
 
@@ -38,6 +40,17 @@ export const todoQueryResultsSchema = z.object({
   todoCount: z.array(todoCountSchema),
 });
 export type TodoQueryResults = z.infer<typeof todoQueryResultsSchema>;
+
+export type TodoQueries = {
+  [Name in TodoQueryName]: Query<[], TodoQueryResults[Name]>;
+};
+
+export interface TodoMutations {
+  addTodo: Mutation<[string], MutationMetadata>;
+  toggleTodo: Mutation<[number], MutationMetadata>;
+  deleteTodo: Mutation<[number], MutationMetadata>;
+  clearCompleted: Mutation<[], MutationMetadata>;
+}
 
 const requestIdSchema = z.string().refine((value) => value.trim().length > 0);
 const todoIdSchema = z.number().int().positive();

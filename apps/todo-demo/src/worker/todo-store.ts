@@ -1,31 +1,20 @@
 import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import type { Mutation, OperationParams, Query, StringKey, ListenerId } from "@do-sync-engine/core";
-import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
+import type { OperationParams, StringKey } from "@do-sync-engine/core";
+import { parseClientMessage } from "../todo-protocol";
 import type {
+  MutationCommand,
   MutationResponse,
   ServerMessage,
+  TodoMutations,
+  TodoQueries,
   TodoQueryName,
   TodoQueryResults,
 } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
+import { SubscriptionRegistry } from "./subscription-registry";
 import { readTablesFromSql, writeTablesFromSql } from "@do-sync-engine/utils";
-import type { MutationMetadata, SqlDatabase } from "@do-sync-engine/utils";
-
-type TodoQueries = {
-  [Name in TodoQueryName]: Query<[], TodoQueryResults[Name]>;
-};
-
-interface TodoMutations {
-  addTodo: Mutation<[string], MutationMetadata>;
-  toggleTodo: Mutation<[number], MutationMetadata>;
-  deleteTodo: Mutation<[number], MutationMetadata>;
-  clearCompleted: Mutation<[], MutationMetadata>;
-}
-
-interface WebSocketSubscriptionAttachment {
-  selectors?: TodoQueryName[];
-}
+import type { SqlDatabase } from "@do-sync-engine/utils";
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS todos (
@@ -107,24 +96,25 @@ function createMutations(storage: SqlDatabase): TodoMutations {
 
 export class TodoStore extends DurableObject<Env> {
   private engine!: SyncEngine<TodoQueries, TodoMutations>;
-  private queries!: TodoQueries;
   private mutations!: TodoMutations;
-  private subscriptions = new Map<WebSocket, Map<TodoQueryName, ListenerId>>();
+  private registry!: SubscriptionRegistry;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void this.ctx.blockConcurrencyWhile(async () => {
       this.ctx.storage.sql.exec(SCHEMA);
       const storage = new DurableObjectSqlStorage(this.ctx.storage.sql);
-      this.queries = createQueries(storage);
+      const queries = createQueries(storage);
       this.mutations = createMutations(storage);
       this.engine = new SyncEngine({
-        queries: { ...this.queries },
+        queries: { ...queries },
         mutations: { ...this.mutations },
       });
+      this.registry = new SubscriptionRegistry(this.engine, queries, (ws, name, result) =>
+        this.sendQueryResult(ws, name, result),
+      );
       for (const ws of this.ctx.getWebSockets()) {
-        this.subscriptions.set(ws, new Map());
-        await this.subscribeQueries(ws, this.readAttachedQueries(ws));
+        await this.registry.restore(ws);
       }
     });
   }
@@ -137,8 +127,7 @@ export class TodoStore extends DurableObject<Env> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    this.subscriptions.set(server, new Map());
-    server.serializeAttachment({ selectors: [] } satisfies WebSocketSubscriptionAttachment);
+    await this.registry.restore(server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -162,37 +151,16 @@ export class TodoStore extends DurableObject<Env> {
     try {
       switch (parsed.type) {
         case "subscribe":
-          await this.subscribeQueries(ws, parsed.queries);
+          await this.registry.subscribe(ws, parsed.queries);
           return;
         case "unsubscribe":
-          this.unsubscribeQueries(ws, parsed.queries);
+          this.registry.unsubscribe(ws, parsed.queries);
           return;
-        case "addTodo":
+        default:
           this.send(ws, {
             type: "mutation",
             requestId: parsed.requestId,
-            mutation: await this.publishMutation("addTodo", [parsed.title]),
-          });
-          return;
-        case "toggleTodo":
-          this.send(ws, {
-            type: "mutation",
-            requestId: parsed.requestId,
-            mutation: await this.publishMutation("toggleTodo", [parsed.todoId]),
-          });
-          return;
-        case "deleteTodo":
-          this.send(ws, {
-            type: "mutation",
-            requestId: parsed.requestId,
-            mutation: await this.publishMutation("deleteTodo", [parsed.todoId]),
-          });
-          return;
-        case "clearCompleted":
-          this.send(ws, {
-            type: "mutation",
-            requestId: parsed.requestId,
-            mutation: await this.publishMutation("clearCompleted", []),
+            mutation: this.runMutation(parsed),
           });
           return;
       }
@@ -206,31 +174,38 @@ export class TodoStore extends DurableObject<Env> {
   }
 
   webSocketClose(ws: WebSocket): void {
-    this.clearSubscriptions(ws);
+    this.registry.clear(ws);
   }
 
   webSocketError(ws: WebSocket): void {
-    this.clearSubscriptions(ws);
+    this.registry.clear(ws);
+  }
+
+  private runMutation(command: MutationCommand): MutationResponse {
+    switch (command.type) {
+      case "addTodo":
+        return this.publishMutation("addTodo", [command.title]);
+      case "toggleTodo":
+        return this.publishMutation("toggleTodo", [command.todoId]);
+      case "deleteTodo":
+        return this.publishMutation("deleteTodo", [command.todoId]);
+      case "clearCompleted":
+        return this.publishMutation("clearCompleted", []);
+    }
+  }
+
+  private publishMutation<Name extends StringKey<TodoMutations>>(
+    mutation: Name,
+    params: OperationParams<TodoMutations[Name]>,
+  ): MutationResponse {
+    this.engine.sync(mutation, params);
+    return { affectedTables: [...this.mutations[mutation].tables] };
   }
 
   private send(ws: WebSocket, message: ServerMessage): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(message));
     }
-  }
-
-  private readAttachedQueries(ws: WebSocket): TodoQueryName[] {
-    const attachment = ws.deserializeAttachment();
-    if (typeof attachment !== "object" || attachment === null) {
-      return [];
-    }
-
-    const { selectors } = attachment as WebSocketSubscriptionAttachment;
-    if (!Array.isArray(selectors)) {
-      return [];
-    }
-
-    return selectors.filter(isTodoQueryName);
   }
 
   private sendQueryResult<Name extends TodoQueryName>(
@@ -244,77 +219,5 @@ export class TodoStore extends DurableObject<Env> {
       result,
     } as ServerMessage;
     this.send(ws, message);
-  }
-
-  private async subscribeQuery(
-    ws: WebSocket,
-    socketSubscriptions: Map<TodoQueryName, ListenerId>,
-    name: TodoQueryName,
-  ): Promise<void> {
-    if (!socketSubscriptions.has(name)) {
-      const topic = await this.engine.createTopic(name, []);
-      socketSubscriptions.set(
-        name,
-        this.engine.subscribe(topic, ({ value }) => {
-          this.sendQueryResult(ws, name, value as never);
-        }),
-      );
-    }
-
-    const result = this.queries[name].run();
-    this.sendQueryResult(ws, name, result);
-  }
-
-  private async subscribeQueries(ws: WebSocket, queries: readonly TodoQueryName[]): Promise<void> {
-    let socketSubscriptions = this.subscriptions.get(ws);
-    if (!socketSubscriptions) {
-      socketSubscriptions = new Map();
-      this.subscriptions.set(ws, socketSubscriptions);
-    }
-
-    for (const name of queries) {
-      await this.subscribeQuery(ws, socketSubscriptions, name);
-    }
-
-    ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
-  }
-
-  private unsubscribeQueries(ws: WebSocket, queries: readonly TodoQueryName[]): void {
-    const socketSubscriptions = this.subscriptions.get(ws);
-    if (!socketSubscriptions) {
-      return;
-    }
-
-    for (const name of queries) {
-      const listenerId = socketSubscriptions.get(name);
-      if (listenerId !== undefined) {
-        this.engine.unsubscribe(listenerId);
-      }
-      socketSubscriptions.delete(name);
-    }
-
-    ws.serializeAttachment({ selectors: [...socketSubscriptions.keys()] });
-  }
-
-  private clearSubscriptions(ws: WebSocket): void {
-    const socketSubscriptions = this.subscriptions.get(ws);
-    if (socketSubscriptions) {
-      for (const listenerId of socketSubscriptions.values()) {
-        this.engine.unsubscribe(listenerId);
-      }
-      this.subscriptions.delete(ws);
-    }
-
-    if (ws.readyState !== WebSocket.CLOSED) {
-      ws.serializeAttachment({ selectors: [] });
-    }
-  }
-
-  private async publishMutation<Name extends StringKey<TodoMutations>>(
-    mutation: Name,
-    params: OperationParams<TodoMutations[Name]>,
-  ): Promise<MutationResponse> {
-    this.engine.sync(mutation, params);
-    return { affectedTables: [...this.mutations[mutation].tables] };
   }
 }
