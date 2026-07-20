@@ -3,11 +3,11 @@ import { SyncEngine, toTables } from "../src/index.js";
 import type {
   Branded,
   Mutation,
-  Publish,
+  Listener,
   ListenerEvent,
   Query,
   ListenerId,
-  SyncEngineBase,
+  SyncEngineInterface,
   Topic,
   TopicHash,
 } from "../src/index.js";
@@ -65,8 +65,8 @@ test("exports canonical topic and listener APIs", async () => {
     hash: "7847f04c5bf09defec728bc6476dd97e2ff6f42f192ee38632308a5713d2f43f",
   });
 
-  const publish: Publish = () => {};
-  const listenerId: ListenerId = engine.subscribe(topic, publish);
+  const listener: Listener = () => {};
+  const listenerId: ListenerId = engine.subscribe(topic, listener);
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
@@ -95,7 +95,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine: SyncEngineBase<typeof queries, typeof mutations> = new SyncEngine({
+  const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine({
     queries,
     mutations,
   });
@@ -151,7 +151,7 @@ test("typed createTopic params and listener handle", async () => {
   };
   const engine = new SyncEngine({ queries, mutations });
   const topic = await engine.createTopic("numbers", [42]);
-  const publish: Publish = () => {};
+  const listener: Listener = () => {};
 
   if (false as boolean) {
     // @ts-expect-error — unknown query name
@@ -162,7 +162,7 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const listenerId = engine.subscribe(topic, publish);
+  const listenerId = engine.subscribe(topic, listener);
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(engine.unsubscribe(listenerId)).toBe(true);
 });

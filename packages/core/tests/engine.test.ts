@@ -1,18 +1,18 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine, toTables } from "../src/index.js";
-import type { ListenerEvent, Mutation, Publish, Query, Table } from "../src/index.js";
+import type { Listener, ListenerEvent, Mutation, Query, Table } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
 import type { MutationMetadata, SqlRow } from "@do-sync-engine/utils";
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
-  const publish: Publish = (event) => {
+  const listener: Listener = (event) => {
     events.push(event);
   };
-  return { events, publish };
+  return { events, listener };
 }
 
-const noopPublish: Publish = () => {};
+const noopPublish: Listener = () => {};
 
 class ExposedEngine extends SyncEngine<any, any> {
   exposePublish(event: ListenerEvent) {
@@ -123,8 +123,8 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
-    engine.subscribe(topic, first.publish);
-    engine.subscribe(topic, second.publish);
+    engine.subscribe(topic, first.listener);
+    engine.subscribe(topic, second.listener);
 
     engine.sync("insertUser", ["charlie"]);
 
@@ -159,8 +159,8 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("trackedUserById", [2]);
     const postsTopic = await engine.createTopic("trackedPosts", []);
     const captured = captureEvents();
-    engine.subscribe(topic, captured.publish);
-    engine.subscribe(postsTopic, captured.publish);
+    engine.subscribe(topic, captured.listener);
+    engine.subscribe(postsTopic, captured.listener);
 
     engine.sync("updateUserName", ["bob_updated", 2]);
 
@@ -202,9 +202,9 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = engine.subscribe(topic, first.publish);
-    expect(engine.subscribe(topic, first.publish)).toEqual(firstListenerId);
-    const secondListenerId = engine.subscribe(topic, second.publish);
+    const firstListenerId = engine.subscribe(topic, first.listener);
+    expect(engine.subscribe(topic, first.listener)).toEqual(firstListenerId);
+    const secondListenerId = engine.subscribe(topic, second.listener);
     expect(secondListenerId).not.toEqual(firstListenerId);
 
     engine.sync("insertUser", ["charlie"]);
@@ -220,8 +220,8 @@ describe("SyncEngine topics and events", () => {
     const topic = await engine.createTopic("allUsers", []);
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = engine.subscribe(topic, first.publish);
-    const secondListenerId = engine.subscribe(topic, second.publish);
+    const firstListenerId = engine.subscribe(topic, first.listener);
+    const secondListenerId = engine.subscribe(topic, second.listener);
     // Test-only access verifies the private topic lifecycle.
     const registry = (engine as unknown as { registry: Map<unknown, unknown> }).registry;
 
@@ -240,8 +240,8 @@ describe("SyncEngine topics and events", () => {
     const postsTopic = await exposed.createTopic("postsOnly", []);
     const users = captureEvents();
     const posts = captureEvents();
-    exposed.subscribe(usersTopic, users.publish);
-    exposed.subscribe(postsTopic, posts.publish);
+    exposed.subscribe(usersTopic, users.listener);
+    exposed.subscribe(postsTopic, posts.listener);
 
     exposed.exposePublish({ topic: usersTopic, value: 1 });
     expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);

@@ -1,4 +1,3 @@
-import { SyncEngineBase } from "./types";
 import { assertKnownQuery, buildTopic, cloneOrThrow, validateTopic } from "./helpers";
 import type {
   Listener,
@@ -11,6 +10,7 @@ import type {
   Query,
   QueryMap,
   StringKey,
+  SyncEngineInterface,
   SyncEngineOptions,
   Table,
   Topic,
@@ -20,7 +20,7 @@ import type {
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
-> extends SyncEngineBase<Queries, Mutations> {
+> implements SyncEngineInterface<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private readonly registry = new Map<
@@ -29,7 +29,6 @@ export class SyncEngine<
   >();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
-    super();
     this.queries = new Map(
       Object.entries(options.queries) as [string, Query<unknown[], unknown>][],
     );

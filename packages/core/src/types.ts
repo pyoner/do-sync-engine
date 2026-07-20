@@ -73,36 +73,23 @@ export interface SyncEngineOptions<
   mutations: Mutations;
 }
 
-export abstract class SyncEngineBase<
+export interface SyncEngineInterface<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
-  abstract createTopic<Name extends StringKey<Queries>>(
+  createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
-  abstract subscribe<Name extends StringKey<Queries>>(
+  subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
   ): ListenerId;
-  abstract unsubscribe(listenerId: ListenerId): boolean;
-  abstract sync<Name extends StringKey<Mutations>>(
+  unsubscribe(listenerId: ListenerId): boolean;
+  sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): void;
-
-  // Helpers (protected methods)
-  protected abstract mutate<Name extends StringKey<Mutations>>(
-    mutation: Name,
-    params: OperationParams<Mutations[Name]>,
-  ): Set<Table>;
-
-  protected abstract query<Name extends StringKey<Queries>>(
-    name: Name,
-    params: OperationParams<Queries[Name]>,
-  ): OperationResult<Queries[Name]>;
-
-  protected abstract publish(event: ListenerEvent): void;
 }
