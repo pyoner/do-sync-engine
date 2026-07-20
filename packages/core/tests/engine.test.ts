@@ -223,12 +223,12 @@ describe("SyncEngine topics and events", () => {
     const firstListenerId = engine.subscribe(topic, first.publish);
     const secondListenerId = engine.subscribe(topic, second.publish);
     // Test-only access verifies the private topic lifecycle.
-    const topics = (engine as unknown as { topics: readonly unknown[] }).topics;
+    const registry = (engine as unknown as { registry: Map<unknown, unknown> }).registry;
 
     expect(engine.unsubscribe(firstListenerId)).toBe(true);
-    expect(topics).toHaveLength(1);
+    expect(registry.size).toBe(1);
     expect(engine.unsubscribe(secondListenerId)).toBe(true);
-    expect(topics).toEqual([]);
+    expect(registry.size).toBe(0);
   });
 
   test("listener dispatch is scoped by topic hash", async () => {

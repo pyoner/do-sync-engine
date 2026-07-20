@@ -23,8 +23,10 @@ export class SyncEngine<
 > extends SyncEngineBase<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private readonly listeners = new Map<TopicHash, Map<ListenerId, Listener>>();
-  private topics: Topic<StringKey<Queries>, readonly unknown[]>[] = [];
+  private readonly registry = new Map<
+    TopicHash,
+    { topic: Topic<StringKey<Queries>, readonly unknown[]>; listeners: Map<ListenerId, Listener> }
+  >();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
     super();
@@ -57,41 +59,36 @@ export class SyncEngine<
       throw new TypeError("Listener must be a function");
     }
 
-    const existingTopic = this.topics.find((topic) => topic.hash === validatedTopic.hash);
-    if (existingTopic === undefined) {
-      this.topics.push(validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>);
+    let entry = this.registry.get(validatedTopic.hash);
+    if (entry === undefined) {
+      entry = {
+        topic: validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>,
+        listeners: new Map(),
+      };
+      this.registry.set(validatedTopic.hash, entry);
     } else {
-      const existingParams = JSON.stringify(existingTopic.params);
+      const existingParams = JSON.stringify(entry.topic.params);
       const nextParams = JSON.stringify(validatedTopic.params);
-      if (existingTopic.name !== validatedTopic.name || existingParams !== nextParams) {
+      if (entry.topic.name !== validatedTopic.name || existingParams !== nextParams) {
         throw new RangeError(`Topic hash collision: ${validatedTopic.hash}`);
       }
     }
 
-    let listenersForTopic = this.listeners.get(validatedTopic.hash);
-    if (listenersForTopic === undefined) {
-      listenersForTopic = new Map();
-      this.listeners.set(validatedTopic.hash, listenersForTopic);
-    }
-    for (const [listenerId, existingListener] of listenersForTopic) {
+    for (const [listenerId, existingListener] of entry.listeners) {
       if (existingListener === listener) {
         return listenerId;
       }
     }
 
     const listenerId = globalThis.crypto.randomUUID() as ListenerId;
-    listenersForTopic.set(listenerId, listener as Listener);
+    entry.listeners.set(listenerId, listener as Listener);
     return listenerId;
   }
 
   unsubscribe(listenerId: ListenerId): boolean {
-    for (const [topicHash, listenersForTopic] of this.listeners) {
-      if (!listenersForTopic.delete(listenerId)) continue;
-      if (listenersForTopic.size === 0) {
-        this.listeners.delete(topicHash);
-        const topicIndex = this.topics.findIndex((topic) => topic.hash === topicHash);
-        if (topicIndex !== -1) this.topics.splice(topicIndex, 1);
-      }
+    for (const [topicHash, entry] of this.registry) {
+      if (!entry.listeners.delete(listenerId)) continue;
+      if (entry.listeners.size === 0) this.registry.delete(topicHash);
       return true;
     }
     return false;
@@ -123,13 +120,11 @@ export class SyncEngine<
   }
 
   protected publish(event: ListenerEvent): void {
-    const listenersForTopic = this.listeners.get(event.topic.hash);
-    if (!listenersForTopic) return;
+    const entry = this.registry.get(event.topic.hash);
+    if (!entry) return;
 
-    const listenerIds = listenersForTopic.keys();
-    for (const listenerId of listenerIds) {
-      const listener = listenersForTopic.get(listenerId);
-      listener?.(event);
+    for (const listener of entry.listeners.values()) {
+      listener(event);
     }
   }
 
@@ -139,9 +134,7 @@ export class SyncEngine<
   ): void {
     const changedTables = this.mutate(mutation, params);
 
-    for (const topic of this.topics) {
-      if (!this.listeners.has(topic.hash)) continue;
-
+    for (const { topic } of this.registry.values()) {
       const queryDefinition = this.queries.get(topic.name);
       if (queryDefinition === undefined) continue;
       let touchesChangedTable = false;
