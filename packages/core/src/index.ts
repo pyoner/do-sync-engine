@@ -1,4 +1,4 @@
-export { toTables } from "./types";
+export { toTables } from "./helpers";
 export { SyncEngine } from "./engine";
 export { SyncEngineBase } from "./types";
 export type {

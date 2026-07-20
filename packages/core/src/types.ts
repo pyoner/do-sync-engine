@@ -7,10 +7,6 @@ export type Branded<
 
 export type Table = Branded<string, "Table">;
 
-export function toTables(names: readonly string[]): Set<Table> {
-  return new Set(names as readonly Table[]);
-}
-
 type Operation<Params extends unknown[] = [], Result = unknown> = {
   tables: Set<Table>;
   run(...params: Params): Result;
