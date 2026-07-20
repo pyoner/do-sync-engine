@@ -173,21 +173,12 @@ export class SyncEngine<
 
   protected publish(event: ListenerEvent): void {
     const listenersForTopic = this.listeners.get(event.topic.hash);
-    if (listenersForTopic === undefined) return;
+    if (!listenersForTopic) return;
 
-    const listenerIds = Array.from(listenersForTopic.keys());
+    const listenerIds = listenersForTopic.keys();
     for (const listenerId of listenerIds) {
       const listener = listenersForTopic.get(listenerId);
-      if (listener === undefined) continue;
-      const result: unknown = listener(event);
-      if (
-        result !== null &&
-        typeof result === "object" &&
-        "then" in result &&
-        typeof result.then === "function"
-      ) {
-        throw new TypeError("Listener must be synchronous");
-      }
+      listener?.(event);
     }
   }
 
@@ -197,9 +188,8 @@ export class SyncEngine<
   ): void {
     const affectedTables = this.mutate(mutation, params);
     const changedTables = new Set(affectedTables);
-    const topicsToSync = Array.from(this.topics);
 
-    for (const topic of topicsToSync) {
+    for (const topic of this.topics) {
       if (!this.listeners.has(topic.hash)) continue;
 
       const queryDefinition = this.queries.get(topic.name);
