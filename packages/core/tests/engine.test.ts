@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "vite-plus/test";
-import { SyncEngine } from "../src/engine.js";
-import type { ListenerEvent, Mutation, Publish, Query } from "../src/index.js";
+import { SyncEngine, toTables } from "../src/index.js";
+import type { ListenerEvent, Mutation, Publish, Query, Table } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
 import type { MutationMetadata, SqlRow } from "./helpers.js";
 
@@ -32,19 +32,19 @@ function setupDb(storage: NodeSqliteStorage) {
   storage.exec(`INSERT INTO posts (user_id, title) VALUES (1, 'hello')`);
 }
 
-function readTablesFromSql(sql: string) {
+function readTablesFromSql(sql: string): Set<Table> {
   const lower = sql.toLowerCase();
-  return [
+  return toTables([
     ...(/\b(from|join)\s+users\b/.test(lower) ? ["users"] : []),
     ...(/\b(from|join)\s+posts\b/.test(lower) ? ["posts"] : []),
-  ];
+  ]);
 }
 
-function writeTablesFromSql(sql: string) {
+function writeTablesFromSql(sql: string): Set<Table> {
   const lower = sql.toLowerCase();
-  if (/^\s*(insert\s+into|update|delete\s+from)\s+users\b/.test(lower)) return ["users"];
-  if (/^\s*(insert\s+into|update|delete\s+from)\s+posts\b/.test(lower)) return ["posts"];
-  return [];
+  if (/^\s*(insert\s+into|update|delete\s+from)\s+users\b/.test(lower)) return toTables(["users"]);
+  if (/^\s*(insert\s+into|update|delete\s+from)\s+posts\b/.test(lower)) return toTables(["posts"]);
+  return toTables([]);
 }
 
 describe("SyncEngine topics and events", () => {
@@ -138,7 +138,7 @@ describe("SyncEngine topics and events", () => {
   test("query receives the topic params and skips non-overlapping tables", async () => {
     const runParams: number[] = [];
     const trackedUserById: Query<[number], SqlRow[]> = {
-      tables: [...userById.tables],
+      tables: new Set(userById.tables),
       run: (id) => {
         runParams.push(id);
         return userById.run(id);
@@ -146,7 +146,7 @@ describe("SyncEngine topics and events", () => {
     };
     let postsRuns = 0;
     const trackedPosts: Query<[], SqlRow[]> = {
-      tables: [...postsOnly.tables],
+      tables: new Set(postsOnly.tables),
       run: () => {
         postsRuns += 1;
         return postsOnly.run();
@@ -174,14 +174,14 @@ describe("SyncEngine topics and events", () => {
   test("does not run unsubscribed topics and rejects query errors", async () => {
     let queryRuns = 0;
     const neverQuery: Query<[], SqlRow[]> = {
-      tables: ["users"],
+      tables: toTables(["users"]),
       run: () => {
         queryRuns += 1;
         return [];
       },
     };
     const failingQuery: Query<[], SqlRow[]> = {
-      tables: ["users"],
+      tables: toTables(["users"]),
       run: () => {
         throw new Error("query failed");
       },
@@ -251,14 +251,14 @@ describe("SyncEngine topics and events", () => {
   test("runs mutation, query, and listener synchronously", async () => {
     const calls: string[] = [];
     const synchronousQuery: Query<[], number> = {
-      tables: ["users"],
+      tables: toTables(["users"]),
       run: () => {
         calls.push("query");
         return 1;
       },
     };
     const synchronousMutation: Mutation<[], MutationMetadata> = {
-      tables: ["users"],
+      tables: toTables(["users"]),
       run: () => {
         calls.push("mutation");
         return storage.execute("INSERT INTO users (name) VALUES ('synchronous')");

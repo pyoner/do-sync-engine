@@ -5,8 +5,14 @@ export type Branded<
   Tag extends string,
 > = Primitive & { readonly [brand]: Tag };
 
+export type Table = Branded<string, "Table">;
+
+export function toTables(names: readonly string[]): Set<Table> {
+  return new Set(names as readonly Table[]);
+}
+
 type Operation<Params extends unknown[] = [], Result = unknown> = {
-  tables: readonly string[];
+  tables: Set<Table>;
   run(...params: Params): Result;
 };
 
@@ -95,7 +101,7 @@ export abstract class SyncEngineBase<
   protected abstract mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): readonly string[];
+  ): Set<Table>;
 
   protected abstract query<Name extends StringKey<Queries>>(
     name: Name,

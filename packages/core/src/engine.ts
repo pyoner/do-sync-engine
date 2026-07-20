@@ -9,6 +9,7 @@ import type {
   Query,
   QueryMap,
   StringKey,
+  Table,
   ListenerId,
   SyncEngineOptions,
   Topic,
@@ -149,14 +150,14 @@ export class SyncEngine<
   protected mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): readonly string[] {
+  ): Set<Table> {
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) {
       throw new ReferenceError(`Unknown mutation: ${mutation}`);
     }
 
     mutationDefinition.run(...params);
-    return [...mutationDefinition.tables];
+    return mutationDefinition.tables;
   }
 
   protected query<Name extends StringKey<Queries>>(
@@ -186,15 +187,20 @@ export class SyncEngine<
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): void {
-    const affectedTables = this.mutate(mutation, params);
-    const changedTables = new Set(affectedTables);
+    const changedTables = this.mutate(mutation, params);
 
     for (const topic of this.topics) {
       if (!this.listeners.has(topic.hash)) continue;
 
       const queryDefinition = this.queries.get(topic.name);
       if (queryDefinition === undefined) continue;
-      const touchesChangedTable = queryDefinition.tables.some((table) => changedTables.has(table));
+      let touchesChangedTable = false;
+      for (const table of queryDefinition.tables) {
+        if (changedTables.has(table)) {
+          touchesChangedTable = true;
+          break;
+        }
+      }
       if (!touchesChangedTable) continue;
 
       const value = this.query(

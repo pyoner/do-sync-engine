@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { SyncEngine } from "../src/index.js";
+import { SyncEngine, toTables } from "../src/index.js";
 import type {
   Branded,
   Mutation,
@@ -15,13 +15,13 @@ import type {
 test("exports canonical topic and listener APIs", async () => {
   const queries = {
     numbers: {
-      tables: ["numbers"],
+      tables: toTables(["numbers"]),
       run: () => 1,
     } satisfies Query<[], number>,
   };
   const mutations = {
     noop: {
-      tables: [],
+      tables: toTables([]),
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
@@ -85,13 +85,13 @@ test("exports canonical topic and listener APIs", async () => {
 test("typed topic params, listener values, mutations, and sync", async () => {
   const queries = {
     numbers: {
-      tables: ["numbers"],
+      tables: toTables(["numbers"]),
       run: () => [1, 2, 3],
     } satisfies Query<[], number[]>,
   };
   const mutations = {
     noop: {
-      tables: ["numbers"],
+      tables: toTables(["numbers"]),
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
@@ -139,13 +139,13 @@ test("typed topic params, listener values, mutations, and sync", async () => {
 test("typed createTopic params and listener handle", async () => {
   const queries = {
     numbers: {
-      tables: ["numbers"],
+      tables: toTables(["numbers"]),
       run: (value: number) => value,
     } satisfies Query<[number], number>,
   };
   const mutations = {
     noop: {
-      tables: [],
+      tables: toTables([]),
       run: () => ({}),
     } satisfies Mutation<[], Record<string, never>>,
   };

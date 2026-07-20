@@ -1,3 +1,4 @@
+export { toTables } from "./types";
 export { SyncEngine } from "./engine";
 export { SyncEngineBase } from "./types";
 export type {
@@ -11,6 +12,7 @@ export type {
   Query,
   QueryMap,
   StringKey,
+  Table,
   ListenerId,
   SyncEngineOptions,
   Topic,

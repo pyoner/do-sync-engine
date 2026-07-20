@@ -5,20 +5,20 @@ Minimal engine for synchronizing query subscribers after mutations.
 ## Usage
 
 ```ts
-import { SyncEngine } from "@do-sync-engine/core";
-import type { Mutation, Query } from "@do-sync-engine/core";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
+import type { Mutation, Query, Table } from "@do-sync-engine/core";
 
 // Define query and mutation handlers
 const queries = {
   allTodos: {
-    tables: ["todos"],
+    tables: toTables(["todos"]),
     run: () => db.query("SELECT * FROM todos ORDER BY id"),
   } satisfies Query<[], Todo[]>,
 };
 
 const mutations = {
   addTodo: {
-    tables: ["todos"],
+    tables: toTables(["todos"]),
     run: (title: string) => db.execute("INSERT INTO todos (title) VALUES (?)", title),
   } satisfies Mutation<[string]>,
 };

@@ -1,6 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
-import { SyncEngine } from "@do-sync-engine/core";
-import type { Mutation, OperationParams, Query, StringKey, ListenerId } from "@do-sync-engine/core";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
+import type {
+  Mutation,
+  OperationParams,
+  Query,
+  StringKey,
+  ListenerId,
+  Table,
+} from "@do-sync-engine/core";
 import { isTodoQueryName, parseClientMessage } from "../todo-protocol";
 import type {
   MutationResponse,
@@ -34,14 +41,16 @@ const SCHEMA = `
   )
 `;
 
-function readTablesFromSql(sql: string) {
+function readTablesFromSql(sql: string): Set<Table> {
   const lower = sql.toLowerCase();
-  return /\b(from|join)\s+todos\b/.test(lower) ? ["todos"] : [];
+  return toTables(/\b(from|join)\s+todos\b/.test(lower) ? ["todos"] : []);
 }
 
-function writeTablesFromSql(sql: string) {
+function writeTablesFromSql(sql: string): Set<Table> {
   const lower = sql.toLowerCase();
-  return /^\s*(insert\s+into|update|delete\s+from)\s+todos\b/.test(lower) ? ["todos"] : [];
+  return toTables(
+    /^\s*(insert\s+into|update|delete\s+from)\s+todos\b/.test(lower) ? ["todos"] : [],
+  );
 }
 
 function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
