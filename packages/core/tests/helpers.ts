@@ -1,14 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
+import type { MutationMetadata, SqlDatabase, SqlRow, SqlValue } from "@do-sync-engine/utils";
 
-export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
-export type SqlRow = Record<string, SqlValue>;
-
-export interface MutationMetadata {
-  rowsAffected: number;
-  lastInsertRowid: number | bigint | null;
-}
-
-export class NodeSqliteStorage {
+export class NodeSqliteStorage implements SqlDatabase {
   private db: DatabaseSync;
 
   constructor(path: string = ":memory:") {

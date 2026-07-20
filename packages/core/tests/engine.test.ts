@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "vite-plus/test";
 import { SyncEngine, toTables } from "../src/index.js";
 import type { ListenerEvent, Mutation, Publish, Query, Table } from "../src/index.js";
 import { NodeSqliteStorage } from "./helpers.js";
-import type { MutationMetadata, SqlRow } from "./helpers.js";
+import type { MutationMetadata, SqlRow } from "@do-sync-engine/utils";
 
 function captureEvents() {
   const events: ListenerEvent[] = [];

@@ -1,12 +1,6 @@
-export interface MutationMetadata {
-  rowsAffected: number;
-  lastInsertRowid: number;
-}
+import type { MutationMetadata, SqlDatabase, SqlRow, SqlValue } from "@do-sync-engine/utils";
 
-export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
-export type SqlRow = Record<string, SqlValue>;
-
-export class DurableObjectSqlStorage {
+export class DurableObjectSqlStorage implements SqlDatabase {
   private sql: SqlStorage;
 
   constructor(sql: SqlStorage) {

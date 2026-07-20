@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
+    "@do-sync-engine/utils": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {

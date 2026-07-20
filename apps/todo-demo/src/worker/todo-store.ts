@@ -15,7 +15,8 @@ import type {
   TodoQueryName,
   TodoQueryResults,
 } from "../todo-protocol";
-import { DurableObjectSqlStorage, type MutationMetadata } from "./storage";
+import { DurableObjectSqlStorage } from "./storage";
+import type { MutationMetadata, SqlDatabase } from "@do-sync-engine/utils";
 
 type TodoQueries = {
   [Name in TodoQueryName]: Query<[], TodoQueryResults[Name]>;
@@ -53,7 +54,7 @@ function writeTablesFromSql(sql: string): Set<Table> {
   );
 }
 
-function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
+function createQueries(storage: SqlDatabase): TodoQueries {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
   const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
   const completedTodosSql = "SELECT id, title FROM todos WHERE completed = 1 ORDER BY id";
@@ -96,7 +97,7 @@ function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
   };
 }
 
-function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
+function createMutations(storage: SqlDatabase): TodoMutations {
   const addTodoSql = "INSERT INTO todos (title) VALUES (?)";
   const toggleTodoSql = "UPDATE todos SET completed = NOT completed WHERE id = ?";
   const deleteTodoSql = "DELETE FROM todos WHERE id = ?";
