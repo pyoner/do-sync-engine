@@ -13,6 +13,7 @@ catalog:
   vitest: 4.1.10
   vite-plus: ^0.2.5
   zod: ^4.4.3
+  portless: ^0.15.4
 overrides:
   vite: "catalog:"
   vitest: "catalog:"

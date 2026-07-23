@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp dev",
+    "dev": "portless run vp dev",
     "build": "vp build",
     "preview": "vp preview",
     "test": "vp test",
@@ -20,6 +20,7 @@
     "@cloudflare/vitest-pool-workers": "latest",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/node": "^24.13.2",
+    "portless": "catalog:",
     "svelte": "^5.56.3",
     "typescript": "catalog:",
     "vite": "catalog:",
