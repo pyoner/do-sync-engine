@@ -1,16 +1,24 @@
 {
   "name": "@do-sync-engine/core",
   "version": "0.0.0",
-  "description": "A starter for creating a TypeScript package.",
-  "homepage": "https://github.com/author/library#readme",
+  "description": "A Cloudflare Durable Objects Sync Engine",
+  "keywords": [
+    "cloudflare",
+    "durable-objects",
+    "query",
+    "subscriptions",
+    "sync",
+    "typescript"
+  ],
+  "homepage": "https://github.com/pyoner/do-sync-engine#readme",
   "bugs": {
-    "url": "https://github.com/author/library/issues"
+    "url": "https://github.com/pyoner/do-sync-engine/issues"
   },
   "license": "MIT",
-  "author": "Author Name <author.name@mail.com>",
+  "author": "Askar Yusupov <devex.soft@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/author/library.git"
+    "url": "git+https://github.com/pyoner/do-sync-engine.git"
   },
   "files": [
     "dist"
