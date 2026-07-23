@@ -123,7 +123,7 @@ export class SyncEngine<
     if (!entry) return;
 
     for (const listener of entry.listeners.values()) {
-      listener(event);
+      void listener(event);
     }
   }
 

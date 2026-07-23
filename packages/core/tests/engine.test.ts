@@ -262,11 +262,19 @@ describe("SyncEngine topics and events", () => {
     expect(calls).toEqual(["mutation", "query", "listener"]);
   });
 
-  test("rejects asynchronous listeners", async () => {
+  test("allows asynchronous listeners without delaying sync", async () => {
     const topic = await engine.createTopic("allUsers", []);
-    engine.subscribe(topic, () => Promise.resolve());
+    let completed = false;
+    engine.subscribe(topic, async () => {
+      await Promise.resolve();
+      completed = true;
+    });
 
-    expect(() => engine.sync("insertUser", ["charlie"])).toThrow("Listener must be synchronous");
+    expect(engine.sync("insertUser", ["charlie"])).toBeUndefined();
+    expect(completed).toBe(false);
+
+    await Promise.resolve();
+    expect(completed).toBe(true);
   });
 
   test("validates manually supplied topics and hash collisions", async () => {

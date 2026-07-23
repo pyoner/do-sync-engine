@@ -47,7 +47,7 @@ describe("SubscriptionRegistry", () => {
     expect(sent).toEqual([
       { name: "allTodos", result: [{ id: 1, title: "a", completed: 0, created_at: 0 }] },
     ]);
-    expect(getAttachment()).toEqual({ selectors: ["allTodos"] });
+    expect(getAttachment()).toEqual({ queries: ["allTodos"] });
 
     engine.sync("addTodo", ["b"]);
     expect(sent).toHaveLength(2);
@@ -61,7 +61,7 @@ describe("SubscriptionRegistry", () => {
     await registry.subscribe(ws, ["allTodos"]);
     registry.unsubscribe(ws, ["allTodos"]);
 
-    expect(getAttachment()).toEqual({ selectors: [] });
+    expect(getAttachment()).toEqual({ queries: [] });
     engine.sync("addTodo", ["b"]);
     expect(sent).toHaveLength(1);
   });
@@ -69,7 +69,7 @@ describe("SubscriptionRegistry", () => {
   it("restores subscriptions from the attachment after hibernation", async () => {
     const { engine, registry, sent } = setup();
     const { ws } = fakeWebSocket();
-    ws.serializeAttachment({ selectors: ["allTodos"] });
+    ws.serializeAttachment({ queries: ["allTodos"] });
 
     await registry.restore(ws);
     expect(sent).toHaveLength(1);
@@ -85,7 +85,7 @@ describe("SubscriptionRegistry", () => {
     await registry.subscribe(ws, ["allTodos"]);
     registry.clear(ws);
 
-    expect(getAttachment()).toEqual({ selectors: [] });
+    expect(getAttachment()).toEqual({ queries: [] });
     engine.sync("addTodo", ["b"]);
     expect(sent).toHaveLength(1);
   });

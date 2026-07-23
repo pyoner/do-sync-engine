@@ -51,7 +51,7 @@ export type ListenerEvent<
   readonly value: Value;
 };
 
-export type Listener<Event extends ListenerEvent = ListenerEvent> = (event: Event) => void;
+export type Listener<Event extends ListenerEvent = ListenerEvent> = (event: Event) => unknown;
 
 export type StringKey<T> = Extract<keyof T, string>;
 
