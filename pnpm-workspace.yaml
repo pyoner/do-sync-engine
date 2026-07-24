@@ -14,7 +14,9 @@ catalog:
   vite-plus: ^0.2.5
   zod: ^4.4.3
   portless: ^0.15.4
-  drizzle-orm: 0.45.2
+  drizzle-orm: 1.0.0-rc.4
+  better-sqlite3: 13.0.1
+  "@types/better-sqlite3": 7.6.13
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
@@ -26,6 +28,7 @@ peerDependencyRules:
     vite: "*"
     vitest: "*"
 allowBuilds:
+  better-sqlite3: set this to true or false
   esbuild: set this to true or false
   sharp: set this to true or false
   workerd: true
