@@ -6,6 +6,12 @@ setup:
 testData:
   - sql: SELECT * FROM users
     tables: [users]
+  - sql: SELECT 'from ghosts' AS message FROM users
+    tables: [users]
+  - sql: |
+      -- SELECT * FROM ghosts
+      SELECT 'from phantoms' AS message FROM users
+    tables: [users]
   - sql: SELECT u.id FROM public.users AS u JOIN orders o ON o.user_id = u.id
     tables: [public.users, orders]
   - sql: SELECT * FROM "user accounts" ua LEFT JOIN `events` e ON e.user_id = ua.id

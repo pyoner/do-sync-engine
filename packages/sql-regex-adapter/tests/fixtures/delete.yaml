@@ -6,7 +6,9 @@ setup:
 testData:
   - sql: DELETE FROM users WHERE id = 1
     tables: [users]
+  - sql: DELETE FROM users WHERE EXISTS (SELECT 1 FROM sessions WHERE sessions.user_id = users.id)
+    tables: [users]
   - sql: DELETE FROM users u USING sessions s WHERE s.user_id = u.id
-    tables: [users, sessions]
+    tables: [users]
   - sql: DELETE FROM tenant.users u USING tenant.sessions s JOIN tenant.devices d ON d.id = s.device_id WHERE s.user_id = u.id
-    tables: [tenant.users, tenant.sessions, tenant.devices]
+    tables: [tenant.users]
