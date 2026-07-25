@@ -8,3 +8,5 @@
   tables: [events, users]
 - sql: SELECT * FROM (SELECT * FROM tenant.orders) nested JOIN customers c ON c.id = nested.customer_id
   tables: [tenant.orders, customers]
+- sql: WITH first AS (SELECT coalesce((SELECT max(id) FROM events), 0) AS id FROM users), second AS (SELECT id FROM first) SELECT * FROM second JOIN accounts ON accounts.id = second.id
+  tables: [events, users, accounts]

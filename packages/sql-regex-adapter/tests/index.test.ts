@@ -64,7 +64,7 @@ test("executes through Cloudflare SqlStorage", () => {
 
 test("rejects unsupported SQL", () => {
   expect(() => nodeAdapter("CREATE TABLE users (id integer)")).toThrow(TypeError);
-  expect(() => createAdapter({} as never)).toThrow(TypeError);
+  expect(() => createAdapter(Object.create(null))).toThrow(TypeError);
 });
 
 test("executes against node:sqlite", () => {
