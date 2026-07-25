@@ -1,11 +1,20 @@
 setup:
   database:
-    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)
-  seed: []
+    - ATTACH DATABASE ':memory:' AS archive
+    - ATTACH DATABASE ':memory:' AS public
+    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, actor_id INTEGER)
+    - CREATE TABLE archive.users (id INTEGER PRIMARY KEY, name TEXT, actor_id INTEGER)
+    - CREATE TABLE "audit log" (id INTEGER PRIMARY KEY)
+    - CREATE TABLE public.events (id INTEGER PRIMARY KEY, actor_id INTEGER)
+    - CREATE TABLE actors (id INTEGER PRIMARY KEY)
+  seed:
+    - INSERT INTO users (id, name) VALUES (1, 'Ada')
+    - INSERT INTO public.events (id, actor_id) VALUES (1, 1)
+    - INSERT INTO actors (id) VALUES (1)
 testData:
   - sql: INSERT INTO users (name) VALUES ('Ada')
     tables: [users]
   - sql: INSERT INTO archive.users SELECT * FROM users
     tables: [archive.users]
-  - sql: INSERT INTO "audit log" (id) SELECT id FROM public.events e JOIN actors a ON a.id = e.actor_id
+  - sql: INSERT INTO "audit log" (id) SELECT e.id FROM public.events e JOIN actors a ON a.id = e.actor_id
     tables: [audit log]

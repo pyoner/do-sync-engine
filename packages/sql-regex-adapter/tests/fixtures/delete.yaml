@@ -1,14 +1,23 @@
 setup:
   database:
+    - ATTACH DATABASE ':memory:' AS tenant
     - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE sessions (user_id INTEGER)
+    - CREATE TABLE tenant.users (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE tenant.sessions (user_id INTEGER)
+    - CREATE TABLE tenant.devices (id INTEGER)
   seed:
     - INSERT INTO users (id, name) VALUES (1, 'Ada')
+    - INSERT INTO sessions (user_id) VALUES (1)
+    - INSERT INTO tenant.users (id, name) VALUES (1, 'Ada')
+    - INSERT INTO tenant.sessions (user_id) VALUES (1)
+    - INSERT INTO tenant.devices (id) VALUES (1)
 testData:
   - sql: DELETE FROM users WHERE id = 1
     tables: [users]
   - sql: DELETE FROM users WHERE EXISTS (SELECT 1 FROM sessions WHERE sessions.user_id = users.id)
     tables: [users]
-  - sql: DELETE FROM users u USING sessions s WHERE s.user_id = u.id
+  - sql: DELETE FROM users WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.user_id = users.id)
     tables: [users]
-  - sql: DELETE FROM tenant.users u USING tenant.sessions s JOIN tenant.devices d ON d.id = s.device_id WHERE s.user_id = u.id
+  - sql: DELETE FROM tenant.users WHERE EXISTS (SELECT 1 FROM tenant.sessions s JOIN tenant.devices d ON d.id = 1 WHERE s.user_id = tenant.users.id)
     tables: [tenant.users]

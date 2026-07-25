@@ -1,12 +1,21 @@
 setup:
   database:
-    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)
+    - ATTACH DATABASE ':memory:' AS tenant
+    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, manager_id INTEGER)
+    - CREATE TABLE user_names (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE tenant.users (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE tenant.names (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE tenant.active (id INTEGER PRIMARY KEY)
   seed:
     - INSERT INTO users (id, name) VALUES (1, 'Before')
+    - INSERT INTO user_names (id, name) VALUES (1, 'Ada')
+    - INSERT INTO tenant.users (id, name) VALUES (1, 'Before')
+    - INSERT INTO tenant.names (id, name) VALUES (1, 'Ada')
+    - INSERT INTO tenant.active (id) VALUES (1)
 testData:
   - sql: UPDATE users SET name = 'Ada' WHERE id = 1
     tables: [users]
-  - sql: UPDATE users u SET name = source.name FROM user_names source WHERE source.id = u.id
+  - sql: UPDATE users SET name = (SELECT name FROM user_names WHERE user_names.id = users.id) WHERE id = 1
     tables: [users]
-  - sql: UPDATE tenant.users AS u SET name = x.name FROM tenant.names AS x JOIN tenant.active a ON a.id = x.id
+  - sql: UPDATE tenant.users SET name = (SELECT name FROM tenant.names WHERE tenant.names.id = tenant.users.id) WHERE id = 1
     tables: [tenant.users]

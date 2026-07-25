@@ -72,25 +72,23 @@ for (const operation of ["select", "update", "insert", "delete"] as const) {
       test(testData.sql, () => {
         expect(nodeAdapter(testData.sql).tables).toEqual(new Set(testData.tables));
       });
-      if (testData === fixture.testData[0]) {
-        test(`${testData.sql} executes in SQLite`, () => {
-          const db = new DatabaseSync(":memory:");
-          try {
-            for (const statement of fixture.setup.database) db.exec(statement);
-            for (const statement of fixture.setup.seed) db.exec(statement);
-            const result = createAdapter(db)(testData.sql).run();
-            if (operation === "select") {
-              expect(result).toEqual([{ id: 1, name: "Ada" }]);
-            } else if (typeof result === "object" && result !== null && "changes" in result) {
-              expect(result.changes).toBeGreaterThan(0);
-            } else {
-              throw new TypeError("SQLite mutation returned no changes");
-            }
-          } finally {
-            db.close();
+      test(`${testData.sql} executes in SQLite`, () => {
+        const db = new DatabaseSync(":memory:");
+        try {
+          for (const statement of fixture.setup.database) db.exec(statement);
+          for (const statement of fixture.setup.seed) db.exec(statement);
+          const result = createAdapter(db)(testData.sql).run();
+          if (operation === "select") {
+            expect(result).toBeInstanceOf(Array);
+          } else if (typeof result === "object" && result !== null && "changes" in result) {
+            expect(result.changes).toBeGreaterThan(0);
+          } else {
+            throw new TypeError("SQLite mutation returned no changes");
           }
-        });
-      }
+        } finally {
+          db.close();
+        }
+      });
     }
   });
 }

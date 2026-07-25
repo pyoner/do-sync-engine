@@ -1,8 +1,24 @@
 setup:
   database:
-    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)
+    - ATTACH DATABASE ':memory:' AS public
+    - ATTACH DATABASE ':memory:' AS tenant
+    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, user_id INTEGER)
+    - CREATE TABLE public.users (id INTEGER PRIMARY KEY, name TEXT)
+    - CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)
+    - CREATE TABLE "user accounts" (id INTEGER PRIMARY KEY)
+    - CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER, created_at TEXT)
+    - CREATE TABLE tenant.orders (id INTEGER PRIMARY KEY, customer_id INTEGER)
+    - CREATE TABLE customers (id INTEGER PRIMARY KEY)
+    - CREATE TABLE accounts (id INTEGER PRIMARY KEY)
   seed:
     - INSERT INTO users (id, name) VALUES (1, 'Ada')
+    - INSERT INTO public.users (id, name) VALUES (1, 'Ada')
+    - INSERT INTO orders (id, user_id) VALUES (1, 1)
+    - INSERT INTO "user accounts" (id) VALUES (1)
+    - INSERT INTO events (id, user_id, created_at) VALUES (1, 1, '2026-02-01')
+    - INSERT INTO tenant.orders (id, customer_id) VALUES (1, 1)
+    - INSERT INTO customers (id) VALUES (1)
+    - INSERT INTO accounts (id) VALUES (1)
 testData:
   - sql: SELECT * FROM users
     tables: [users]
