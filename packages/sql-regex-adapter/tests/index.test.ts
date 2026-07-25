@@ -5,23 +5,47 @@ import { createAdapter } from "../src/index.ts";
 import { DatabaseSync } from "node:sqlite";
 import { parse } from "yaml";
 
-type Fixture = { sql: string; tables: string[] };
-function isFixture(value: unknown): value is Fixture {
+type TestData = { sql: string; tables: string[] };
+type Fixture = {
+  setup: { database: string[]; seed: string[] };
+  testData: TestData[];
+};
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isTestData(value: unknown): value is TestData {
   if (typeof value !== "object" || value === null || !("sql" in value) || !("tables" in value))
     return false;
+  return typeof value.sql === "string" && isStringArray(value.tables);
+}
+
+function isFixture(value: unknown): value is Fixture {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("setup" in value) ||
+    !("testData" in value) ||
+    typeof value.setup !== "object" ||
+    value.setup === null ||
+    !("database" in value.setup) ||
+    !("seed" in value.setup)
+  )
+    return false;
   return (
-    typeof value.sql === "string" &&
-    Array.isArray(value.tables) &&
-    value.tables.every((table) => typeof table === "string")
+    isStringArray(value.setup.database) &&
+    isStringArray(value.setup.seed) &&
+    Array.isArray(value.testData) &&
+    value.testData.every(isTestData)
   );
 }
 
-function fixtures(name: string): Fixture[] {
+function fixtures(name: string): Fixture {
   const value: unknown = parse(
     readFileSync(resolve(import.meta.dirname, "fixtures", `${name}.yaml`), "utf8"),
   );
-  if (!Array.isArray(value) || !value.every(isFixture))
-    throw new TypeError(`Invalid ${name} fixture`);
+  if (!isFixture(value)) throw new TypeError(`Invalid ${name} fixture`);
   return value;
 }
 
@@ -41,13 +65,32 @@ const nodeDb = {
   },
 };
 const nodeAdapter = createAdapter(nodeDb);
-
 for (const operation of ["select", "update", "insert", "delete"] as const) {
   describe(`${operation} SQL`, () => {
-    for (const fixture of fixtures(operation)) {
-      test(fixture.sql, () => {
-        expect(nodeAdapter(fixture.sql).tables).toEqual(new Set(fixture.tables));
+    const fixture = fixtures(operation);
+    for (const testData of fixture.testData) {
+      test(testData.sql, () => {
+        expect(nodeAdapter(testData.sql).tables).toEqual(new Set(testData.tables));
       });
+      if (testData === fixture.testData[0]) {
+        test(`${testData.sql} executes in SQLite`, () => {
+          const db = new DatabaseSync(":memory:");
+          try {
+            for (const statement of fixture.setup.database) db.exec(statement);
+            for (const statement of fixture.setup.seed) db.exec(statement);
+            const result = createAdapter(db)(testData.sql).run();
+            if (operation === "select") {
+              expect(result).toEqual([{ id: 1, name: "Ada" }]);
+            } else if (typeof result === "object" && result !== null && "changes" in result) {
+              expect(result.changes).toBeGreaterThan(0);
+            } else {
+              throw new TypeError("SQLite mutation returned no changes");
+            }
+          } finally {
+            db.close();
+          }
+        });
+      }
     }
   });
 }
@@ -74,13 +117,4 @@ test("executes through Cloudflare SqlStorage", () => {
 test("rejects unsupported SQL", () => {
   expect(() => nodeAdapter("CREATE TABLE users (id integer)")).toThrow(TypeError);
   expect(() => createAdapter(Object.create(null))).toThrow(TypeError);
-});
-
-test("executes against node:sqlite", () => {
-  const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
-  const adapter = createAdapter(db);
-  expect(adapter("INSERT INTO users (name) VALUES (?)").run("Ada")).toMatchObject({ changes: 1 });
-  expect(adapter("SELECT * FROM users").run()).toEqual([{ id: 1, name: "Ada" }]);
-  db.close();
 });

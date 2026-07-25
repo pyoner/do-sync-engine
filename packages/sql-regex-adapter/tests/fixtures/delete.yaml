@@ -1,6 +1,12 @@
-- sql: DELETE FROM users WHERE id = 1
-  tables: [users]
-- sql: DELETE FROM users u USING sessions s WHERE s.user_id = u.id
-  tables: [users, sessions]
-- sql: DELETE FROM tenant.users u USING tenant.sessions s JOIN tenant.devices d ON d.id = s.device_id WHERE s.user_id = u.id
-  tables: [tenant.users, tenant.sessions, tenant.devices]
+setup:
+  database:
+    - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)
+  seed:
+    - INSERT INTO users (id, name) VALUES (1, 'Ada')
+testData:
+  - sql: DELETE FROM users WHERE id = 1
+    tables: [users]
+  - sql: DELETE FROM users u USING sessions s WHERE s.user_id = u.id
+    tables: [users, sessions]
+  - sql: DELETE FROM tenant.users u USING tenant.sessions s JOIN tenant.devices d ON d.id = s.device_id WHERE s.user_id = u.id
+    tables: [tenant.users, tenant.sessions, tenant.devices]
