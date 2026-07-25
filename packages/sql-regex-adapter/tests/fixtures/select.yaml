@@ -1,0 +1,10 @@
+- sql: SELECT * FROM users
+  tables: [users]
+- sql: SELECT u.id FROM public.users AS u JOIN orders o ON o.user_id = u.id
+  tables: [public.users, orders]
+- sql: SELECT * FROM "user accounts" ua LEFT JOIN `events` e ON e.user_id = ua.id
+  tables: [user accounts, events]
+- sql: WITH recent AS (SELECT * FROM events WHERE created_at > '2026-01-01') SELECT * FROM recent r JOIN users u ON u.id = r.user_id
+  tables: [events, users]
+- sql: SELECT * FROM (SELECT * FROM tenant.orders) nested JOIN customers c ON c.id = nested.customer_id
+  tables: [tenant.orders, customers]

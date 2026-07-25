@@ -1,0 +1,6 @@
+- sql: INSERT INTO users (name) VALUES ('Ada')
+  tables: [users]
+- sql: INSERT INTO archive.users SELECT * FROM users
+  tables: [archive.users, users]
+- sql: INSERT INTO "audit log" (id) SELECT id FROM public.events e JOIN actors a ON a.id = e.actor_id
+  tables: [audit log, public.events, actors]
