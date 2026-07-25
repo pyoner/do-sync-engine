@@ -341,6 +341,9 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.5(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(svelte@5.56.4)(typescript@7.0.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
   packages/utils:
     devDependencies:
@@ -4466,7 +4469,7 @@ snapshots:
 
   vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0):
     dependencies:
-      lightningcss: 1.32.0
+      lightningcss: 1.33.0
       picomatch: 4.0.5
       postcss: 8.5.15
       rolldown: 1.1.5
@@ -4480,7 +4483,7 @@ snapshots:
 
   vite@8.1.0(@types/node@25.9.4)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0):
     dependencies:
-      lightningcss: 1.32.0
+      lightningcss: 1.33.0
       picomatch: 4.0.5
       postcss: 8.5.15
       rolldown: 1.1.5
@@ -4494,7 +4497,7 @@ snapshots:
 
   vite@8.1.0(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0):
     dependencies:
-      lightningcss: 1.32.0
+      lightningcss: 1.33.0
       picomatch: 4.0.5
       postcss: 8.5.15
       rolldown: 1.1.5
@@ -4681,8 +4684,7 @@ snapshots:
 
   ws@8.21.0: {}
 
-  yaml@2.9.0:
-    optional: true
+  yaml@2.9.0: {}
 
   youch-core@0.3.3:
     dependencies:

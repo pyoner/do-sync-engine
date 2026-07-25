@@ -2,18 +2,26 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vite-plus/test";
 import { createAdapter } from "../src/index.ts";
 import { DatabaseSync } from "node:sqlite";
+import { parse } from "yaml";
 
 type Fixture = { sql: string; tables: string[] };
-function fixtures(name: string): Fixture[] {
-  const lines = readFileSync(new URL(`./fixtures/${name}.yaml`, import.meta.url), "utf8").split(
-    "\n",
+function isFixture(value: unknown): value is Fixture {
+  if (typeof value !== "object" || value === null || !("sql" in value) || !("tables" in value))
+    return false;
+  return (
+    typeof value.sql === "string" &&
+    Array.isArray(value.tables) &&
+    value.tables.every((table) => typeof table === "string")
   );
-  return lines.reduce<Fixture[]>((items, line) => {
-    if (line.startsWith("- sql: ")) items.push({ sql: line.slice(7), tables: [] });
-    else if (line.trimStart().startsWith("tables: "))
-      items.at(-1)!.tables = line.slice(line.indexOf("[") + 1, -1).split(", ");
-    return items;
-  }, []);
+}
+
+function fixtures(name: string): Fixture[] {
+  const value: unknown = parse(
+    readFileSync(new URL(`./fixtures/${name}.yaml`, import.meta.url), "utf8"),
+  );
+  if (!Array.isArray(value) || !value.every(isFixture))
+    throw new TypeError(`Invalid ${name} fixture`);
+  return value;
 }
 
 const nodeCalls: unknown[][] = [];
