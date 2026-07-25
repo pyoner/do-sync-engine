@@ -69,15 +69,15 @@ for (const operation of ["select", "update", "insert", "delete"] as const) {
   describe(`${operation} SQL`, () => {
     const fixture = fixtures(operation);
     for (const testData of fixture.testData) {
-      test(testData.sql, () => {
-        expect(nodeAdapter(testData.sql).tables).toEqual(new Set(testData.tables));
-      });
       test(`${testData.sql} executes in SQLite`, () => {
         const db = new DatabaseSync(":memory:");
+        const adapter = createAdapter(db);
+        const op = adapter(testData.sql);
         try {
           for (const statement of fixture.setup.database) db.exec(statement);
           for (const statement of fixture.setup.seed) db.exec(statement);
-          const result = createAdapter(db)(testData.sql).run();
+          expect(op.tables).toEqual(new Set(testData.tables));
+          const result = op.run();
           if (operation === "select") {
             expect(result).toBeInstanceOf(Array);
           } else if (typeof result === "object" && result !== null && "changes" in result) {
