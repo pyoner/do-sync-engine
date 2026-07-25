@@ -49,33 +49,29 @@ function fixtures(name: string): Fixture {
   return value;
 }
 
-const nodeCalls: unknown[][] = [];
-const nodeDb = {
-  prepare(sql: string) {
-    return {
-      all: (...params: unknown[]) => {
-        nodeCalls.push(["all", sql, ...params]);
-        return [{ id: 1 }];
-      },
-      run: (...params: unknown[]) => {
-        nodeCalls.push(["run", sql, ...params]);
-        return { changes: 1 };
-      },
-    };
-  },
-};
-const nodeAdapter = createAdapter(nodeDb);
+function database(setup?: Fixture["setup"]): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  if (setup) {
+    try {
+      for (const statement of setup.database) db.exec(statement);
+      for (const statement of setup.seed) db.exec(statement);
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+  return db;
+}
+
 for (const operation of ["select", "update", "insert", "delete"] as const) {
   describe(`${operation} SQL`, () => {
     const fixture = fixtures(operation);
     for (const testData of fixture.testData) {
-      test(`${testData.sql} executes in SQLite`, () => {
-        const db = new DatabaseSync(":memory:");
-        const adapter = createAdapter(db);
-        const op = adapter(testData.sql);
+      test(testData.sql, () => {
+        const db = database(fixture.setup);
         try {
-          for (const statement of fixture.setup.database) db.exec(statement);
-          for (const statement of fixture.setup.seed) db.exec(statement);
+          const op = createAdapter(db)(testData.sql);
           expect(op.tables).toEqual(new Set(testData.tables));
           const result = op.run();
           if (operation === "select") {
@@ -93,13 +89,6 @@ for (const operation of ["select", "update", "insert", "delete"] as const) {
   });
 }
 
-test("executes through Node SQLite methods", () => {
-  expect(nodeAdapter("SELECT * FROM users WHERE id = ?").run(42)).toEqual([{ id: 1 }]);
-  expect(nodeAdapter("UPDATE users SET name = ?").run("Ada")).toEqual({ changes: 1 });
-  expect(nodeCalls.at(-2)).toEqual(["all", "SELECT * FROM users WHERE id = ?", 42]);
-  expect(nodeCalls.at(-1)).toEqual(["run", "UPDATE users SET name = ?", "Ada"]);
-});
-
 test("executes through Cloudflare SqlStorage", () => {
   const calls: unknown[][] = [];
   const adapter = createAdapter({
@@ -112,7 +101,12 @@ test("executes through Cloudflare SqlStorage", () => {
   expect(calls).toEqual([["SELECT * FROM users", "Ada"]]);
 });
 
-test("rejects unsupported SQL", () => {
-  expect(() => nodeAdapter("CREATE TABLE users (id integer)")).toThrow(TypeError);
+test("rejects unsupported SQL and databases", () => {
+  const db = database();
+  try {
+    expect(() => createAdapter(db)("CREATE TABLE users (id integer)")).toThrow(TypeError);
+  } finally {
+    db.close();
+  }
   expect(() => createAdapter(Object.create(null))).toThrow(TypeError);
 });
