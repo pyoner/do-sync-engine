@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, test } from "vite-plus/test";
 import { createAdapter } from "../src/index.ts";
 import { DatabaseSync } from "node:sqlite";
@@ -17,7 +18,7 @@ function isFixture(value: unknown): value is Fixture {
 
 function fixtures(name: string): Fixture[] {
   const value: unknown = parse(
-    readFileSync(new URL(`./fixtures/${name}.yaml`, import.meta.url), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "fixtures", `${name}.yaml`), "utf8"),
   );
   if (!Array.isArray(value) || !value.every(isFixture))
     throw new TypeError(`Invalid ${name} fixture`);
