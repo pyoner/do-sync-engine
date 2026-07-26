@@ -1,22 +1,16 @@
 setup:
   database:
-    - ATTACH DATABASE ':memory:' AS public
-    - ATTACH DATABASE ':memory:' AS tenant
     - CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, user_id INTEGER)
-    - CREATE TABLE public.users (id INTEGER PRIMARY KEY, name TEXT)
-    - CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER)
+    - CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER, customer_id INTEGER)
     - CREATE TABLE "user accounts" (id INTEGER PRIMARY KEY)
     - CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER, created_at TEXT)
-    - CREATE TABLE tenant.orders (id INTEGER PRIMARY KEY, customer_id INTEGER)
     - CREATE TABLE customers (id INTEGER PRIMARY KEY)
     - CREATE TABLE accounts (id INTEGER PRIMARY KEY)
   seed:
     - INSERT INTO users (id, name) VALUES (1, 'Ada')
-    - INSERT INTO public.users (id, name) VALUES (1, 'Ada')
-    - INSERT INTO orders (id, user_id) VALUES (1, 1)
+    - INSERT INTO orders (id, user_id, customer_id) VALUES (1, 1, 1)
     - INSERT INTO "user accounts" (id) VALUES (1)
     - INSERT INTO events (id, user_id, created_at) VALUES (1, 1, '2026-02-01')
-    - INSERT INTO tenant.orders (id, customer_id) VALUES (1, 1)
     - INSERT INTO customers (id) VALUES (1)
     - INSERT INTO accounts (id) VALUES (1)
 testData:
@@ -28,13 +22,13 @@ testData:
       -- SELECT * FROM ghosts
       SELECT 'from phantoms' AS message FROM users
     tables: [users]
-  - sql: SELECT u.id FROM public.users AS u JOIN orders o ON o.user_id = u.id
-    tables: [public.users, orders]
+  - sql: SELECT u.id FROM main.users AS u JOIN orders o ON o.user_id = u.id
+    tables: [main.users, orders]
   - sql: SELECT * FROM "user accounts" ua LEFT JOIN `events` e ON e.user_id = ua.id
     tables: [user accounts, events]
   - sql: WITH recent AS (SELECT * FROM events WHERE created_at > '2026-01-01') SELECT * FROM recent r JOIN users u ON u.id = r.user_id
     tables: [events, users]
-  - sql: SELECT * FROM (SELECT * FROM tenant.orders) nested JOIN customers c ON c.id = nested.customer_id
-    tables: [tenant.orders, customers]
+  - sql: SELECT * FROM (SELECT * FROM main.orders) nested JOIN customers c ON c.id = nested.customer_id
+    tables: [main.orders, customers]
   - sql: WITH first AS (SELECT coalesce((SELECT max(id) FROM events), 0) AS id FROM users), second AS (SELECT id FROM first) SELECT * FROM second JOIN accounts ON accounts.id = second.id
     tables: [events, users, accounts]

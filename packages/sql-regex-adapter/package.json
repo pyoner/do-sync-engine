@@ -17,15 +17,18 @@
   "scripts": {
     "build": "vp pack",
     "dev": "vp pack --watch",
-    "test": "vp test",
+    "test": "vp test --mode test",
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "latest",
+    "@cloudflare/workers-types": "latest",
     "@do-sync-engine/core": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
+    "vitest": "catalog:",
     "yaml": "^2.9.0"
   }
 }
