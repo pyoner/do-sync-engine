@@ -17,7 +17,7 @@
   "scripts": {
     "build": "vp pack",
     "dev": "vp pack --watch",
-    "test": "vp test --mode test",
+    "test": "pnpm --dir . exec vp test --mode test --no-file-parallelism",
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },

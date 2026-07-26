@@ -11,7 +11,11 @@ export default defineConfig({
     options: { typeAware: true, typeCheck: true },
   },
   test: {
-    exclude: ["**/node_modules/**", "apps/todo-demo/test/**"],
+    exclude: [
+      "**/node_modules/**",
+      "apps/todo-demo/test/**",
+      "packages/sql-regex-adapter/tests/cloudflare.test.ts",
+    ],
   },
   run: {
     cache: true,

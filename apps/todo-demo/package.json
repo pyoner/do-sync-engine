@@ -7,7 +7,7 @@
     "dev": "portless run vp dev",
     "build": "vp build",
     "preview": "vp preview",
-    "test": "pnpm --dir . exec vp test --mode test",
+    "test": "pnpm --dir . exec vp test --mode test --no-file-parallelism",
     "deploy": "vp run build && wrangler deploy"
   },
   "dependencies": {

@@ -13,6 +13,7 @@ export default defineConfig({
   },
   fmt: {},
   test: {
+    fileParallelism: false,
     projects: [
       {
         test: {
