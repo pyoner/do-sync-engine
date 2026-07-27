@@ -1,5 +1,5 @@
 {
-  "name": "@do-sync-engine/drizzle",
+  "name": "@do-sync-engine/drizzle-adapter",
   "version": "0.0.0",
   "description": "Drizzle SQLite adapter for do-sync-engine",
   "license": "MIT",
