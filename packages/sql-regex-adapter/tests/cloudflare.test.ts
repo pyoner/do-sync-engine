@@ -20,7 +20,10 @@ for (const operation of operations) {
           for (const statement of fixture.setup.seed) state.storage.sql.exec(statement);
           const op = createAdapter(state.storage.sql)(testData.sql);
           expect(op.tables).toEqual(new Set(testData.tables));
-          const result = op.run() as { rowsWritten: number; toArray(): unknown[] };
+          const result = op.run(...(testData.params ?? [])) as {
+            rowsWritten: number;
+            toArray(): unknown[];
+          };
           const rows = result.toArray();
           if (operation === "select") {
             expect(rows.length).toBeGreaterThan(0);

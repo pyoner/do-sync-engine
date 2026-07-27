@@ -6,7 +6,14 @@ setup:
     - INSERT INTO users (id, name) VALUES (1, 'Before')
     - INSERT INTO user_names (id, name) VALUES (1, 'Ada')
 testData:
-  - sql: UPDATE users SET name = 'Ada' WHERE id = 1
+  - sql: UPDATE users SET name = ? WHERE id = ?
+    params: [Ada, 1]
+    tables: [users]
+  - sql: UPDATE users SET name = ?, manager_id = ? WHERE id = ?
+    params: [Ada, 1, 1]
+    tables: [users]
+  - sql: UPDATE users SET name = ?, manager_id = ? WHERE id = ? AND name = ?
+    params: [Grace, null, 1, Before]
     tables: [users]
   - sql: UPDATE users SET name = (SELECT name FROM user_names WHERE user_names.id = users.id) WHERE id = 1
     tables: [users]

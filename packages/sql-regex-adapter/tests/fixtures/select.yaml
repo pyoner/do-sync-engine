@@ -14,7 +14,14 @@ setup:
     - INSERT INTO customers (id) VALUES (1)
     - INSERT INTO accounts (id) VALUES (1)
 testData:
-  - sql: SELECT * FROM users
+  - sql: SELECT * FROM users WHERE id = ?
+    params: [1]
+    tables: [users]
+  - sql: SELECT * FROM users WHERE id = ? AND name = ?
+    params: [1, Ada]
+    tables: [users]
+  - sql: SELECT * FROM users WHERE id = ? OR user_id = ? OR ? = ?
+    params: [99, 1, 1, 1]
     tables: [users]
   - sql: SELECT 'from ghosts' AS message FROM users
     tables: [users]

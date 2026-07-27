@@ -6,9 +6,10 @@ import updateYaml from "./fixtures/update.yaml?raw";
 
 export const operations = ["select", "update", "insert", "delete"] as const;
 export type Operation = (typeof operations)[number];
+export type SqlParameter = string | number | null;
 export type Fixture = {
   setup: { database: string[]; seed: string[] };
-  testData: { sql: string; tables: string[] }[];
+  testData: { sql: string; params?: SqlParameter[]; tables: string[] }[];
 };
 
 const sources: Record<Operation, string> = {
@@ -20,6 +21,12 @@ const sources: Record<Operation, string> = {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+function isSqlParameterArray(value: unknown): value is SqlParameter[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => item === null || typeof item === "string" || typeof item === "number")
+  );
 }
 
 function isFixture(value: unknown): value is Fixture {
@@ -41,7 +48,11 @@ function isFixture(value: unknown): value is Fixture {
     value.testData.every((item) => {
       if (typeof item !== "object" || item === null || !("sql" in item) || !("tables" in item))
         return false;
-      return typeof item.sql === "string" && isStringArray(item.tables);
+      return (
+        typeof item.sql === "string" &&
+        isStringArray(item.tables) &&
+        (!("params" in item) || isSqlParameterArray(item.params))
+      );
     })
   );
 }

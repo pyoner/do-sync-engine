@@ -8,7 +8,11 @@ setup:
     - INSERT INTO sessions (user_id) VALUES (1)
     - INSERT INTO main.devices (id) VALUES (1)
 testData:
-  - sql: DELETE FROM users WHERE id = 1
+  - sql: DELETE FROM users WHERE id = ?
+    params: [1]
+    tables: [users]
+  - sql: DELETE FROM users WHERE id = ? AND name = ? AND ? = ?
+    params: [1, Ada, 1, 1]
     tables: [users]
   - sql: DELETE FROM users WHERE EXISTS (SELECT 1 FROM sessions WHERE sessions.user_id = users.id)
     tables: [users]

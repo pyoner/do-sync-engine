@@ -27,7 +27,7 @@ for (const operation of operations) {
         try {
           const op = createAdapter(db)(testData.sql);
           expect(op.tables).toEqual(new Set(testData.tables));
-          const result = op.run();
+          const result = op.run(...(testData.params ?? []));
           if (operation === "select") {
             expect(result).toBeInstanceOf(Array);
           } else if (typeof result === "object" && result !== null && "changes" in result) {

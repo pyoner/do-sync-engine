@@ -10,7 +10,11 @@ setup:
     - INSERT INTO main.events (id, actor_id) VALUES (1, 1)
     - INSERT INTO actors (id) VALUES (1)
 testData:
-  - sql: INSERT INTO users (name) VALUES ('Ada')
+  - sql: INSERT INTO users (name) VALUES (?)
+    params: [Ada]
+    tables: [users]
+  - sql: INSERT INTO users (id, name, actor_id) VALUES (?, ?, ?)
+    params: [2, Grace, null]
     tables: [users]
   - sql: INSERT INTO main.archive_users SELECT * FROM users
     tables: [main.archive_users]
