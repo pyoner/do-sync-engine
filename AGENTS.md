@@ -9,9 +9,16 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 ## Review Checklist
 
 - [ ] Run `vp install` after pulling remote changes and before getting started.
-- [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
+- [ ] Run `vp check`, `vp test`, and `vp run -r test` to format, lint, type check, and test changes.
 - [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
+
+## Workspace Tests
+
+- Use `vp run -r test` as the canonical full-workspace test command. It runs every workspace package's `test` script, including the SQL adapter's Node and Cloudflare projects and the todo demo's Workers tests.
+- Use `vp run -r --no-cache -v test` when verifying changed test configuration; it disables cached results and prints every selected workspace task.
+- Root `vp test` intentionally excludes Workers-only suites because the root configuration uses the Node pool. Those suites are not skipped by `vp run -r test`; their package scripts run them with `cloudflareTest()`.
+- Keep `--no-file-parallelism` in the SQL adapter and todo demo test scripts. It bounds `workerd` resource use without excluding test files.
 
 <!--VITE PLUS END-->
 
