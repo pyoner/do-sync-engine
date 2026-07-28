@@ -56,11 +56,18 @@ export type Listener<Event extends ListenerEvent = ListenerEvent> = (event: Even
 export type StringKey<T> = Extract<keyof T, string>;
 
 export type QueryMap<Queries extends object = Record<string, Query<unknown[], unknown>>> = {
-  [Name in keyof Queries]: Query<unknown[], unknown>;
+  [Name in keyof Queries]: Queries[Name] extends {
+    run(...params: infer Params): infer Result;
+  }
+    ? Query<Extract<Params, unknown[]>, Result>
+    : never;
 };
-
 export type MutationMap<Mutations extends object = Record<string, Mutation<unknown[], unknown>>> = {
-  [Name in keyof Mutations]: Mutation<unknown[], unknown>;
+  [Name in keyof Mutations]: Mutations[Name] extends {
+    run(...params: infer Params): infer Metadata;
+  }
+    ? Mutation<Extract<Params, unknown[]>, Metadata>
+    : never;
 };
 
 export type ListenerId = Branded<string, "ListenerId">;

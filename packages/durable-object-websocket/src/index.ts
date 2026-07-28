@@ -1,29 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import type { MutationMap, QueryMap, StringKey, SyncEngineInterface } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
+import type { QueryDefinitions } from "./subscriptions.ts";
 export type { DurableObjectWebSocketAttachment } from "./subscriptions.ts";
 export type * from "./protocol.ts";
-
-type Binding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
-  readonly engine: SyncEngineInterface<Q, M>;
-  readonly queries: Q;
+type Binding<Q extends object, M extends object> = {
+  readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
+  readonly queries: QueryDefinitions<Q>;
 };
-export type DurableObjectWebSocketBinding<
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
-> = Binding<Q, M>;
-export type DurableObjectWebSocketInitializer<
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
-> = () => Binding<Q, M> | Promise<Binding<Q, M>>;
-
+export type DurableObjectWebSocketBinding<Q extends object, M extends object> = Binding<Q, M>;
+export type DurableObjectWebSocketInitializer<Q extends object, M extends object> = () =>
+  | Binding<Q, M>
+  | Promise<Binding<Q, M>>;
 export abstract class DurableObjectWebSocket<
   Env,
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
+  Q extends object,
+  M extends object,
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
-  private engine!: SyncEngineInterface<Q, M>;
+  private engine!: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
   private registry!: SubscriptionRegistry<Q, M>;
   protected constructor(
     ctx: DurableObjectState,

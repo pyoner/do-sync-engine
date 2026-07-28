@@ -241,6 +241,9 @@ importers:
       '@do-sync-engine/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@do-sync-engine/durable-object-websocket':
+        specifier: workspace:*
+        version: link:../../packages/durable-object-websocket
       '@do-sync-engine/utils':
         specifier: workspace:*
         version: link:../../packages/utils
@@ -328,6 +331,10 @@ importers:
         version: 0.2.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(svelte@5.56.4)(typescript@7.0.2)(vite@8.1.0(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
 
   packages/durable-object-websocket:
+    dependencies:
+      '@do-sync-engine/core':
+        specifier: workspace:*
+        version: link:../core
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: latest
@@ -335,9 +342,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: latest
         version: 5.20260727.1
-      '@do-sync-engine/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2

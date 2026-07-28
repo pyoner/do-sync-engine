@@ -10,16 +10,19 @@ import type {
 import type { QueryResultMessage } from "./protocol.ts";
 
 export type DurableObjectWebSocketAttachment = { topics?: Topic[] };
+export type QueryDefinitions<Q extends object> = {
+  [K in keyof Q]: Q[K] & { run(...params: never[]): unknown };
+};
 type Entry = {
   topic: Topic;
   listener: (event: { topic: Topic; value: unknown }) => unknown;
   listenerId: ListenerId;
 };
-export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
+export class SubscriptionRegistry<Q extends object, M extends object> {
   private readonly subscriptions = new Map<WebSocket, Map<TopicHash, Entry>>();
   constructor(
-    private readonly engine: SyncEngineInterface<Q, M>,
-    private readonly queries: Q,
+    private readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>,
+    private readonly queries: QueryDefinitions<Q>,
     private readonly send: (ws: WebSocket, message: unknown) => void,
   ) {}
   async subscribe(

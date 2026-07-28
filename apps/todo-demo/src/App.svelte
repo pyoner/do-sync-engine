@@ -1,174 +1,56 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    TODO_WS_PATH,
-    parseServerMessage,
-    type ClientCommand,
-    type MutationCommand,
-    type MutationResponse,
-    type ServerMessage,
-    type Todo,
-    type TodoQueryName,
-    type TodoQueryResults,
-} from "./todo-protocol";
-
+  import { TODO_WS_PATH, parseServerMessage, type ClientMessage, type Todo, type TodoQueryName, type TodoQueryResults } from "./todo-protocol";
   const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
-
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
-  let lastMutation = $state<MutationResponse | null>(null);
   let queryResults = $state<Partial<TodoQueryResults>>({});
   let loading = $state(false);
   let socket = $state<WebSocket | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
-
-  const pendingMutations = new Map<
-    string,
-    {
-      resolve: () => void;
-      reject: (error: Error) => void;
-    }
-  >();
-
-  function toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-  }
-
-  async function runMutation(message: MutationCommand, afterSuccess?: () => void) {
-    loading = true;
-    errorMessage = null;
-    try {
-      await sendMutation(message);
-      afterSuccess?.();
-    } catch (error) {
-      errorMessage = toErrorMessage(error);
-    } finally {
-      loading = false;
-    }
-  }
-
-  function websocketUrl(): string {
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${location.host}${TODO_WS_PATH}`;
-  }
-
-  function connect(): () => void {
-    const ws = new WebSocket(websocketUrl());
-    socket = ws;
-
-    ws.addEventListener("open", () => {
-      connected = true;
-      errorMessage = null;
-      sendClientMessage({ type: "subscribe", queries: defaultQueries });
-    });
-
-    ws.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") {
-        errorMessage = "Invalid server message";
-        return;
-      }
-
-      try {
-        handleServerMessage(parseServerMessage(event.data));
-      } catch {
-        errorMessage = "Invalid server message";
-      }
-    });
-
-    ws.addEventListener("close", () => {
-      connected = false;
-      socket = null;
-      for (const pending of pendingMutations.values()) {
-        pending.reject(new Error("WebSocket closed"));
-      }
-      pendingMutations.clear();
-    });
-
-    ws.addEventListener("error", () => {
-      errorMessage = "WebSocket error";
-    });
-
-    return () => {
-      ws.close();
-    };
-  }
-
-  function handleServerMessage(message: ServerMessage): void {
-    switch (message.type) {
-      case "queryResult":
-        queryResults = { ...queryResults, [message.query]: message.result };
-        if (message.query === "allTodos") {
-          todos = message.result;
-        }
-        return;
-      case "mutation": {
-        lastMutation = message.mutation;
-        const pending = pendingMutations.get(message.requestId);
-        if (pending) {
-          pendingMutations.delete(message.requestId);
-          pending.resolve();
-        }
-        return;
-      }
-      case "error": {
-        errorMessage = message.message;
-        if (message.requestId) {
-          const pending = pendingMutations.get(message.requestId);
-          if (pending) {
-            pendingMutations.delete(message.requestId);
-            pending.reject(new Error(message.message));
-          }
-        }
-      }
-    }
-  }
-
-  function sendClientMessage(message: ClientCommand, requestId = crypto.randomUUID()): string {
-    if (socket?.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket is not connected");
-    }
-
+  const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  function websocketUrl(): string { return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`; }
+  function send(message: Omit<ClientMessage, "requestId">, requestId = crypto.randomUUID()): string {
+    if (socket?.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
     socket.send(JSON.stringify({ ...message, requestId }));
     return requestId;
   }
-
-  function sendMutation(message: MutationCommand): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const requestId = crypto.randomUUID();
-      pendingMutations.set(requestId, { resolve, reject });
+  function connect(): () => void {
+    const ws = new WebSocket(websocketUrl());
+    socket = ws;
+    ws.addEventListener("open", () => { connected = true; errorMessage = null; for (const query of defaultQueries) send({ type: "subscribe", query, params: [] }); });
+    ws.addEventListener("message", (event) => {
       try {
-        sendClientMessage(message, requestId);
-      } catch (error) {
-        pendingMutations.delete(requestId);
-        reject(new Error(toErrorMessage(error)));
-      }
+        const message = parseServerMessage(String(event.data));
+        if (message.type === "queryResult") { queryResults = { ...queryResults, [message.topic.name]: message.value }; if (message.topic.name === "allTodos") todos = message.value as Todo[]; }
+        else if (message.type === "error") {
+          errorMessage = message.message;
+          if (message.requestId) {
+            const item = pending.get(message.requestId);
+            pending.delete(message.requestId);
+            item?.reject(new Error(message.message));
+          }
+        }
+        else if (message.type === "synced") { pending.get(message.requestId)?.resolve(); pending.delete(message.requestId); }
+      } catch { errorMessage = "Invalid server message"; }
     });
+    ws.addEventListener("close", () => { connected = false; socket = null; for (const item of pending.values()) item.reject(new Error("WebSocket closed")); pending.clear(); });
+    ws.addEventListener("error", () => { errorMessage = "WebSocket error"; });
+    return () => ws.close();
   }
-
-  function addTodo() {
-    const title = newTitle.trim();
-    if (!title) return;
-    return runMutation({ type: "addTodo", title }, () => {
-      newTitle = "";
-    });
+  function mutate(message: Extract<ClientMessage, { type: "sync" }>, afterSuccess?: () => void) {
+    loading = true; errorMessage = null;
+    const requestId = crypto.randomUUID();
+    const promise = new Promise<void>((resolve, reject) => pending.set(requestId, { resolve, reject }));
+    try { send(message, requestId); promise.then(() => afterSuccess?.()).catch((e) => errorMessage = e.message).finally(() => loading = false); }
+    catch (e) { pending.delete(requestId); errorMessage = String(e); loading = false; }
   }
-
-  function toggleTodo(id: number) {
-    return runMutation({ type: "toggleTodo", todoId: id });
-  }
-
-  function deleteTodo(id: number) {
-    return runMutation({ type: "deleteTodo", todoId: id });
-  }
-
-  function clearCompleted() {
-    return runMutation({ type: "clearCompleted" });
-  }
-
-  onMount(() => {
-    return connect();
-  });
+  function addTodo() { const title = newTitle.trim(); if (title) mutate({ type: "sync", mutation: "addTodo", params: [title] }, () => newTitle = ""); }
+  function toggleTodo(id: number) { mutate({ type: "sync", mutation: "toggleTodo", params: [id] }); }
+  function deleteTodo(id: number) { mutate({ type: "sync", mutation: "deleteTodo", params: [id] }); }
+  function clearCompleted() { mutate({ type: "sync", mutation: "clearCompleted", params: [] }); }
+  onMount(connect);
 </script>
 
 <main>
@@ -214,13 +96,6 @@
     {#if todos.some(t => t.completed)}
       <button class="clear" onclick={clearCompleted} disabled={loading || !connected}>Clear completed</button>
     {/if}
-  {/if}
-
-  {#if lastMutation}
-    <div class="recompute-panel">
-      <h2>Last mutation</h2>
-      <p class="meta">Affected tables: {lastMutation.affectedTables.join(", ") || "none"}</p>
-    </div>
   {/if}
 
   <div class="recompute-panel">
