@@ -7,25 +7,24 @@ import type {
   TopicHash,
 } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
-import type { QueryDefinitions } from "./subscriptions.ts";
 import type { ErrorMessage } from "./protocol.ts";
 export type * from "./protocol.ts";
-export type DurableObjectWebSocketBinding<Q extends object, M extends object> = {
-  readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
-  readonly queries: QueryDefinitions<Q>;
+export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
+  readonly engine: SyncEngineInterface<Q, M>;
 };
-export type DurableObjectWebSocketInitializer<Q extends object, M extends object> = () =>
-  | DurableObjectWebSocketBinding<Q, M>
-  | Promise<DurableObjectWebSocketBinding<Q, M>>;
+export type DurableObjectWebSocketInitializer<
+  Q extends QueryMap<Q>,
+  M extends MutationMap<M>,
+> = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
 type IncomingMessage = Record<string, unknown> & { requestId: string };
 type ParseResult = { message: IncomingMessage } | { error: ErrorMessage };
 export abstract class DurableObjectWebSocket<
   Env,
-  Q extends object,
-  M extends object,
+  Q extends QueryMap<Q>,
+  M extends MutationMap<M>,
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
-  private engine!: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
+  private engine!: SyncEngineInterface<Q, M>;
   private registry!: SubscriptionRegistry<Q, M>;
   protected constructor(
     ctx: DurableObjectState,
@@ -34,11 +33,9 @@ export abstract class DurableObjectWebSocket<
   ) {
     super(ctx, env);
     this.initialization = ctx.blockConcurrencyWhile(async () => {
-      const { engine, queries } = await initialize();
+      const { engine } = await initialize();
       this.engine = engine;
-      this.registry = new SubscriptionRegistry(engine, queries, (ws, message) =>
-        this.send(ws, message),
-      );
+      this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
       for (const ws of ctx.getWebSockets()) await this.registry.restore(ws);
     });
   }

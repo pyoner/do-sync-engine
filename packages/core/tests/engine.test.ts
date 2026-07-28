@@ -19,10 +19,6 @@ class ExposedEngine extends SyncEngine<any, any> {
   exposePublish(event: ListenerEvent) {
     return this.publish(event);
   }
-
-  exposeQuery(name: string, params: unknown[]) {
-    return this.query(name, params);
-  }
 }
 
 function setupDb(storage: NodeSqliteStorage) {
@@ -98,11 +94,13 @@ describe("SyncEngine topics and events", () => {
     expect(changedName.hash).not.toBe(first.hash);
   });
 
-  test("runs queries through the protected helper", () => {
-    const exposed = new ExposedEngine({ queries: { userById }, mutations: {} });
+  test("runs queries through the public engine interface", async () => {
+    const topic = await engine.createTopic("userById", [2]);
 
-    expect(() => exposed.exposeQuery("missing", [])).toThrow("Unknown query: missing");
-    expect(exposed.exposeQuery("userById", [2])).toEqual([{ id: 2, name: "bob" }]);
+    expect(() => engine.query({ ...topic, name: "missing" } as never)).toThrow(
+      "Unknown query: missing",
+    );
+    expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("sync runs matching topics once and fans out the same event", async () => {

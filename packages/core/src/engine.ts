@@ -106,16 +106,16 @@ export class SyncEngine<
     return mutationDefinition.tables;
   }
 
-  protected query<Name extends StringKey<Queries>>(
-    name: Name,
-    params: OperationParams<Queries[Name]>,
+  query<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
   ): OperationResult<Queries[Name]> {
-    const queryDefinition = this.queries.get(name);
+    const validated = validateTopic(topic, this.queries);
+    const queryDefinition = this.queries.get(validated.name);
     if (queryDefinition === undefined) {
-      throw new ReferenceError(`Unknown query: ${name}`);
+      throw new ReferenceError(`Unknown query: ${validated.name}`);
     }
 
-    return queryDefinition.run(...params) as OperationResult<Queries[Name]>;
+    return queryDefinition.run(...validated.params) as OperationResult<Queries[Name]>;
   }
 
   protected publish(event: ListenerEvent): void {
@@ -145,10 +145,7 @@ export class SyncEngine<
       }
       if (!touchesChangedTable) continue;
 
-      const value = this.query(
-        topic.name,
-        topic.params as OperationParams<Queries[StringKey<Queries>]>,
-      );
+      const value = this.query(topic as never);
       this.publish({ topic, value });
     }
   }

@@ -88,6 +88,9 @@ export interface SyncEngineInterface<
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
+  query<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+  ): OperationResult<Queries[Name]>;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<

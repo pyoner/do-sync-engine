@@ -10,18 +10,14 @@ import type {
 import type { QueryResultMessage } from "./protocol.ts";
 
 type DurableObjectWebSocketAttachment = { topics?: Topic[] };
-export type QueryDefinitions<Q extends object> = {
-  [K in keyof Q]: Q[K] & { run(...params: never[]): unknown };
-};
 type Entry = {
   topic: Topic;
   listenerId: ListenerId;
 };
-export class SubscriptionRegistry<Q extends object, M extends object> {
+export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   private readonly subscriptions = new Map<WebSocket, Map<TopicHash, Entry>>();
   constructor(
-    private readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>,
-    private readonly queries: QueryDefinitions<Q>,
+    private readonly engine: SyncEngineInterface<Q, M>,
     private readonly send: (ws: WebSocket, message: unknown) => void,
   ) {}
   async subscribe(
@@ -31,7 +27,7 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
     requestId: string,
   ): Promise<void> {
     const topic = await this.engine.createTopic(name as never, params as never);
-    const value = this.queries[name].run(...(params as never[]));
+    const value = this.engine.query(topic as never);
     const initial: QueryResultMessage<Q> = {
       type: "queryResult",
       requestId,
@@ -97,15 +93,14 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
         !/^[0-9a-f]{64}$/.test(candidate.hash)
       )
         continue;
-      if (!Object.hasOwn(this.queries, candidate.name)) continue;
-      const topic = await this.engine.createTopic(
-        candidate.name as never,
-        candidate.params as never,
-      );
+      let topic: Topic;
+      try {
+        topic = await this.engine.createTopic(candidate.name as never, candidate.params as never);
+      } catch {
+        continue;
+      }
       if (topic.hash !== candidate.hash || map.has(topic.hash)) continue;
-      const value = this.queries[candidate.name as StringKey<Q>].run(
-        ...(candidate.params as never[]),
-      );
+      const value = this.engine.query(topic as never);
       const listener = (event: { topic: Topic; value: unknown }) =>
         this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
       const listenerId = this.engine.subscribe(topic as never, listener as never);

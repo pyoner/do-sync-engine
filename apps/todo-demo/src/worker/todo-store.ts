@@ -88,7 +88,7 @@ export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMuta
         queries,
         mutations,
       });
-      return { queries, engine };
+      return { engine };
     });
   }
 }
