@@ -44,18 +44,19 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
     this.subscriptions.set(ws, map);
     const previous = ws.deserializeAttachment?.();
     const old = map.get(topic.hash);
-    const listener =
-      old?.listener ??
-      ((event: { topic: Topic; value: unknown }) =>
-        this.send(ws, { type: "queryResult", topic: event.topic, value: event.value }));
+    if (old) {
+      this.send(ws, initial);
+      return;
+    }
+    const listener = (event: { topic: Topic; value: unknown }) =>
+      this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
     const listenerId = this.engine.subscribe(topic as never, listener as never);
     map.set(topic.hash, { topic, listener, listenerId });
     try {
       ws.serializeAttachment({ topics: [...map.values()].map((e) => e.topic) });
     } catch (error) {
-      if (!old) this.engine.unsubscribe(listenerId);
-      if (old) map.set(topic.hash, old);
-      else map.delete(topic.hash);
+      this.engine.unsubscribe(listenerId);
+      map.delete(topic.hash);
       throw error;
     }
     try {
@@ -68,9 +69,8 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
         this.clear(ws);
         return;
       }
-      if (!old) this.engine.unsubscribe(listenerId);
-      if (old) map.set(topic.hash, old);
-      else map.delete(topic.hash);
+      this.engine.unsubscribe(listenerId);
+      map.delete(topic.hash);
       throw error;
     }
   }

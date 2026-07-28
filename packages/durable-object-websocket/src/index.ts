@@ -4,14 +4,13 @@ import { SubscriptionRegistry } from "./subscriptions.ts";
 import type { QueryDefinitions } from "./subscriptions.ts";
 export type { DurableObjectWebSocketAttachment } from "./subscriptions.ts";
 export type * from "./protocol.ts";
-type Binding<Q extends object, M extends object> = {
+export type DurableObjectWebSocketBinding<Q extends object, M extends object> = {
   readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
   readonly queries: QueryDefinitions<Q>;
 };
-export type DurableObjectWebSocketBinding<Q extends object, M extends object> = Binding<Q, M>;
 export type DurableObjectWebSocketInitializer<Q extends object, M extends object> = () =>
-  | Binding<Q, M>
-  | Promise<Binding<Q, M>>;
+  | DurableObjectWebSocketBinding<Q, M>
+  | Promise<DurableObjectWebSocketBinding<Q, M>>;
 export abstract class DurableObjectWebSocket<
   Env,
   Q extends object,

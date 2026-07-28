@@ -6,26 +6,35 @@ import type {
   TopicHash,
 } from "@do-sync-engine/core";
 
-type Name<T> = StringKey<T>;
 export type SubscribeCommand<Q extends object> = {
-  [N in Name<Q>]: { type: "subscribe"; requestId: string; query: N; params: OperationParams<Q[N]> };
-}[Name<Q>];
+  [N in StringKey<Q>]: {
+    type: "subscribe";
+    requestId: string;
+    query: N;
+    params: OperationParams<Q[N]>;
+  };
+}[StringKey<Q>];
 export type UnsubscribeCommand = { type: "unsubscribe"; requestId: string; topicHash: TopicHash };
 export type SyncCommand<M extends object> = {
-  [N in Name<M>]: { type: "sync"; requestId: string; mutation: N; params: OperationParams<M[N]> };
-}[Name<M>];
+  [N in StringKey<M>]: {
+    type: "sync";
+    requestId: string;
+    mutation: N;
+    params: OperationParams<M[N]>;
+  };
+}[StringKey<M>];
 export type ClientCommand<Q extends object, M extends object> =
   | SubscribeCommand<Q>
   | UnsubscribeCommand
   | SyncCommand<M>;
 export type QueryResultMessage<Q extends object> = {
-  [N in Name<Q>]: {
+  [N in StringKey<Q>]: {
     type: "queryResult";
     requestId?: string;
     topic: Topic<N, OperationParams<Q[N]>>;
     value: OperationResult<Q[N]>;
   };
-}[Name<Q>];
+}[StringKey<Q>];
 export type UnsubscribedMessage = {
   type: "unsubscribed";
   requestId: string;
