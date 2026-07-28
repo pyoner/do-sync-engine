@@ -15,6 +15,7 @@ export default defineConfig({
       "**/node_modules/**",
       "apps/todo-demo/test/**",
       "packages/sql-regex-adapter/tests/cloudflare.test.ts",
+      "packages/durable-object-websocket/tests/index.test.ts",
     ],
   },
   run: {
