@@ -1,13 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import type {
-  MutationMap,
-  QueryMap,
-  StringKey,
-  SyncEngineInterface,
-  TopicHash,
-} from "@do-sync-engine/core";
+import type { MutationMap, QueryMap, StringKey, SyncEngineInterface } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
-import type { ErrorMessage } from "./protocol.ts";
+import { decodeClientCommand } from "./protocol.ts";
 export type * from "./protocol.ts";
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
   readonly engine: SyncEngineInterface<Q, M>;
@@ -16,8 +10,6 @@ export type DurableObjectWebSocketInitializer<
   Q extends QueryMap<Q>,
   M extends MutationMap<M>,
 > = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
-type IncomingMessage = Record<string, unknown> & { requestId: string };
-type ParseResult = { message: IncomingMessage } | { error: ErrorMessage };
 export abstract class DurableObjectWebSocket<
   Env,
   Q extends QueryMap<Q>,
@@ -50,34 +42,24 @@ export abstract class DurableObjectWebSocket<
   }
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     await this.initialization;
-    const parsed = parse(message);
-    if ("error" in parsed) return this.send(ws, parsed.error);
-    const { message: value } = parsed;
-    const requestId = value.requestId;
+    const decoded = decodeClientCommand(message);
+    if ("error" in decoded) return this.send(ws, decoded.error);
+    const { command } = decoded;
+    const requestId = command.requestId;
     try {
-      if (value.type === "subscribe") {
-        if (typeof value.query !== "string" || !Array.isArray(value.params))
-          return this.send(ws, { type: "error", requestId, message: "query and params required" });
-        await this.registry.subscribe(ws, value.query as StringKey<Q>, value.params, requestId);
-      } else if (value.type === "unsubscribe") {
-        if (typeof value.topicHash !== "string" || !/^[0-9a-f]{64}$/.test(value.topicHash))
-          return this.send(ws, { type: "error", requestId, message: "topicHash required" });
+      if (command.type === "subscribe") {
+        await this.registry.subscribe(ws, command.query as StringKey<Q>, command.params, requestId);
+      } else if (command.type === "unsubscribe") {
         this.send(ws, {
           type: "unsubscribed",
           requestId,
-          topicHash: value.topicHash,
-          removed: this.registry.unsubscribe(ws, value.topicHash as TopicHash),
+          topicHash: command.topicHash,
+          removed: this.registry.unsubscribe(ws, command.topicHash),
         });
-      } else if (value.type === "sync") {
-        if (typeof value.mutation !== "string" || !Array.isArray(value.params))
-          return this.send(ws, {
-            type: "error",
-            requestId,
-            message: "mutation and params required",
-          });
-        this.engine.sync(value.mutation as StringKey<M>, value.params as never);
+      } else {
+        this.engine.sync(command.mutation as StringKey<M>, command.params as never);
         this.send(ws, { type: "synced", requestId });
-      } else this.send(ws, { type: "error", requestId, message: "Unknown message type" });
+      }
     } catch (error) {
       this.send(ws, { type: "error", requestId, message: String(error) });
     }
@@ -98,20 +80,4 @@ export abstract class DurableObjectWebSocket<
   private send(ws: WebSocket, message: unknown): void {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   }
-}
-function parse(message: string | ArrayBuffer): ParseResult {
-  if (typeof message !== "string")
-    return { error: { type: "error", message: "Expected text WebSocket message" } };
-  let value: unknown;
-  try {
-    value = JSON.parse(message);
-  } catch {
-    return { error: { type: "error", message: "Invalid JSON message" } };
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return { error: { type: "error", message: "Invalid JSON message" } };
-  const record = value as Record<string, unknown>;
-  if (typeof record.requestId !== "string" || !record.requestId.trim())
-    return { error: { type: "error", message: "requestId required" } };
-  return { message: record as IncomingMessage };
 }

@@ -1,6 +1,7 @@
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
+import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
 const fixtureEnv = env as typeof env & {
@@ -29,6 +30,60 @@ function read(socket: WebSocket): Promise<Message> {
 }
 
 describe("Durable Object WebSocket transport", () => {
+  it("decodes valid commands and preserves protocol errors", () => {
+    expect(
+      decodeClientCommand(
+        '{"type":"subscribe","requestId":"s","query":"counter","params":["alpha"]}',
+      ),
+    ).toEqual({
+      command: { type: "subscribe", requestId: "s", query: "counter", params: ["alpha"] },
+    });
+    const hash = "a".repeat(64);
+    expect(
+      decodeClientCommand(`{"type":"unsubscribe","requestId":"u","topicHash":"${hash}"}`),
+    ).toEqual({
+      command: { type: "unsubscribe", requestId: "u", topicHash: hash },
+    });
+    expect(
+      decodeClientCommand(
+        '{"type":"sync","requestId":"m","mutation":"increment","params":["alpha",1]}',
+      ),
+    ).toEqual({
+      command: { type: "sync", requestId: "m", mutation: "increment", params: ["alpha", 1] },
+    });
+    expect(decodeClientCommand(new ArrayBuffer(0))).toEqual({
+      error: { type: "error", message: "Expected text WebSocket message" },
+    });
+    expect(decodeClientCommand('{"type":"subscribe","requestId":"s","query":"counter"}')).toEqual({
+      error: { type: "error", requestId: "s", message: "query and params required" },
+    });
+    expect(decodeClientCommand('{"type":"unsubscribe","requestId":"u","topicHash":"bad"}')).toEqual(
+      {
+        error: { type: "error", requestId: "u", message: "topicHash required" },
+      },
+    );
+    expect(decodeClientCommand('{"type":"sync","requestId":"m","mutation":"increment"}')).toEqual({
+      error: { type: "error", requestId: "m", message: "mutation and params required" },
+    });
+    expect(decodeClientCommand('{"type":"wat","requestId":"x"}')).toEqual({
+      error: { type: "error", requestId: "x", message: "Unknown message type" },
+    });
+    expect(decodeClientCommand("not json")).toEqual({
+      error: { type: "error", message: "Invalid JSON message" },
+    });
+    expect(decodeClientCommand("null")).toEqual({
+      error: { type: "error", message: "Invalid JSON message" },
+    });
+    expect(decodeClientCommand("[]")).toEqual({
+      error: { type: "error", message: "Invalid JSON message" },
+    });
+    expect(decodeClientCommand('{"type":"sync","params":[]}')).toEqual({
+      error: { type: "error", message: "requestId required" },
+    });
+    expect(decodeClientCommand('{"type":"sync","requestId":" ","params":[]}')).toEqual({
+      error: { type: "error", message: "requestId required" },
+    });
+  });
   it("subscribes, syncs, restores after hibernation, and unsubscribes", async () => {
     const rejected = await worker.default.fetch(new Request("https://example.com"));
     expect([rejected.status, await rejected.text()]).toEqual([426, "Expected WebSocket"]);

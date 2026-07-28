@@ -48,3 +48,65 @@ export type ServerMessage<Q extends object> =
   | UnsubscribedMessage
   | SyncedMessage
   | ErrorMessage;
+export type DecodedClientCommand =
+  | {
+      type: "subscribe";
+      requestId: string;
+      query: string;
+      params: unknown[];
+    }
+  | {
+      type: "unsubscribe";
+      requestId: string;
+      topicHash: TopicHash;
+    }
+  | {
+      type: "sync";
+      requestId: string;
+      mutation: string;
+      params: unknown[];
+    };
+
+export type DecodeResult = { command: DecodedClientCommand } | { error: ErrorMessage };
+
+export function decodeClientCommand(message: string | ArrayBuffer): DecodeResult {
+  if (typeof message !== "string")
+    return { error: { type: "error", message: "Expected text WebSocket message" } };
+
+  let value: unknown;
+  try {
+    value = JSON.parse(message);
+  } catch {
+    return { error: { type: "error", message: "Invalid JSON message" } };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return { error: { type: "error", message: "Invalid JSON message" } };
+
+  const record = value as Record<string, unknown>;
+  const requestId = record.requestId;
+  if (typeof requestId !== "string" || !requestId.trim())
+    return { error: { type: "error", message: "requestId required" } };
+
+  if (record.type === "subscribe") {
+    if (typeof record.query !== "string" || !Array.isArray(record.params))
+      return { error: { type: "error", requestId, message: "query and params required" } };
+    return {
+      command: { type: "subscribe", requestId, query: record.query, params: record.params },
+    };
+  }
+  if (record.type === "unsubscribe") {
+    if (typeof record.topicHash !== "string" || !/^[0-9a-f]{64}$/.test(record.topicHash))
+      return { error: { type: "error", requestId, message: "topicHash required" } };
+    return {
+      command: { type: "unsubscribe", requestId, topicHash: record.topicHash as TopicHash },
+    };
+  }
+  if (record.type === "sync") {
+    if (typeof record.mutation !== "string" || !Array.isArray(record.params))
+      return { error: { type: "error", requestId, message: "mutation and params required" } };
+    return {
+      command: { type: "sync", requestId, mutation: record.mutation, params: record.params },
+    };
+  }
+  return { error: { type: "error", requestId, message: "Unknown message type" } };
+}
