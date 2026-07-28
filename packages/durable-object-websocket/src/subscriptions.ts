@@ -9,13 +9,12 @@ import type {
 } from "@do-sync-engine/core";
 import type { QueryResultMessage } from "./protocol.ts";
 
-export type DurableObjectWebSocketAttachment = { topics?: Topic[] };
+type DurableObjectWebSocketAttachment = { topics?: Topic[] };
 export type QueryDefinitions<Q extends object> = {
   [K in keyof Q]: Q[K] & { run(...params: never[]): unknown };
 };
 type Entry = {
   topic: Topic;
-  listener: (event: { topic: Topic; value: unknown }) => unknown;
   listenerId: ListenerId;
 };
 export class SubscriptionRegistry<Q extends object, M extends object> {
@@ -29,7 +28,7 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
     ws: WebSocket,
     name: StringKey<Q>,
     params: unknown[],
-    requestId?: string,
+    requestId: string,
   ): Promise<void> {
     const topic = await this.engine.createTopic(name as never, params as never);
     const value = this.queries[name].run(...(params as never[]));
@@ -42,16 +41,15 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
     JSON.stringify(initial);
     const map = this.subscriptions.get(ws) ?? new Map<TopicHash, Entry>();
     this.subscriptions.set(ws, map);
-    const previous = ws.deserializeAttachment?.();
-    const old = map.get(topic.hash);
-    if (old) {
+    if (map.has(topic.hash)) {
       this.send(ws, initial);
       return;
     }
+    const previous = ws.deserializeAttachment();
     const listener = (event: { topic: Topic; value: unknown }) =>
       this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
     const listenerId = this.engine.subscribe(topic as never, listener as never);
-    map.set(topic.hash, { topic, listener, listenerId });
+    map.set(topic.hash, { topic, listenerId });
     try {
       ws.serializeAttachment({ topics: [...map.values()].map((e) => e.topic) });
     } catch (error) {
@@ -99,7 +97,7 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
         !/^[0-9a-f]{64}$/.test(candidate.hash)
       )
         continue;
-      if (!(candidate.name in this.queries)) continue;
+      if (!Object.hasOwn(this.queries, candidate.name)) continue;
       const topic = await this.engine.createTopic(
         candidate.name as never,
         candidate.params as never,
@@ -111,7 +109,7 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
       const listener = (event: { topic: Topic; value: unknown }) =>
         this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
       const listenerId = this.engine.subscribe(topic as never, listener as never);
-      map.set(topic.hash, { topic, listener, listenerId });
+      map.set(topic.hash, { topic, listenerId });
       topics.push(topic);
       snapshots.push({ topic, value });
     }
@@ -119,12 +117,13 @@ export class SubscriptionRegistry<Q extends object, M extends object> {
     for (const snapshot of snapshots) this.send(ws, { type: "queryResult", ...snapshot });
   }
   clear(ws: WebSocket): void {
-    for (const e of this.subscriptions.get(ws)?.values() ?? [])
-      this.engine.unsubscribe(e.listenerId);
+    const map = this.subscriptions.get(ws);
+    if (!map) return;
+    for (const entry of map.values()) this.engine.unsubscribe(entry.listenerId);
     this.subscriptions.delete(ws);
   }
   private read(ws: WebSocket): Topic[] {
-    const value = ws.deserializeAttachment?.() as DurableObjectWebSocketAttachment | undefined;
+    const value = ws.deserializeAttachment() as DurableObjectWebSocketAttachment | undefined;
     return Array.isArray(value?.topics) ? value.topics : [];
   }
 }

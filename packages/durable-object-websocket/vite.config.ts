@@ -2,7 +2,10 @@ import { defineConfig } from "vite-plus";
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 
 export default defineConfig({
-  pack: { exports: true, external: ["@do-sync-engine/core"] },
+  pack: {
+    exports: true,
+    deps: { neverBundle: ["@do-sync-engine/core", "cloudflare:workers"] },
+  },
   lint: { options: { typeAware: true, typeCheck: true } },
   fmt: {},
   test: {

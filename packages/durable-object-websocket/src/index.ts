@@ -1,8 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
-import type { MutationMap, QueryMap, StringKey, SyncEngineInterface } from "@do-sync-engine/core";
+import type {
+  MutationMap,
+  QueryMap,
+  StringKey,
+  SyncEngineInterface,
+  TopicHash,
+} from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
 import type { QueryDefinitions } from "./subscriptions.ts";
-export type { DurableObjectWebSocketAttachment } from "./subscriptions.ts";
+import type { ErrorMessage } from "./protocol.ts";
 export type * from "./protocol.ts";
 export type DurableObjectWebSocketBinding<Q extends object, M extends object> = {
   readonly engine: SyncEngineInterface<QueryMap<Q>, MutationMap<M>>;
@@ -11,6 +17,8 @@ export type DurableObjectWebSocketBinding<Q extends object, M extends object> = 
 export type DurableObjectWebSocketInitializer<Q extends object, M extends object> = () =>
   | DurableObjectWebSocketBinding<Q, M>
   | Promise<DurableObjectWebSocketBinding<Q, M>>;
+type IncomingMessage = Record<string, unknown> & { requestId: string };
+type ParseResult = { message: IncomingMessage } | { error: ErrorMessage };
 export abstract class DurableObjectWebSocket<
   Env,
   Q extends object,
@@ -46,38 +54,31 @@ export abstract class DurableObjectWebSocket<
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     await this.initialization;
     const parsed = parse(message);
-    if (parsed.error) return this.send(ws, parsed.error);
-    const requestId = parsed.value.requestId;
+    if ("error" in parsed) return this.send(ws, parsed.error);
+    const { message: value } = parsed;
+    const requestId = value.requestId;
     try {
-      if (parsed.value.type === "subscribe") {
-        if (typeof parsed.value.query !== "string" || !Array.isArray(parsed.value.params))
+      if (value.type === "subscribe") {
+        if (typeof value.query !== "string" || !Array.isArray(value.params))
           return this.send(ws, { type: "error", requestId, message: "query and params required" });
-        await this.registry.subscribe(
-          ws,
-          parsed.value.query as StringKey<Q>,
-          parsed.value.params,
-          requestId,
-        );
-      } else if (parsed.value.type === "unsubscribe") {
-        if (
-          typeof parsed.value.topicHash !== "string" ||
-          !/^[0-9a-f]{64}$/.test(parsed.value.topicHash)
-        )
+        await this.registry.subscribe(ws, value.query as StringKey<Q>, value.params, requestId);
+      } else if (value.type === "unsubscribe") {
+        if (typeof value.topicHash !== "string" || !/^[0-9a-f]{64}$/.test(value.topicHash))
           return this.send(ws, { type: "error", requestId, message: "topicHash required" });
         this.send(ws, {
           type: "unsubscribed",
           requestId,
-          topicHash: parsed.value.topicHash,
-          removed: this.registry.unsubscribe(ws, parsed.value.topicHash),
+          topicHash: value.topicHash,
+          removed: this.registry.unsubscribe(ws, value.topicHash as TopicHash),
         });
-      } else if (parsed.value.type === "sync") {
-        if (typeof parsed.value.mutation !== "string" || !Array.isArray(parsed.value.params))
+      } else if (value.type === "sync") {
+        if (typeof value.mutation !== "string" || !Array.isArray(value.params))
           return this.send(ws, {
             type: "error",
             requestId,
             message: "mutation and params required",
           });
-        this.engine.sync(parsed.value.mutation as StringKey<M>, parsed.value.params as never);
+        this.engine.sync(value.mutation as StringKey<M>, value.params as never);
         this.send(ws, { type: "synced", requestId });
       } else this.send(ws, { type: "error", requestId, message: "Unknown message type" });
     } catch (error) {
@@ -101,10 +102,10 @@ export abstract class DurableObjectWebSocket<
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   }
 }
-function parse(message: string | ArrayBuffer): { value?: any; error?: any } {
+function parse(message: string | ArrayBuffer): ParseResult {
   if (typeof message !== "string")
     return { error: { type: "error", message: "Expected text WebSocket message" } };
-  let value: any;
+  let value: unknown;
   try {
     value = JSON.parse(message);
   } catch {
@@ -112,7 +113,8 @@ function parse(message: string | ArrayBuffer): { value?: any; error?: any } {
   }
   if (!value || typeof value !== "object" || Array.isArray(value))
     return { error: { type: "error", message: "Invalid JSON message" } };
-  if (typeof value.requestId !== "string" || !value.requestId.trim())
+  const record = value as Record<string, unknown>;
+  if (typeof record.requestId !== "string" || !record.requestId.trim())
     return { error: { type: "error", message: "requestId required" } };
-  return { value };
+  return { message: record as IncomingMessage };
 }
