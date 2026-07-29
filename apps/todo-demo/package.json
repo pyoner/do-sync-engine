@@ -13,7 +13,7 @@
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
     "@do-sync-engine/durable-object-websocket": "workspace:*",
-    "@do-sync-engine/utils": "workspace:*",
+    "@do-sync-engine/sql-regex-adapter": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {

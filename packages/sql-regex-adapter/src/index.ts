@@ -4,6 +4,20 @@ import { insertTables } from "./insert.ts";
 import { selectTables } from "./select.ts";
 import { updateTables } from "./update.ts";
 import { operationOf } from "./rules.ts";
+export type { Table } from "@do-sync-engine/core";
+
+export type SqlValue = string | number | boolean | null | bigint | Uint8Array;
+export type SqlRow = Record<string, SqlValue>;
+
+export interface MutationMetadata {
+  rowsAffected: number;
+  lastInsertRowid: number | bigint | null;
+}
+
+export interface SqlDatabase {
+  query(sql: string, ...params: SqlValue[]): SqlRow[];
+  execute(sql: string, ...params: SqlValue[]): MutationMetadata;
+}
 
 export type SqlParameter = string | number | null;
 
@@ -18,11 +32,11 @@ export type CloudflareSqlStorage = {
   exec(sql: string, ...params: SqlParameter[]): unknown;
 };
 
-export type SqlDatabase = NodeSqliteDatabase | CloudflareSqlStorage;
+export type SqlAdapterDatabase = NodeSqliteDatabase | CloudflareSqlStorage;
 export type SqlOperation = Query<SqlParameter[], unknown> | Mutation<SqlParameter[], unknown>;
 export type SqlAdapter = (sql: string) => SqlOperation;
 
-export function createAdapter(db: SqlDatabase): SqlAdapter {
+export function createAdapter(db: SqlAdapterDatabase): SqlAdapter {
   if (
     (!("prepare" in db) || typeof db.prepare !== "function") &&
     (!("exec" in db) || typeof db.exec !== "function")

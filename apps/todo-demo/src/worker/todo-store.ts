@@ -2,8 +2,8 @@ import { SyncEngine } from "@do-sync-engine/core";
 import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 import type { TodoMutations, TodoQueries } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
-import { readTablesFromSql, writeTablesFromSql } from "@do-sync-engine/utils";
-import type { SqlDatabase } from "@do-sync-engine/utils";
+
+type SqlDatabase = InstanceType<typeof DurableObjectSqlStorage>;
 
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS todos (
@@ -22,7 +22,7 @@ function createQueries(storage: SqlDatabase): TodoQueries {
 
   return {
     allTodos: {
-      tables: readTablesFromSql(allTodosSql),
+      tables: storage.tables(allTodosSql),
       run: () =>
         storage.query(allTodosSql).map((row) => ({
           id: Number(row.id),
@@ -32,21 +32,21 @@ function createQueries(storage: SqlDatabase): TodoQueries {
         })),
     },
     incompleteTodos: {
-      tables: readTablesFromSql(incompleteTodosSql),
+      tables: storage.tables(incompleteTodosSql),
       run: () =>
         storage
           .query(incompleteTodosSql)
           .map((row) => ({ id: Number(row.id), title: String(row.title) })),
     },
     completedTodos: {
-      tables: readTablesFromSql(completedTodosSql),
+      tables: storage.tables(completedTodosSql),
       run: () =>
         storage
           .query(completedTodosSql)
           .map((row) => ({ id: Number(row.id), title: String(row.title) })),
     },
     todoCount: {
-      tables: readTablesFromSql(todoCountSql),
+      tables: storage.tables(todoCountSql),
       run: () =>
         storage.query(todoCountSql).map((row) => ({ total_count: Number(row.total_count) })),
     },
@@ -60,19 +60,19 @@ function createMutations(storage: SqlDatabase): TodoMutations {
   const clearCompletedSql = "DELETE FROM todos WHERE completed = 1";
   return {
     addTodo: {
-      tables: writeTablesFromSql(addTodoSql),
+      tables: storage.tables(addTodoSql),
       run: (title) => storage.execute(addTodoSql, title as string),
     },
     toggleTodo: {
-      tables: writeTablesFromSql(toggleTodoSql),
+      tables: storage.tables(toggleTodoSql),
       run: (id) => storage.execute(toggleTodoSql, id as number),
     },
     deleteTodo: {
-      tables: writeTablesFromSql(deleteTodoSql),
+      tables: storage.tables(deleteTodoSql),
       run: (id) => storage.execute(deleteTodoSql, id as number),
     },
     clearCompleted: {
-      tables: writeTablesFromSql(clearCompletedSql),
+      tables: storage.tables(clearCompletedSql),
       run: () => storage.execute(clearCompletedSql),
     },
   } satisfies TodoMutations;

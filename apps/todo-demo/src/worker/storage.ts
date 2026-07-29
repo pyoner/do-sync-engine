@@ -1,4 +1,11 @@
-import type { MutationMetadata, SqlDatabase, SqlRow, SqlValue } from "@do-sync-engine/utils";
+import { toTables } from "@do-sync-engine/core";
+import {
+  createAdapter,
+  type MutationMetadata,
+  type SqlDatabase,
+  type SqlRow,
+  type SqlValue,
+} from "@do-sync-engine/sql-regex-adapter";
 
 export class DurableObjectSqlStorage implements SqlDatabase {
   private sql: SqlStorage;
@@ -7,6 +14,9 @@ export class DurableObjectSqlStorage implements SqlDatabase {
     this.sql = sql;
   }
 
+  tables(statement: string) {
+    return toTables([...createAdapter(this.sql)(statement).tables]);
+  }
   query(sql: string, ...params: SqlValue[]): SqlRow[] {
     return this.sql.exec(sql, ...params).toArray() as SqlRow[];
   }

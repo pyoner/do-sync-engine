@@ -18,7 +18,7 @@ export default defineConfig({
       {
         test: {
           name: "node",
-          include: ["tests/index.test.ts"],
+          include: ["tests/index.test.ts", "tests/engine.test.ts"],
         },
       },
       {

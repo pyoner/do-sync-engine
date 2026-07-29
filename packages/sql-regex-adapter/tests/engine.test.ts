@@ -1,9 +1,8 @@
-import { beforeEach, describe, expect, test } from "vite-plus/test";
-import { SyncEngine, toTables } from "../src/index.js";
-import type { Listener, ListenerEvent, Mutation, Query } from "../src/index.js";
-import { NodeSqliteStorage } from "./helpers.js";
-import { readTablesFromSql, writeTablesFromSql } from "@do-sync-engine/utils";
-import type { MutationMetadata, SqlRow } from "@do-sync-engine/utils";
+import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
+import { DatabaseSync } from "node:sqlite";
+import { createAdapter, type SqlRow } from "../src/index.ts";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
+import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
@@ -21,7 +20,7 @@ class ExposedEngine extends SyncEngine<any, any> {
   }
 }
 
-function setupDb(storage: NodeSqliteStorage) {
+function setupDb(storage: DatabaseSync) {
   storage.exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
   storage.exec("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT)");
   storage.exec(`INSERT INTO users (name) VALUES ('alice')`);
@@ -30,48 +29,38 @@ function setupDb(storage: NodeSqliteStorage) {
 }
 
 describe("SyncEngine topics and events", () => {
-  let storage: NodeSqliteStorage;
+  let storage: DatabaseSync;
   let allUsers: Query<[], SqlRow[]>;
   let userById: Query<[number], SqlRow[]>;
   let postsOnly: Query<[], SqlRow[]>;
-  let insertUser: Mutation<[string], MutationMetadata>;
-  let updateUserName: Mutation<[string, number], MutationMetadata>;
+  let insertUser: Mutation<[string], unknown>;
+  let updateUserName: Mutation<[string, number], unknown>;
   let engine: SyncEngine<any, any>;
 
   beforeEach(() => {
-    storage = new NodeSqliteStorage();
+    storage = new DatabaseSync(":memory:");
     setupDb(storage);
+    const sql = createAdapter(storage);
 
     const allUsersSql = "SELECT * FROM users ORDER BY id";
-    allUsers = {
-      tables: readTablesFromSql(allUsersSql),
-      run: () => storage.query(allUsersSql),
-    };
+    allUsers = sql(allUsersSql) as Query<[], SqlRow[]>;
     const userByIdSql = "SELECT * FROM users WHERE id = ?";
-    userById = {
-      tables: readTablesFromSql(userByIdSql),
-      run: (id) => storage.query(userByIdSql, id),
-    };
+    userById = sql(userByIdSql) as Query<[number], SqlRow[]>;
     const postsOnlySql = "SELECT * FROM posts ORDER BY id";
-    postsOnly = {
-      tables: readTablesFromSql(postsOnlySql),
-      run: () => storage.query(postsOnlySql),
-    };
+    postsOnly = sql(postsOnlySql) as Query<[], SqlRow[]>;
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
-    insertUser = {
-      tables: writeTablesFromSql(insertUserSql),
-      run: (name) => storage.execute(insertUserSql, name),
-    };
+    insertUser = sql(insertUserSql) as Mutation<[string], unknown>;
     const updateUserNameSql = "UPDATE users SET name = ? WHERE id = ?";
-    updateUserName = {
-      tables: writeTablesFromSql(updateUserNameSql),
-      run: (name, id) => storage.execute(updateUserNameSql, name, id),
-    };
+    updateUserName = sql(updateUserNameSql) as Mutation<[string, number], unknown>;
 
     engine = new SyncEngine({
       queries: { allUsers, userById, postsOnly },
       mutations: { insertUser, updateUserName },
     });
+  });
+
+  afterEach(() => {
+    storage.close();
   });
 
   test("creates canonical SHA-256 topics", async () => {
@@ -241,16 +230,19 @@ describe("SyncEngine topics and events", () => {
         return 1;
       },
     };
-    const synchronousMutation: Mutation<[], MutationMetadata> = {
-      tables: toTables(["users"]),
+    const synchronousMutation = createAdapter(storage)(
+      "INSERT INTO users (name) VALUES ('synchronous')",
+    ) as Mutation<[], unknown>;
+    const trackedSynchronousMutation: Mutation<[], unknown> = {
+      ...synchronousMutation,
       run: () => {
         calls.push("mutation");
-        return storage.execute("INSERT INTO users (name) VALUES ('synchronous')");
+        return synchronousMutation.run();
       },
     };
     engine = new SyncEngine({
       queries: { synchronousQuery },
-      mutations: { synchronousMutation },
+      mutations: { synchronousMutation: trackedSynchronousMutation },
     });
     const topic = await engine.createTopic("synchronousQuery", []);
     engine.subscribe(topic, () => calls.push("listener"));

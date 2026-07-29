@@ -244,19 +244,19 @@ importers:
       '@do-sync-engine/durable-object-websocket':
         specifier: workspace:*
         version: link:../../packages/durable-object-websocket
-      '@do-sync-engine/utils':
+      '@do-sync-engine/sql-regex-adapter':
         specifier: workspace:*
-        version: link:../../packages/utils
+        version: link:../../packages/sql-regex-adapter
       zod:
         specifier: 'catalog:'
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: latest
-        version: 1.47.0(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(wrangler@4.114.0(@cloudflare/workers-types@5.20260727.1))
+        version: 1.47.0(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(wrangler@4.114.0(@cloudflare/workers-types@5.20260728.1))
       '@cloudflare/vitest-pool-workers':
         specifier: latest
-        version: 0.18.8(@cloudflare/workers-types@5.20260727.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))
+        version: 0.18.8(@cloudflare/workers-types@5.20260728.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))
       '@sveltejs/vite-plugin-svelte':
         specifier: ^7.1.2
         version: 7.1.2(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(svelte@5.56.4)
@@ -283,7 +283,7 @@ importers:
         version: 4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))
       wrangler:
         specifier: latest
-        version: 4.114.0(@cloudflare/workers-types@5.20260727.1)
+        version: 4.114.0(@cloudflare/workers-types@5.20260728.1)
 
   apps/website:
     devDependencies:
@@ -299,9 +299,6 @@ importers:
 
   packages/core:
     devDependencies:
-      '@do-sync-engine/utils':
-        specifier: workspace:*
-        version: link:../utils
       '@types/node':
         specifier: ^25.6.2
         version: 25.9.4
@@ -322,7 +319,7 @@ importers:
         version: 26.1.1
       drizzle-orm:
         specifier: 'catalog:'
-        version: 1.0.0-rc.4(@cloudflare/workers-types@5.20260727.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.1)(zod@4.4.3)
+        version: 1.0.0-rc.4(@cloudflare/workers-types@5.20260728.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.1)(zod@4.4.3)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -338,10 +335,10 @@ importers:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: latest
-        version: 0.18.8(@cloudflare/workers-types@5.20260727.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))
+        version: 0.18.8(@cloudflare/workers-types@5.20260728.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))
       '@cloudflare/workers-types':
         specifier: latest
-        version: 5.20260727.1
+        version: 5.20260728.1
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2
@@ -362,10 +359,10 @@ importers:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: latest
-        version: 0.18.8(@cloudflare/workers-types@5.20260727.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
+        version: 0.18.8(@cloudflare/workers-types@5.20260728.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)
       '@cloudflare/workers-types':
         specifier: latest
-        version: 5.20260727.1
+        version: 5.20260728.1
       '@do-sync-engine/core':
         specifier: workspace:*
         version: link:../core
@@ -384,18 +381,6 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
-
-  packages/utils:
-    devDependencies:
-      '@types/node':
-        specifier: ^25.6.2
-        version: 25.9.4
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-      vite-plus:
-        specifier: 'catalog:'
-        version: 0.2.5(@types/node@25.9.4)(esbuild@0.28.1)(jiti@2.7.0)(svelte@5.56.4)(typescript@7.0.2)(vite@8.1.0(@types/node@25.9.4)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
 
 packages:
 
@@ -471,8 +456,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-types@5.20260727.1':
-    resolution: {integrity: sha512-b/wT+LMZz0oELzxibww0ujFz5BD8NRz9WJ+xd+JNZJUMXgh8IHjpibKdGDvtkbotmihWUknP5tBPUU8KluLxxA==}
+  '@cloudflare/workers-types@5.20260728.1':
+    resolution: {integrity: sha512-rZqmesLEH40Xt67PpQSj+iJqwkYBzVr7U/UOa5twkToMsxO5pYsPw2QAaTKDdiCSiki9fWAgsWTj9OmFnbwLRQ==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -2540,20 +2525,20 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260722.1
 
-  '@cloudflare/vite-plugin@1.47.0(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(wrangler@4.114.0(@cloudflare/workers-types@5.20260727.1))':
+  '@cloudflare/vite-plugin@1.47.0(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))(wrangler@4.114.0(@cloudflare/workers-types@5.20260728.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260722.1)
       miniflare: 4.20260722.0
       unenv: 2.0.0-rc.24
       vite: '@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)'
       workerd: 1.20260722.1
-      wrangler: 4.114.0(@cloudflare/workers-types@5.20260727.1)
+      wrangler: 4.114.0(@cloudflare/workers-types@5.20260728.1)
       ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@cloudflare/vitest-pool-workers@0.18.8(@cloudflare/workers-types@5.20260727.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))':
+  '@cloudflare/vitest-pool-workers@0.18.8(@cloudflare/workers-types@5.20260728.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0)))':
     dependencies:
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -2561,14 +2546,14 @@ snapshots:
       esbuild: 0.28.1
       miniflare: 4.20260722.0
       vitest: 4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))
-      wrangler: 4.114.0(@cloudflare/workers-types@5.20260727.1)
+      wrangler: 4.114.0(@cloudflare/workers-types@5.20260728.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - bufferutil
       - utf-8-validate
 
-  '@cloudflare/vitest-pool-workers@0.18.8(@cloudflare/workers-types@5.20260727.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)':
+  '@cloudflare/vitest-pool-workers@0.18.8(@cloudflare/workers-types@5.20260728.1)(@vitest/runner@4.1.10)(@vitest/snapshot@4.1.10)(vitest@4.1.10)':
     dependencies:
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -2576,7 +2561,7 @@ snapshots:
       esbuild: 0.28.1
       miniflare: 4.20260722.0
       vitest: 4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-      wrangler: 4.114.0(@cloudflare/workers-types@5.20260727.1)
+      wrangler: 4.114.0(@cloudflare/workers-types@5.20260728.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -2598,7 +2583,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260722.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260727.1': {}
+  '@cloudflare/workers-types@5.20260728.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -3609,9 +3594,9 @@ snapshots:
 
   dom-accessibility-api@0.5.16: {}
 
-  drizzle-orm@1.0.0-rc.4(@cloudflare/workers-types@5.20260727.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.1)(zod@4.4.3):
+  drizzle-orm@1.0.0-rc.4(@cloudflare/workers-types@5.20260728.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.1)(zod@4.4.3):
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260727.1
+      '@cloudflare/workers-types': 5.20260728.1
       '@types/better-sqlite3': 7.6.13
       better-sqlite3: 13.0.1
       zod: 4.4.3
@@ -4727,7 +4712,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260722.1
       '@cloudflare/workerd-windows-64': 1.20260722.1
 
-  wrangler@4.114.0(@cloudflare/workers-types@5.20260727.1):
+  wrangler@4.114.0(@cloudflare/workers-types@5.20260728.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260722.1)
@@ -4738,7 +4723,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260722.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20260727.1
+      '@cloudflare/workers-types': 5.20260728.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil

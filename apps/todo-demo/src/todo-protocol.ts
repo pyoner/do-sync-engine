@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Mutation, Query } from "@do-sync-engine/core";
-import type { MutationMetadata } from "@do-sync-engine/utils";
+import type { MutationMetadata } from "@do-sync-engine/sql-regex-adapter";
 export const TODO_WS_PATH = "/api/todos";
 export const todoSchema = z.object({
   id: z.number(),
