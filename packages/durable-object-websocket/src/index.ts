@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import { DurableObject } from "cloudflare:workers";
 import {
   TopicBuildError,
@@ -15,7 +15,6 @@ import type {
 } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
 import { decodeClientCommand } from "./protocol.ts";
-import type { ErrorMessage } from "./protocol.ts";
 export type * from "./protocol.ts";
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
   readonly engine: SyncEngineInterface<Q, M>;
@@ -30,6 +29,7 @@ export abstract class DurableObjectWebSocket<
   M extends MutationMap<M>,
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
+  private readonly socketCallbacks = new WeakMap<WebSocket, Promise<void>>();
   private engine!: SyncEngineInterface<Q, M>;
   private registry!: SubscriptionRegistry<Q, M>;
   protected constructor(
@@ -60,13 +60,13 @@ export abstract class DurableObjectWebSocket<
     return Effect.runPromise(this.fetchEffect(request));
   }
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    return Effect.runPromise(this.webSocketMessageEffect(ws, message));
+    return this.enqueueSocket(ws, this.webSocketMessageEffect(ws, message));
   }
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-    return Effect.runPromise(this.socketCleanupEffect(ws));
+    return this.enqueueSocket(ws, this.socketCleanupEffect(ws));
   }
   webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
-    return Effect.runPromise(this.socketCleanupEffect(ws));
+    return this.enqueueSocket(ws, this.socketCleanupEffect(ws));
   }
   private fetchEffect(request: Request): Effect.Effect<Response, unknown> {
     return Effect.gen(
@@ -94,47 +94,51 @@ export abstract class DurableObjectWebSocket<
           try: () => this.initialization,
           catch: (cause) => cause,
         });
-        let requestId: string | undefined;
-        const execute = Effect.gen(
-          function* (this: DurableObjectWebSocket<Env, Q, M>) {
-            const command = yield* decodeClientCommand(message);
-            requestId = command.requestId;
-            if (command.type === "subscribe") {
-              yield* this.registry.subscribe(
-                ws,
-                command.query as StringKey<Q>,
-                command.params,
-                requestId,
+        yield* decodeClientCommand(message).pipe(
+          Effect.matchEffect({
+            onFailure: (error) => this.sendEffect(ws, error).pipe(Effect.ignoreCause),
+            onSuccess: (command) => {
+              const execute = Effect.gen(
+                function* (this: DurableObjectWebSocket<Env, Q, M>) {
+                  if (command.type === "subscribe") {
+                    yield* this.registry.subscribe(
+                      ws,
+                      command.query as StringKey<Q>,
+                      command.params,
+                      command.requestId,
+                    );
+                  } else if (command.type === "unsubscribe") {
+                    const removed = yield* this.registry.unsubscribe(ws, command.topic);
+                    yield* this.sendEffect(ws, {
+                      type: "unsubscribed",
+                      requestId: command.requestId,
+                      topic: command.topic,
+                      removed,
+                    });
+                  } else {
+                    yield* this.engine.sync(
+                      command.mutation as StringKey<M>,
+                      command.params as OperationParams<M[StringKey<M>]>,
+                    );
+                    yield* this.sendEffect(ws, {
+                      type: "synced",
+                      requestId: command.requestId,
+                    });
+                  }
+                }.bind(this),
               );
-            } else if (command.type === "unsubscribe") {
-              const removed = yield* this.registry.unsubscribe(ws, command.topic);
-              yield* Effect.sync(() =>
-                this.send(ws, {
-                  type: "unsubscribed",
-                  requestId,
-                  topic: command.topic,
-                  removed,
+              return execute.pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) =>
+                    this.sendEffect(ws, {
+                      type: "error",
+                      requestId: command.requestId,
+                      message: formatError(Cause.squash(cause)),
+                    }).pipe(Effect.ignoreCause),
+                  onSuccess: () => Effect.void,
                 }),
               );
-            } else {
-              yield* this.engine.sync(
-                command.mutation as StringKey<M>,
-                command.params as OperationParams<M[StringKey<M>]>,
-              );
-              yield* Effect.sync(() => this.send(ws, { type: "synced", requestId }));
-            }
-          }.bind(this),
-        );
-        yield* execute.pipe(
-          Effect.matchEffect({
-            onFailure: (error) =>
-              Effect.sync(() => {
-                const protocolError = isErrorMessage(error)
-                  ? error
-                  : { type: "error", requestId, message: formatError(error) };
-                this.send(ws, protocolError);
-              }),
-            onSuccess: () => Effect.void,
+            },
           }),
         );
       }.bind(this),
@@ -151,27 +155,38 @@ export abstract class DurableObjectWebSocket<
       }.bind(this),
     );
   }
+  private enqueueSocket(ws: WebSocket, workflow: Effect.Effect<void, unknown>): Promise<void> {
+    const previous = this.socketCallbacks.get(ws) ?? Promise.resolve();
+    const current = previous.then(() => Effect.runPromise(workflow));
+    const recovered = current.catch(() => undefined);
+    this.socketCallbacks.set(ws, recovered);
+    return recovered;
+  }
+
+  private sendEffect(ws: WebSocket, message: unknown): Effect.Effect<void, unknown> {
+    return Effect.try({
+      try: () => this.send(ws, message),
+      catch: (cause) => cause,
+    });
+  }
+
   private send(ws: WebSocket, message: unknown): void {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   }
 }
 
-const isErrorMessage = (value: unknown): value is ErrorMessage =>
-  typeof value === "object" &&
-  value !== null &&
-  "type" in value &&
-  value.type === "error" &&
-  "message" in value &&
-  typeof value.message === "string";
-
-const formatError = (error: unknown): string => {
+const formatError = (error: unknown, seen = new Set<unknown>()): string => {
   if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
   if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
   if (error instanceof TopicBuildError) {
     if (error.operation === "clone") return "Topic params must support structuredClone";
-    return error.cause instanceof Error ? error.cause.message : "Topic construction failed";
+    return formatError(error.cause, seen);
   }
-  if (error instanceof TopicValidationError)
-    return error.cause instanceof Error ? error.cause.message : "Topic construction failed";
-  return error instanceof Error ? error.message : "Unknown websocket error";
+  if (error instanceof TopicValidationError) return formatError(error.cause, seen);
+  if (error instanceof Error && error.message.trim() !== "") return error.message;
+  if (typeof error === "object" && error !== null && !seen.has(error)) {
+    seen.add(error);
+    if ("cause" in error) return formatError(error.cause, seen);
+  }
+  return "Unknown websocket error";
 };

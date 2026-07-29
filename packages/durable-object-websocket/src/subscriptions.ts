@@ -71,8 +71,11 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
         try: () => ws.deserializeAttachment(),
         catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
       });
-      const listener = (event: { topic: Topic; value: unknown }) =>
-        this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
+      const listener = (event: { topic: Topic; value: unknown }) => {
+        try {
+          this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
+        } catch {}
+      };
       const listenerId = yield* this.engine.subscribe<StringKey<Q>>(topic, listener);
       yield* Effect.sync(() => {
         this.subscriptions.set(ws, map);
@@ -151,8 +154,11 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
           yield* Effect.sync(() => map.set(topic.name, bucket));
           if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)))
             continue;
-          const listener = (event: { topic: Topic; value: unknown }) =>
-            this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
+          const listener = (event: { topic: Topic; value: unknown }) => {
+            try {
+              this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
+            } catch {}
+          };
           const typedTopic = topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>;
           const value = yield* this.engine.query<StringKey<Q>>(typedTopic);
           const listenerId = yield* this.engine.subscribe<StringKey<Q>>(typedTopic, listener);
