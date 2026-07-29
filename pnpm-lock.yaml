@@ -223,9 +223,6 @@ catalogs:
     vite-plus:
       specifier: ^0.2.5
       version: 0.2.5
-    zod:
-      specifier: ^4.4.3
-      version: 4.4.3
 
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@latest
@@ -250,9 +247,9 @@ importers:
       '@do-sync-engine/sql-regex-adapter':
         specifier: workspace:*
         version: link:../../packages/sql-regex-adapter
-      zod:
+      effect:
         specifier: 'catalog:'
-        version: 4.4.3
+        version: 4.0.0-beta.102
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: latest
@@ -4938,4 +4935,5 @@ snapshots:
 
   zod@3.25.76: {}
 
-  zod@4.4.3: {}
+  zod@4.4.3:
+    optional: true

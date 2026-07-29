@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+import { TopicHashSchema } from "@do-sync-engine/core";
 import type {
   OperationParams,
   OperationResult,
@@ -53,7 +55,7 @@ export type DecodedClientCommand =
       type: "subscribe";
       requestId: string;
       query: string;
-      params: unknown[];
+      params: readonly unknown[];
     }
   | {
       type: "unsubscribe";
@@ -64,49 +66,62 @@ export type DecodedClientCommand =
       type: "sync";
       requestId: string;
       mutation: string;
-      params: unknown[];
+      params: readonly unknown[];
     };
 
 export type DecodeResult = { command: DecodedClientCommand } | { error: ErrorMessage };
 
-export function decodeClientCommand(message: string | ArrayBuffer): DecodeResult {
-  if (typeof message !== "string")
-    return { error: { type: "error", message: "Expected text WebSocket message" } };
+const requestIdSchema = Schema.String.check(Schema.isPattern(/\S/));
+const clientCommandSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("subscribe"),
+    requestId: requestIdSchema,
+    query: Schema.String,
+    params: Schema.Array(Schema.Unknown),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("unsubscribe"),
+    requestId: requestIdSchema,
+    topicHash: TopicHashSchema,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("sync"),
+    requestId: requestIdSchema,
+    mutation: Schema.String,
+    params: Schema.Array(Schema.Unknown),
+  }),
+]);
 
+export function decodeClientCommand(message: string | ArrayBuffer): DecodeResult {
+  if (typeof message !== "string") {
+    return { error: { type: "error", message: "Expected text WebSocket message" } };
+  }
   let value: unknown;
   try {
     value = JSON.parse(message);
   } catch {
     return { error: { type: "error", message: "Invalid JSON message" } };
   }
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return { error: { type: "error", message: "Invalid JSON message" } };
-
-  const record = value as Record<string, unknown>;
-  const requestId = record.requestId;
-  if (typeof requestId !== "string" || !requestId.trim())
-    return { error: { type: "error", message: "requestId required" } };
-
-  if (record.type === "subscribe") {
-    if (typeof record.query !== "string" || !Array.isArray(record.params))
+  try {
+    return { command: Schema.decodeUnknownSync(clientCommandSchema)(value) };
+  } catch {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return { error: { type: "error", message: "Invalid JSON message" } };
+    }
+    const requestId = (value as Record<string, unknown>).requestId;
+    if (typeof requestId !== "string" || !requestId.trim()) {
+      return { error: { type: "error", message: "requestId required" } };
+    }
+    const record = value as Record<string, unknown>;
+    if ((record as Record<string, unknown>).type === "subscribe") {
       return { error: { type: "error", requestId, message: "query and params required" } };
-    return {
-      command: { type: "subscribe", requestId, query: record.query, params: record.params },
-    };
-  }
-  if (record.type === "unsubscribe") {
-    if (typeof record.topicHash !== "string" || !/^[0-9a-f]{64}$/.test(record.topicHash))
+    }
+    if ((record as Record<string, unknown>).type === "unsubscribe") {
       return { error: { type: "error", requestId, message: "topicHash required" } };
-    return {
-      command: { type: "unsubscribe", requestId, topicHash: record.topicHash as TopicHash },
-    };
-  }
-  if (record.type === "sync") {
-    if (typeof record.mutation !== "string" || !Array.isArray(record.params))
+    }
+    if ((record as Record<string, unknown>).type === "sync") {
       return { error: { type: "error", requestId, message: "mutation and params required" } };
-    return {
-      command: { type: "sync", requestId, mutation: record.mutation, params: record.params },
-    };
+    }
+    return { error: { type: "error", requestId, message: "Unknown message type" } };
   }
-  return { error: { type: "error", requestId, message: "Unknown message type" } };
 }

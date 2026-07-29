@@ -28,7 +28,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
   subscribe(
     ws: WebSocket,
     name: StringKey<Q>,
-    params: unknown[],
+    params: readonly unknown[],
     requestId: string,
   ): Effect.Effect<void, TopicBuildError | UnknownQueryError, TopicHasher> {
     return Effect.gen(

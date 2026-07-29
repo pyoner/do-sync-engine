@@ -33,6 +33,8 @@
     "yaml": "^2.9.0"
   },
   "inlinedDependencies": {
-    "effect": "4.0.0-beta.102"
+    "effect": "4.0.0-beta.102",
+    "fast-check": "4.9.0",
+    "pure-rand": "8.4.2"
   }
 }

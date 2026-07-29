@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { ListenerIdSchema } from "./types";
 import {
   assertKnownQueryEffect,
   buildTopic,
@@ -96,7 +97,7 @@ export class SyncEngine<
       }
     }
 
-    const listenerId = globalThis.crypto.randomUUID() as ListenerId;
+    const listenerId = ListenerIdSchema.make(globalThis.crypto.randomUUID());
     entry.listeners.set(listenerId, listener as Listener);
     return listenerId;
   }

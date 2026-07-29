@@ -6,21 +6,22 @@ export {
   toTables,
 } from "./helpers";
 export { SyncEngine } from "./engine";
+export { ListenerIdSchema, TableSchema, TopicHashSchema, TopicSchema } from "./types";
 export type {
   Branded,
+  Listener,
+  ListenerEvent,
+  ListenerId,
   Mutation,
   MutationMap,
   OperationParams,
   OperationResult,
-  Listener,
-  ListenerEvent,
   Query,
   QueryMap,
   StringKey,
-  Table,
-  ListenerId,
   SyncEngineInterface,
   SyncEngineOptions,
+  Table,
   Topic,
   TopicHash,
 } from "./types";

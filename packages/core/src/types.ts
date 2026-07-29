@@ -1,13 +1,13 @@
-import type { Effect } from "effect";
+import { Brand, Schema, type Effect } from "effect";
 import type { TopicBuildError, TopicHasher, UnknownQueryError } from "./helpers";
-declare const brand: unique symbol;
 
 export type Branded<
   Primitive extends string | number | boolean | bigint | symbol,
   Tag extends string,
-> = Primitive & { readonly [brand]: Tag };
+> = Brand.Branded<Primitive, Tag>;
 
-export type Table = Branded<string, "Table">;
+export const TableSchema = Schema.String.pipe(Schema.brand("Table"));
+export type Table = typeof TableSchema.Type;
 
 type Operation<Params extends unknown[] = [], Result = unknown> = {
   tables: Set<Table>;
@@ -33,7 +33,10 @@ export type OperationResult<OperationDef> = OperationDef extends {
   ? Result
   : never;
 
-export type TopicHash = Branded<string, "TopicHash">;
+export const TopicHashSchema = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).pipe(
+  Schema.brand("TopicHash"),
+);
+export type TopicHash = typeof TopicHashSchema.Type;
 
 export type Topic<
   Name extends string = string,
@@ -43,6 +46,12 @@ export type Topic<
   readonly params: Params;
   readonly hash: TopicHash;
 };
+
+export const TopicSchema = Schema.Struct({
+  name: Schema.String,
+  params: Schema.Array(Schema.Unknown),
+  hash: TopicHashSchema,
+});
 
 export type ListenerEvent<
   Name extends string = string,
@@ -72,7 +81,10 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<unkno
     : never;
 };
 
-export type ListenerId = Branded<string, "ListenerId">;
+export const ListenerIdSchema = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("ListenerId"),
+);
+export type ListenerId = typeof ListenerIdSchema.Type;
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
