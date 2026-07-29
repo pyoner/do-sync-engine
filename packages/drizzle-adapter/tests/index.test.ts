@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { eq, sql } from "drizzle-orm";
@@ -23,42 +24,48 @@ afterEach(() => {
 });
 
 describe("Drizzle SQLite adapter", () => {
-  test("adapts and runs a real select builder", () => {
+  test("adapts and runs a real select builder", async () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const query = adapter(db.select().from(users).where(eq(users.name, "Ada")));
+    const query = await Effect.runPromise(
+      adapter(db.select().from(users).where(eq(users.name, "Ada"))),
+    );
 
     expect(query.tables).toEqual(new Set(["users"]));
-    const result = query.run();
+    const result = await Effect.runPromise(query.run());
     expect(result).toEqual([{ id: 1, name: "Ada" }]);
     expect(result).not.toBeInstanceOf(Promise);
   });
 
-  test("adapts and runs a real insert builder", () => {
+  test("adapts and runs a real insert builder", async () => {
     const db = database();
-    const mutation = adapter(db.insert(users).values({ name: sql.placeholder("name") }));
+    const mutation = await Effect.runPromise(
+      adapter(db.insert(users).values({ name: sql.placeholder("name") })),
+    );
 
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(mutation.run({ name: "Ada" }).changes).toBe(1);
+    expect((await Effect.runPromise(mutation.run({ name: "Ada" }))).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([{ id: 1, name: "Ada" }]);
   });
 
-  test("adapts and runs a real update builder", () => {
+  test("adapts and runs a real update builder", async () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const mutation = adapter(db.update(users).set({ name: "Grace" }).where(eq(users.id, 1)));
+    const mutation = await Effect.runPromise(
+      adapter(db.update(users).set({ name: "Grace" }).where(eq(users.id, 1))),
+    );
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(mutation.run().changes).toBe(1);
+    expect((await Effect.runPromise(mutation.run())).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([{ id: 1, name: "Grace" }]);
   });
 
-  test("adapts and runs a real delete builder", () => {
+  test("adapts and runs a real delete builder", async () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const mutation = adapter(db.delete(users).where(eq(users.id, 1)));
+    const mutation = await Effect.runPromise(adapter(db.delete(users).where(eq(users.id, 1))));
 
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(mutation.run().changes).toBe(1);
+    expect((await Effect.runPromise(mutation.run())).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([]);
   });
 });

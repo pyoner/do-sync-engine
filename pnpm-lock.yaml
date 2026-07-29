@@ -314,6 +314,10 @@ importers:
         version: 0.2.5(@types/node@25.9.4)(esbuild@0.28.1)(jiti@2.7.0)(svelte@5.56.4)(typescript@7.0.2)(vite@8.1.0(@types/node@25.9.4)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))(yaml@2.9.0)
 
   packages/drizzle-adapter:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.102
     devDependencies:
       '@do-sync-engine/core':
         specifier: workspace:*
@@ -363,6 +367,10 @@ importers:
         version: 4.1.10(@types/node@24.13.2)(@vitest/browser-preview@4.1.10)(@voidzero-dev/vite-plus-core@0.2.6(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.0))
 
   packages/sql-regex-adapter:
+    dependencies:
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0-beta.102
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: latest
@@ -376,9 +384,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0-beta.102
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

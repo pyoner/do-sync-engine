@@ -1,6 +1,10 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { Mutation, Query } from "@do-sync-engine/core";
-import type { MutationMetadata } from "@do-sync-engine/sql-regex-adapter";
+import type { MutationMetadata, SqlAdapterError } from "@do-sync-engine/sql-regex-adapter";
+export class ProtocolDecodeError extends Schema.TaggedErrorClass<ProtocolDecodeError>()(
+  "ProtocolDecodeError",
+  { cause: Schema.Unknown },
+) {}
 
 export const TODO_WS_PATH = "/api/todos";
 
@@ -19,17 +23,17 @@ export const todoCountSchema = Schema.Struct({ total_count: Schema.Number });
 export type TodoCount = typeof todoCountSchema.Type;
 
 export type TodoQueries = {
-  allTodos: Query<[], Todo[]>;
-  incompleteTodos: Query<[], TodoSummary[]>;
-  completedTodos: Query<[], TodoSummary[]>;
-  todoCount: Query<[], TodoCount[]>;
+  allTodos: Query<[], Todo[], SqlAdapterError>;
+  incompleteTodos: Query<[], TodoSummary[], SqlAdapterError>;
+  completedTodos: Query<[], TodoSummary[], SqlAdapterError>;
+  todoCount: Query<[], TodoCount[], SqlAdapterError>;
 };
 
 export type TodoMutations = {
-  addTodo: Mutation<[string], MutationMetadata>;
-  toggleTodo: Mutation<[number], MutationMetadata>;
-  deleteTodo: Mutation<[number], MutationMetadata>;
-  clearCompleted: Mutation<[], MutationMetadata>;
+  addTodo: Mutation<[string], MutationMetadata, SqlAdapterError>;
+  toggleTodo: Mutation<[number], MutationMetadata, SqlAdapterError>;
+  deleteTodo: Mutation<[number], MutationMetadata, SqlAdapterError>;
+  clearCompleted: Mutation<[], MutationMetadata, SqlAdapterError>;
 };
 
 export const TODO_QUERY_NAMES = [
@@ -99,6 +103,16 @@ export const serverMessageSchema = Schema.Union([
 ]);
 export type ServerMessage = typeof serverMessageSchema.Type;
 
-export function parseServerMessage(message: string): ServerMessage {
-  return Schema.decodeUnknownSync(serverMessageSchema)(JSON.parse(message));
+export function parseServerMessage(
+  message: string,
+): Effect.Effect<ServerMessage, ProtocolDecodeError> {
+  return Effect.gen(function* () {
+    const value = yield* Effect.try({
+      try: () => JSON.parse(message),
+      catch: (cause) => ProtocolDecodeError.make({ cause }),
+    });
+    return yield* Schema.decodeUnknownEffect(serverMessageSchema)(value).pipe(
+      Effect.mapError((cause) => ProtocolDecodeError.make({ cause })),
+    );
+  });
 }

@@ -1,6 +1,15 @@
 <script lang="ts">
+  import { Deferred, Effect } from "effect";
   import { onMount } from "svelte";
-  import { TODO_WS_PATH, parseServerMessage, type ClientMessage, type Todo, type TodoQueryName, type TodoQueryResults } from "./todo-protocol";
+  import {
+    TODO_WS_PATH,
+    parseServerMessage,
+    type ClientMessage,
+    type Todo,
+    type TodoQueryName,
+    type TodoQueryResults,
+  } from "./todo-protocol";
+
   const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
@@ -9,47 +18,135 @@
   let socket = $state<WebSocket | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
-  const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
-  function websocketUrl(): string { return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`; }
-  function send(message: Omit<ClientMessage, "requestId">, requestId = crypto.randomUUID()): string {
-    if (socket?.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
-    socket.send(JSON.stringify({ ...message, requestId }));
-    return requestId;
+  const pending = new Map<string, Deferred.Deferred<void, Error>>();
+
+  function websocketUrl(): string {
+    return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`;
   }
+
+  function send(
+    message: Omit<ClientMessage, "requestId">,
+    requestId = crypto.randomUUID(),
+  ): Effect.Effect<string, Error> {
+    return Effect.try({
+      try: () => {
+        if (socket?.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
+        socket.send(JSON.stringify({ ...message, requestId }));
+        return requestId;
+      },
+      catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+    });
+  }
+
   function connect(): () => void {
     const ws = new WebSocket(websocketUrl());
     socket = ws;
-    ws.addEventListener("open", () => { connected = true; errorMessage = null; for (const query of defaultQueries) send({ type: "subscribe", query, params: [] }); });
+    ws.addEventListener("open", () => {
+      void Effect.runPromise(
+        Effect.gen(function* () {
+          connected = true;
+          errorMessage = null;
+          for (const query of defaultQueries) {
+            yield* send({ type: "subscribe", query, params: [] });
+          }
+        }).pipe(
+          Effect.match({
+            onFailure: (error) => {
+              errorMessage = error.message;
+            },
+            onSuccess: () => undefined,
+          }),
+        ),
+      );
+    });
     ws.addEventListener("message", (event) => {
-      try {
-        const message = parseServerMessage(String(event.data));
-        if (message.type === "queryResult") { queryResults = { ...queryResults, [message.topic.name]: message.value }; if (message.topic.name === "allTodos") todos = message.value as Todo[]; }
-        else if (message.type === "error") {
-          errorMessage = message.message;
-          if (message.requestId) {
+      void Effect.runPromise(
+        Effect.gen(function* () {
+          const message = yield* parseServerMessage(String(event.data));
+          if (message.type === "queryResult") {
+            queryResults = { ...queryResults, [message.topic.name]: message.value };
+            if (message.topic.name === "allTodos") todos = message.value as Todo[];
+          } else if (message.type === "error") {
+            errorMessage = message.message;
+            if (message.requestId) {
+              const item = pending.get(message.requestId);
+              pending.delete(message.requestId);
+              if (item) yield* Deferred.fail(item, new Error(message.message));
+            }
+          } else if (message.type === "synced") {
             const item = pending.get(message.requestId);
             pending.delete(message.requestId);
-            item?.reject(new Error(message.message));
+            if (item) yield* Deferred.succeed(item, undefined);
           }
-        }
-        else if (message.type === "synced") { pending.get(message.requestId)?.resolve(); pending.delete(message.requestId); }
-      } catch { errorMessage = "Invalid server message"; }
+        }).pipe(
+          Effect.match({
+            onFailure: () => {
+              errorMessage = "Invalid server message";
+            },
+            onSuccess: () => undefined,
+          }),
+        ),
+      );
     });
-    ws.addEventListener("close", () => { connected = false; socket = null; for (const item of pending.values()) item.reject(new Error("WebSocket closed")); pending.clear(); });
-    ws.addEventListener("error", () => { errorMessage = "WebSocket error"; });
+    ws.addEventListener("close", () => {
+      void Effect.runPromise(
+        Effect.gen(function* () {
+          connected = false;
+          socket = null;
+          const waiting = [...pending.values()];
+          pending.clear();
+          for (const item of waiting) {
+            yield* Deferred.fail(item, new Error("WebSocket closed"));
+          }
+        }),
+      );
+    });
+    ws.addEventListener("error", () => {
+      errorMessage = "WebSocket error";
+    });
     return () => ws.close();
   }
+
   function mutate(message: Extract<ClientMessage, { type: "sync" }>, afterSuccess?: () => void) {
-    loading = true; errorMessage = null;
+    loading = true;
+    errorMessage = null;
     const requestId = crypto.randomUUID();
-    const promise = new Promise<void>((resolve, reject) => pending.set(requestId, { resolve, reject }));
-    try { send(message, requestId); promise.then(() => afterSuccess?.()).catch((e) => errorMessage = e.message).finally(() => loading = false); }
-    catch (e) { pending.delete(requestId); errorMessage = String(e); loading = false; }
+    void Effect.runPromise(
+      Effect.gen(function* () {
+        const deferred = yield* Deferred.make<void, Error>();
+        pending.set(requestId, deferred);
+        yield* send(message, requestId);
+        yield* Deferred.await(deferred);
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => {
+            pending.delete(requestId);
+            errorMessage = error.message;
+            loading = false;
+          },
+          onSuccess: () => {
+            pending.delete(requestId);
+            afterSuccess?.();
+            loading = false;
+          },
+        }),
+      ),
+    );
   }
-  function addTodo() { const title = newTitle.trim(); if (title) mutate({ type: "sync", mutation: "addTodo", params: [title] }, () => newTitle = ""); }
-  function toggleTodo(id: number) { mutate({ type: "sync", mutation: "toggleTodo", params: [id] }); }
-  function deleteTodo(id: number) { mutate({ type: "sync", mutation: "deleteTodo", params: [id] }); }
-  function clearCompleted() { mutate({ type: "sync", mutation: "clearCompleted", params: [] }); }
+
+  function addTodo() {
+    const title = newTitle.trim();
+    if (title) mutate({ type: "sync", mutation: "addTodo", params: [title] }, () => (newTitle = ""));
+  }
+  function toggleTodo(id: number) {
+    mutate({ type: "sync", mutation: "toggleTodo", params: [id] });
+  }
+  function deleteTodo(id: number) {
+    mutate({ type: "sync", mutation: "deleteTodo", params: [id] });
+  }
+  function clearCompleted() {
+    mutate({ type: "sync", mutation: "clearCompleted", params: [] });
+  }
   onMount(connect);
 </script>
 

@@ -1,18 +1,32 @@
 import { Effect, Equal, Exit } from "effect";
 
 import {
+  TopicBuildError,
   type ListenerId,
   type MutationMap,
+  type OperationError,
   type OperationParams,
   type QueryMap,
   type StringKey,
   type SyncEngineInterface,
   type Topic,
-  type TopicBuildError,
+  type TopicValidationError,
   type UnknownQueryError,
 } from "@do-sync-engine/core";
 
 type DurableObjectWebSocketAttachment = { topics?: unknown[] };
+type SubscriptionError<Q extends QueryMap<Q>> =
+  | TopicBuildError
+  | TopicValidationError
+  | UnknownQueryError
+  | OperationError<Q[StringKey<Q>]>;
+
+const serializeAttachment = (ws: WebSocket, value: unknown) =>
+  Effect.try({
+    try: () => ws.serializeAttachment(value),
+    catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+  });
+
 export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   private readonly subscriptions = new Map<
     WebSocket,
@@ -33,89 +47,90 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     name: StringKey<Q>,
     params: readonly unknown[],
     requestId: string,
-  ): Effect.Effect<void, TopicBuildError | UnknownQueryError> {
+  ): Effect.Effect<void, SubscriptionError<Q>> {
+    return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+      const topic = yield* this.engine.createTopic<StringKey<Q>>(
+        name,
+        params as OperationParams<Q[StringKey<Q>]>,
+      );
+      const value = yield* this.engine.query<StringKey<Q>>(topic);
+      const initial = { type: "queryResult", requestId, topic, value };
+      yield* Effect.try({
+        try: () => JSON.stringify(initial),
+        catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+      });
+      const map =
+        this.subscriptions.get(ws) ??
+        new Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>();
+      const bucket = map.get(topic.name) ?? [];
+      if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic))) {
+        yield* this.sendEffect(ws, initial);
+        return;
+      }
+      const previous = yield* Effect.try({
+        try: () => ws.deserializeAttachment(),
+        catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+      });
+      const listener = (event: { topic: Topic; value: unknown }) =>
+        this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
+      const listenerId = yield* this.engine.subscribe<StringKey<Q>>(topic, listener);
+      yield* Effect.sync(() => {
+        this.subscriptions.set(ws, map);
+        map.set(topic.name, bucket);
+        bucket.push({ topic, listenerId });
+      });
+      const topics = [...map.values()].flatMap((entries) => entries.map((entry) => entry.topic));
+      yield* serializeAttachment(ws, { topics }).pipe(
+        Effect.matchEffect({
+          onFailure: (error) =>
+            Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+              yield* this.engine.unsubscribe(listenerId);
+              yield* Effect.sync(() => this.removeEntry(ws, map, topic.name, listenerId));
+              return yield* Effect.fail(error);
+            }),
+          onSuccess: () => Effect.void,
+        }),
+      );
+      yield* this.sendEffect(ws, initial).pipe(
+        Effect.matchEffect({
+          onFailure: (error) => this.rollbackSubscribe(ws, previous, map, topic, listenerId, error),
+          onSuccess: () => Effect.void,
+        }),
+      );
+    });
+  }
+  unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, TopicBuildError> {
     return Effect.gen(
       function* (this: SubscriptionRegistry<Q, M>) {
-        const topic = yield* this.engine.createTopic<StringKey<Q>>(
-          name,
-          params as OperationParams<Q[StringKey<Q>]>,
+        const map = this.subscriptions.get(ws);
+        const bucket = map?.get(topic.name);
+        const index =
+          bucket?.findIndex(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)) ?? -1;
+        if (!map || !bucket || index < 0) return false;
+        const topics = [...map.values()].flatMap((entries) =>
+          entries
+            .filter((_, entryIndex) => entries !== bucket || entryIndex !== index)
+            .map((entry) => entry.topic),
         );
-        const value = this.engine.query<StringKey<Q>>(topic);
-        const initial = { type: "queryResult", requestId, topic, value };
-        JSON.stringify(initial);
-        const map =
-          this.subscriptions.get(ws) ??
-          new Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>();
-        this.subscriptions.set(ws, map);
-        const bucket = map.get(topic.name) ?? [];
-        map.set(topic.name, bucket);
-        if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic))) {
-          this.send(ws, initial);
-          return;
-        }
-        const previous = ws.deserializeAttachment();
-        const listener = (event: { topic: Topic; value: unknown }) =>
-          this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
-        const listenerId = this.engine.subscribe<StringKey<Q>>(topic, listener);
-        bucket.push({ topic, listenerId });
-        try {
-          ws.serializeAttachment({
-            topics: [...map.values()].flatMap((entries) => entries.map((entry) => entry.topic)),
-          });
-        } catch (error) {
-          this.engine.unsubscribe(listenerId);
-          bucket.pop();
-          throw error;
-        }
-        try {
-          this.send(ws, initial);
-        } catch (error) {
-          try {
-            ws.serializeAttachment(previous);
-          } catch {
-            ws.close(1011, "Subscription rollback failed");
-            this.clear(ws);
-            return;
-          }
-          this.engine.unsubscribe(listenerId);
-          bucket.pop();
-          throw error;
-        }
+        yield* serializeAttachment(ws, { topics });
+        const entry = bucket[index];
+        const removed = yield* this.engine.unsubscribe(entry.listenerId);
+        yield* Effect.sync(() => {
+          bucket.splice(index, 1);
+          if (bucket.length === 0) map.delete(topic.name);
+          if (map.size === 0) this.subscriptions.delete(ws);
+        });
+        return removed;
       }.bind(this),
     );
   }
-  unsubscribe(ws: WebSocket, topic: Topic): boolean {
-    const map = this.subscriptions.get(ws);
-    const bucket = map?.get(topic.name);
-    const index =
-      bucket?.findIndex(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)) ?? -1;
-    if (!map || !bucket || index < 0) return false;
-    ws.serializeAttachment({
-      topics: [...map.values()].flatMap((entries) =>
-        entries
-          .filter((_, entryIndex) => entries !== bucket || entryIndex !== index)
-          .map((entry) => entry.topic),
-      ),
-    });
-    const entry = bucket[index];
-    const removed = this.engine.unsubscribe(entry.listenerId);
-    bucket.splice(index, 1);
-    if (bucket.length === 0) map.delete(topic.name);
-    if (map.size === 0) this.subscriptions.delete(ws);
-    return removed;
-  }
-  restore(ws: WebSocket, sendSnapshots = true): Effect.Effect<void> {
+  restore(ws: WebSocket, sendSnapshots = true): Effect.Effect<void, SubscriptionError<Q>> {
     return Effect.gen(
       function* (this: SubscriptionRegistry<Q, M>) {
-        const existing = this.subscriptions.get(ws);
-        if (existing) {
-          for (const bucket of existing.values()) {
-            for (const entry of bucket) this.engine.unsubscribe(entry.listenerId);
-          }
-        }
-        const candidates = this.read(ws);
+        yield* this.clear(ws);
+        const candidates = yield* Effect.sync(() => this.read(ws));
         const map = new Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>();
-        this.subscriptions.set(ws, map);
+        yield* Effect.sync(() => this.subscriptions.set(ws, map));
         const topics: Topic[] = [];
         const snapshots: Array<{ topic: Topic; value: unknown }> = [];
         for (const candidate of candidates) {
@@ -133,30 +148,85 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
           if (Exit.isFailure(result)) continue;
           const topic = result.value;
           const bucket = map.get(topic.name) ?? [];
-          map.set(topic.name, bucket);
+          yield* Effect.sync(() => map.set(topic.name, bucket));
           if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)))
             continue;
           const listener = (event: { topic: Topic; value: unknown }) =>
             this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
           const typedTopic = topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>;
-          const value = this.engine.query<StringKey<Q>>(typedTopic);
-          const listenerId = this.engine.subscribe<StringKey<Q>>(typedTopic, listener);
-          topics.push(topic);
-          bucket.push({ topic, listenerId });
+          const value = yield* this.engine.query<StringKey<Q>>(typedTopic);
+          const listenerId = yield* this.engine.subscribe<StringKey<Q>>(typedTopic, listener);
+          yield* Effect.sync(() => {
+            topics.push(topic);
+            bucket.push({ topic, listenerId });
+          });
           if (sendSnapshots) snapshots.push({ topic, value });
         }
-        ws.serializeAttachment({ topics });
-        for (const snapshot of snapshots) this.send(ws, { type: "queryResult", ...snapshot });
+        yield* serializeAttachment(ws, { topics });
+        if (sendSnapshots)
+          yield* Effect.sync(() => {
+            for (const snapshot of snapshots) this.send(ws, { type: "queryResult", ...snapshot });
+          });
       }.bind(this),
     );
   }
-  clear(ws: WebSocket): void {
-    const map = this.subscriptions.get(ws);
-    if (!map) return;
-    for (const bucket of map.values()) {
-      for (const entry of bucket) this.engine.unsubscribe(entry.listenerId);
-    }
-    this.subscriptions.delete(ws);
+  clear(ws: WebSocket): Effect.Effect<void> {
+    return Effect.gen(
+      function* (this: SubscriptionRegistry<Q, M>) {
+        const map = this.subscriptions.get(ws);
+        if (!map) return;
+        for (const bucket of map.values())
+          for (const entry of bucket) yield* this.engine.unsubscribe(entry.listenerId);
+        yield* Effect.sync(() => this.subscriptions.delete(ws));
+      }.bind(this),
+    );
+  }
+
+  private sendEffect(ws: WebSocket, message: unknown): Effect.Effect<void, TopicBuildError> {
+    return Effect.try({
+      try: () => this.send(ws, message),
+      catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+    });
+  }
+
+  private removeEntry(
+    ws: WebSocket,
+    map: Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>,
+    name: string,
+    listenerId: ListenerId,
+  ): void {
+    const bucket = map.get(name);
+    if (!bucket) return;
+    const index = bucket.findIndex((entry) => entry.listenerId === listenerId);
+    if (index < 0) return;
+    bucket.splice(index, 1);
+    if (bucket.length === 0) map.delete(name);
+    if (map.size === 0) this.subscriptions.delete(ws);
+  }
+
+  private rollbackSubscribe(
+    ws: WebSocket,
+    previous: unknown,
+    map: Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>,
+    topic: Topic,
+    listenerId: ListenerId,
+    error: SubscriptionError<Q>,
+  ): Effect.Effect<void, SubscriptionError<Q>> {
+    return serializeAttachment(ws, previous).pipe(
+      Effect.matchEffect({
+        onFailure: () =>
+          Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+            yield* Effect.sync(() => ws.close(1011, "Subscription rollback failed"));
+            yield* this.clear(ws);
+          }),
+        onSuccess: () =>
+          Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+            yield* this.engine.unsubscribe(listenerId);
+            yield* Effect.sync(() => this.removeEntry(ws, map, topic.name, listenerId));
+            return yield* Effect.fail(error);
+          }),
+      }),
+    );
   }
   private read(ws: WebSocket): unknown[] {
     const value = ws.deserializeAttachment() as DurableObjectWebSocketAttachment | undefined;

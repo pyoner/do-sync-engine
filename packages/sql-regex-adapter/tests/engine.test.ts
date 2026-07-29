@@ -1,8 +1,14 @@
-import { Effect } from "effect";
+import { Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { createAdapter, type SqlRow } from "../src/index.ts";
-import { SyncEngine, Topic, toTables } from "@do-sync-engine/core";
+import { createAdapter, type SqlAdapterError, type SqlRow } from "../src/index.ts";
+import {
+  SyncEngine,
+  Topic,
+  TopicValidationError,
+  UnknownQueryError,
+  toTables,
+} from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 
 const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
@@ -33,28 +39,36 @@ function setupDb(storage: DatabaseSync) {
 
 describe("SyncEngine topics and events", () => {
   let storage: DatabaseSync;
-  let allUsers: Query<[], SqlRow[]>;
-  let userById: Query<[number], SqlRow[]>;
-  let postsOnly: Query<[], SqlRow[]>;
-  let insertUser: Mutation<[string], unknown>;
-  let updateUserName: Mutation<[string, number], unknown>;
+  let allUsers: Query<[], SqlRow[], SqlAdapterError>;
+  let userById: Query<[number], SqlRow[], SqlAdapterError>;
+  let postsOnly: Query<[], SqlRow[], SqlAdapterError>;
+  let insertUser: Mutation<[string], unknown, SqlAdapterError>;
+  let updateUserName: Mutation<[string, number], unknown, SqlAdapterError>;
   let engine: SyncEngine<any, any>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     storage = new DatabaseSync(":memory:");
     setupDb(storage);
-    const sql = createAdapter(storage);
+    const sql = await runTopic(createAdapter(storage));
 
     const allUsersSql = "SELECT * FROM users ORDER BY id";
-    allUsers = sql(allUsersSql) as Query<[], SqlRow[]>;
+    allUsers = (await runTopic(sql(allUsersSql))) as Query<[], SqlRow[], SqlAdapterError>;
     const userByIdSql = "SELECT * FROM users WHERE id = ?";
-    userById = sql(userByIdSql) as Query<[number], SqlRow[]>;
+    userById = (await runTopic(sql(userByIdSql))) as Query<[number], SqlRow[], SqlAdapterError>;
     const postsOnlySql = "SELECT * FROM posts ORDER BY id";
-    postsOnly = sql(postsOnlySql) as Query<[], SqlRow[]>;
+    postsOnly = (await runTopic(sql(postsOnlySql))) as Query<[], SqlRow[], SqlAdapterError>;
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
-    insertUser = sql(insertUserSql) as Mutation<[string], unknown>;
+    insertUser = (await runTopic(sql(insertUserSql))) as Mutation<
+      [string],
+      unknown,
+      SqlAdapterError
+    >;
     const updateUserNameSql = "UPDATE users SET name = ? WHERE id = ?";
-    updateUserName = sql(updateUserNameSql) as Mutation<[string, number], unknown>;
+    updateUserName = (await runTopic(sql(updateUserNameSql))) as Mutation<
+      [string, number],
+      unknown,
+      SqlAdapterError
+    >;
 
     engine = new SyncEngine({
       queries: { allUsers, userById, postsOnly },
@@ -84,10 +98,16 @@ describe("SyncEngine topics and events", () => {
   test("runs queries through the public engine interface", async () => {
     const topic = await runTopic(engine.createTopic("userById", [2]));
 
-    expect(() => engine.query(new Topic({ name: "missing", params: topic.params }))).toThrow(
-      "Unknown query: missing",
+    const missing = await Effect.runPromiseExit(
+      engine.query(new Topic({ name: "missing", params: topic.params })),
     );
-    expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
+    expect(Exit.isFailure(missing)).toBe(true);
+    if (Exit.isFailure(missing)) {
+      const error = Exit.findErrorOption(missing);
+      expect(Option.isSome(error)).toBe(true);
+      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+    }
+    expect(await runTopic(engine.query(topic))).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("routes same-query topics by full parameters", async () => {
@@ -95,10 +115,10 @@ describe("SyncEngine topics and events", () => {
     const secondTopic = await runTopic(engine.createTopic("userById", [2]));
     const first = captureEvents();
     const second = captureEvents();
-    engine.subscribe(firstTopic, first.listener);
-    engine.subscribe(secondTopic, second.listener);
+    await runTopic(engine.subscribe(firstTopic, first.listener));
+    await runTopic(engine.subscribe(secondTopic, second.listener));
 
-    engine.sync("updateUserName", ["alice-updated", 1]);
+    await runTopic(engine.sync("updateUserName", ["alice-updated", 1]));
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
@@ -110,10 +130,10 @@ describe("SyncEngine topics and events", () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    engine.subscribe(topic, first.listener);
-    engine.subscribe(topic, second.listener);
+    await runTopic(engine.subscribe(topic, first.listener));
+    await runTopic(engine.subscribe(topic, second.listener));
 
-    engine.sync("insertUser", ["charlie"]);
+    await runTopic(engine.sync("insertUser", ["charlie"]));
 
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
@@ -124,7 +144,7 @@ describe("SyncEngine topics and events", () => {
 
   test("query receives the topic params and skips non-overlapping tables", async () => {
     const runParams: number[] = [];
-    const trackedUserById: Query<[number], SqlRow[]> = {
+    const trackedUserById: Query<[number], SqlRow[], SqlAdapterError> = {
       tables: new Set(userById.tables),
       run: (id) => {
         runParams.push(id);
@@ -132,7 +152,7 @@ describe("SyncEngine topics and events", () => {
       },
     };
     let postsRuns = 0;
-    const trackedPosts: Query<[], SqlRow[]> = {
+    const trackedPosts: Query<[], SqlRow[], SqlAdapterError> = {
       tables: new Set(postsOnly.tables),
       run: () => {
         postsRuns += 1;
@@ -146,10 +166,10 @@ describe("SyncEngine topics and events", () => {
     const topic = await runTopic(engine.createTopic("trackedUserById", [2]));
     const postsTopic = await runTopic(engine.createTopic("trackedPosts", []));
     const captured = captureEvents();
-    engine.subscribe(topic, captured.listener);
-    engine.subscribe(postsTopic, captured.listener);
+    await runTopic(engine.subscribe(topic, captured.listener));
+    await runTopic(engine.subscribe(postsTopic, captured.listener));
 
-    engine.sync("updateUserName", ["bob_updated", 2]);
+    await runTopic(engine.sync("updateUserName", ["bob_updated", 2]));
 
     expect(runParams).toEqual([2]);
     expect(postsRuns).toBe(0);
@@ -164,41 +184,45 @@ describe("SyncEngine topics and events", () => {
       tables: toTables(["users"]),
       run: () => {
         queryRuns += 1;
-        return [];
+        return Effect.succeed([]);
       },
     };
-    const failingQuery: Query<[], SqlRow[]> = {
+    const failingQuery: Query<[], SqlRow[], Error> = {
       tables: toTables(["users"]),
-      run: () => {
-        throw new Error("query failed");
-      },
+      run: () => Effect.fail(new Error("query failed")),
     };
     engine = new SyncEngine({
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
-    engine.sync("insertUser", ["charlie"]);
+    await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(queryRuns).toBe(0);
 
     const failingTopic = await runTopic(engine.createTopic("failingQuery", []));
-    engine.subscribe(failingTopic, noopPublish);
-    expect(() => engine.sync("insertUser", ["dave"])).toThrow("query failed");
+    await runTopic(engine.subscribe(failingTopic, noopPublish));
+    const failure = await Effect.runPromiseExit(engine.sync("insertUser", ["dave"]));
+    expect(Exit.isFailure(failure)).toBe(true);
+    if (Exit.isFailure(failure)) {
+      const error = Exit.findErrorOption(failure);
+      expect(Option.isSome(error)).toBe(true);
+      if (Option.isSome(error)) expect(error.value).toMatchObject({ message: "query failed" });
+    }
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = engine.subscribe(topic, first.listener);
-    expect(engine.subscribe(topic, first.listener)).toEqual(firstListenerId);
-    const secondListenerId = engine.subscribe(topic, second.listener);
+    const firstListenerId = await runTopic(engine.subscribe(topic, first.listener));
+    expect(await runTopic(engine.subscribe(topic, first.listener))).toEqual(firstListenerId);
+    const secondListenerId = await runTopic(engine.subscribe(topic, second.listener));
     expect(secondListenerId).not.toEqual(firstListenerId);
 
-    engine.sync("insertUser", ["charlie"]);
+    await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
-    expect(engine.unsubscribe(firstListenerId)).toBe(true);
-    engine.sync("insertUser", ["dave"]);
+    expect(await runTopic(engine.unsubscribe(firstListenerId))).toBe(true);
+    await runTopic(engine.sync("insertUser", ["dave"]));
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
   });
@@ -207,14 +231,14 @@ describe("SyncEngine topics and events", () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = engine.subscribe(topic, first.listener);
-    const secondListenerId = engine.subscribe(topic, second.listener);
+    const firstListenerId = await runTopic(engine.subscribe(topic, first.listener));
+    const secondListenerId = await runTopic(engine.subscribe(topic, second.listener));
     // Test-only access verifies the private topic lifecycle.
     const registry = (engine as unknown as { registry: Map<unknown, unknown> }).registry;
 
-    expect(engine.unsubscribe(firstListenerId)).toBe(true);
+    expect(await runTopic(engine.unsubscribe(firstListenerId))).toBe(true);
     expect(registry.size).toBe(1);
-    expect(engine.unsubscribe(secondListenerId)).toBe(true);
+    expect(await runTopic(engine.unsubscribe(secondListenerId))).toBe(true);
     expect(registry.size).toBe(0);
   });
 
@@ -227,8 +251,8 @@ describe("SyncEngine topics and events", () => {
     const postsTopic = await runTopic(exposed.createTopic("postsOnly", []));
     const users = captureEvents();
     const posts = captureEvents();
-    exposed.subscribe(usersTopic, users.listener);
-    exposed.subscribe(postsTopic, posts.listener);
+    await runTopic(exposed.subscribe(usersTopic, users.listener));
+    await runTopic(exposed.subscribe(postsTopic, posts.listener));
 
     exposed.exposePublish({ topic: usersTopic, value: 1 });
     expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);
@@ -239,29 +263,32 @@ describe("SyncEngine topics and events", () => {
     const calls: string[] = [];
     const synchronousQuery: Query<[], number> = {
       tables: toTables(["users"]),
-      run: () => {
-        calls.push("query");
-        return 1;
-      },
+      run: () =>
+        Effect.sync(() => {
+          calls.push("query");
+          return 1;
+        }),
     };
-    const synchronousMutation = createAdapter(storage)(
-      "INSERT INTO users (name) VALUES ('synchronous')",
-    ) as Mutation<[], unknown>;
-    const trackedSynchronousMutation: Mutation<[], unknown> = {
+    const sql = await runTopic(createAdapter(storage));
+    const synchronousMutation = (await runTopic(
+      sql("INSERT INTO users (name) VALUES ('synchronous')"),
+    )) as Mutation<[], unknown, SqlAdapterError>;
+    const trackedSynchronousMutation: Mutation<[], unknown, SqlAdapterError> = {
       ...synchronousMutation,
-      run: () => {
-        calls.push("mutation");
-        return synchronousMutation.run();
-      },
+      run: () =>
+        Effect.gen(function* () {
+          calls.push("mutation");
+          return yield* synchronousMutation.run();
+        }),
     };
     engine = new SyncEngine({
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
     });
     const topic = await runTopic(engine.createTopic("synchronousQuery", []));
-    engine.subscribe(topic, () => calls.push("listener"));
+    await runTopic(engine.subscribe(topic, () => calls.push("listener")));
 
-    engine.sync("synchronousMutation", []);
+    await runTopic(engine.sync("synchronousMutation", []));
 
     expect(calls).toEqual(["mutation", "query", "listener"]);
   });
@@ -269,29 +296,47 @@ describe("SyncEngine topics and events", () => {
   test("allows asynchronous listeners without delaying sync", async () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     let completed = false;
-    engine.subscribe(topic, async () => {
-      await Promise.resolve();
-      completed = true;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
     });
+    await runTopic(
+      engine.subscribe(topic, async () => {
+        await gate;
+        completed = true;
+      }),
+    );
 
-    expect(engine.sync("insertUser", ["charlie"])).toBeUndefined();
+    await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(completed).toBe(false);
-
+    release();
     await Promise.resolve();
     expect(completed).toBe(true);
   });
 
   test("validates manually supplied topics", async () => {
     const validTopic = await runTopic(engine.createTopic("allUsers", []));
-    expect(() =>
+    const missing = await Effect.runPromiseExit(
       engine.subscribe(new Topic({ name: "missing", params: validTopic.params }), noopPublish),
-    ).toThrow("Unknown query: missing");
-    engine.subscribe(validTopic, noopPublish);
-    expect(() =>
+    );
+    expect(Exit.isFailure(missing)).toBe(true);
+    if (Exit.isFailure(missing)) {
+      const error = Exit.findErrorOption(missing);
+      expect(Option.isSome(error)).toBe(true);
+      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+    }
+    await runTopic(engine.subscribe(validTopic, noopPublish));
+    await runTopic(
       engine.subscribe(new Topic({ name: validTopic.name, params: [1] }), noopPublish),
-    ).not.toThrow();
-    expect(() =>
+    );
+    const invalidParams = await Effect.runPromiseExit(
       engine.subscribe(new Topic({ name: "allUsers", params: [() => 1] }), noopPublish),
-    ).toThrow("JSON-safe values");
+    );
+    expect(Exit.isFailure(invalidParams)).toBe(true);
+    if (Exit.isFailure(invalidParams)) {
+      const error = Exit.findErrorOption(invalidParams);
+      expect(Option.isSome(error)).toBe(true);
+      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+    }
   });
 });

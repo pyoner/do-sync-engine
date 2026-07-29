@@ -1,7 +1,16 @@
-import { Effect, Equal, Hash, Schema } from "effect";
+import { Effect, Equal, Exit, Hash, Option, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
-import { SyncEngine, Topic, TopicSchema, toTables } from "../src/index.js";
-import { validateTopic } from "../src/helpers.js";
+import {
+  SyncEngine,
+  Topic,
+  TopicBuildError,
+  TopicSchema,
+  TopicValidationError,
+  UnknownMutationError,
+  UnknownQueryError,
+  toTables,
+} from "../src/index.js";
+import { buildTopic, clone, validateTopic } from "../src/helpers.js";
 import type {
   Branded,
   Mutation,
@@ -16,13 +25,13 @@ test("exports canonical topic and listener APIs", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: () => 1,
+      run: () => Effect.succeed(1),
     } satisfies Query<[], number>,
   };
   const mutations = {
     noop: {
       tables: toTables([]),
-      run: () => ({ ok: true }),
+      run: () => Effect.succeed({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
   const engine = new SyncEngine({ queries, mutations });
@@ -66,17 +75,90 @@ test("exports canonical topic and listener APIs", async () => {
   expect(Hash.hash(decodedTopic)).toBe(Hash.hash(topic));
 
   const listener: Listener = () => {};
-  const listenerId: ListenerId = engine.subscribe(topic, listener);
+  const listenerId = await Effect.runPromise(engine.subscribe(topic, listener));
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
-  expect(() =>
+
+  const invalidTopic = await Effect.runPromiseExit(
     validateTopic(new Topic({ name: "numbers", params: [new Map()] }), new Set(["numbers"])),
-  ).toThrow("plain objects and arrays");
-  expect(() =>
+  );
+  expect(Exit.isFailure(invalidTopic)).toBe(true);
+  if (Exit.isFailure(invalidTopic)) {
+    const error = Exit.findErrorOption(invalidTopic);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+  }
+
+  const unsupportedFunction = await Effect.runPromiseExit(
     validateTopic(new Topic({ name: "numbers", params: [() => 1] }), new Set(["numbers"])),
-  ).toThrow("JSON-safe values");
-  expect(() =>
+  );
+  expect(Exit.isFailure(unsupportedFunction)).toBe(true);
+  if (Exit.isFailure(unsupportedFunction)) {
+    const error = Exit.findErrorOption(unsupportedFunction);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+  }
+
+  const unsupportedSymbol = await Effect.runPromiseExit(
     validateTopic(new Topic({ name: "numbers", params: [Symbol("x")] }), new Set(["numbers"])),
-  ).toThrow("JSON-safe values");
+  );
+  expect(Exit.isFailure(unsupportedSymbol)).toBe(true);
+  if (Exit.isFailure(unsupportedSymbol)) {
+    const error = Exit.findErrorOption(unsupportedSymbol);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+  }
+
+  const unknownQuery = await Effect.runPromiseExit(
+    validateTopic(new Topic({ name: "missing", params: [] }), new Set(["numbers"])),
+  );
+  expect(Exit.isFailure(unknownQuery)).toBe(true);
+  if (Exit.isFailure(unknownQuery)) {
+    const error = Exit.findErrorOption(unknownQuery);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+  }
+
+  const cloneFailure = await Effect.runPromiseExit(clone(() => 1));
+  expect(Exit.isFailure(cloneFailure)).toBe(true);
+  if (Exit.isFailure(cloneFailure)) {
+    const error = Exit.findErrorOption(cloneFailure);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) {
+      expect(error.value).toBeInstanceOf(TopicBuildError);
+      expect(error.value.operation).toBe("clone");
+    }
+  }
+
+  const serializationFailure = await Effect.runPromiseExit(buildTopic("numbers", [1n]));
+  expect(Exit.isFailure(serializationFailure)).toBe(true);
+  if (Exit.isFailure(serializationFailure)) {
+    const error = Exit.findErrorOption(serializationFailure);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) {
+      expect(error.value).toBeInstanceOf(TopicBuildError);
+      expect(error.value.operation).toBe("serialize");
+    }
+  }
+  const unknownQueries: Record<string, Query<unknown[], unknown>> = {};
+  const unknownMutations: Record<string, Mutation<unknown[], unknown>> = {};
+  const unknownEngine = new SyncEngine({ queries: unknownQueries, mutations: unknownMutations });
+  const unknownMutationFailure = await Effect.runPromiseExit(unknownEngine.sync("missing", []));
+  expect(Exit.isFailure(unknownMutationFailure)).toBe(true);
+  if (Exit.isFailure(unknownMutationFailure)) {
+    const error = Exit.findErrorOption(unknownMutationFailure);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownMutationError);
+  }
+  const unknownQueryFailure = await Effect.runPromiseExit(
+    unknownEngine.query(new Topic({ name: "missing", params: [] })),
+  );
+  expect(Exit.isFailure(unknownQueryFailure)).toBe(true);
+  if (Exit.isFailure(unknownQueryFailure)) {
+    const error = Exit.findErrorOption(unknownQueryFailure);
+    expect(Option.isSome(error)).toBe(true);
+    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+  }
+
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -87,21 +169,21 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
-  expect(engine.unsubscribe(listenerId)).toBe(true);
-  expect(engine.unsubscribe(listenerId)).toBe(false);
+  expect(await Effect.runPromise(engine.unsubscribe(listenerId))).toBe(true);
+  expect(await Effect.runPromise(engine.unsubscribe(listenerId))).toBe(false);
 });
 
 test("typed topic params, listener values, mutations, and sync", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: () => [1, 2, 3],
+      run: () => Effect.succeed([1, 2, 3]),
     } satisfies Query<[], number[]>,
   };
   const mutations = {
     noop: {
       tables: toTables(["numbers"]),
-      run: () => ({ ok: true }),
+      run: () => Effect.succeed({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
   const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine({
@@ -111,10 +193,12 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const topic: Topic<"numbers", []> = await Effect.runPromise(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
-  const listenerId = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
-    events.push({ topic: publishedTopic, value });
-  });
-  engine.sync("noop", []);
+  const listenerId = await Effect.runPromise(
+    engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
+      events.push({ topic: publishedTopic, value });
+    }),
+  );
+  await Effect.runPromise(engine.sync("noop", []));
 
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
@@ -127,7 +211,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     // @ts-expect-error — subscribe callback must receive a listener event
     void engine.subscribe(topic, (value: number) => value.toFixed());
     // @ts-expect-error — sync expects no params
-    engine.sync("noop", [1]);
+    void engine.sync("noop", [1]);
     const name = topic.name;
     // @ts-expect-error — Topic properties are readonly
     topic.name = name;
@@ -146,13 +230,13 @@ test("typed createTopic params and listener handle", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: (value: number) => value,
+      run: (value: number) => Effect.succeed(value),
     } satisfies Query<[number], number>,
   };
   const mutations = {
     noop: {
       tables: toTables([]),
-      run: () => ({}),
+      run: () => Effect.succeed({}),
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations });
@@ -168,7 +252,7 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const listenerId = engine.subscribe(topic, listener);
+  const listenerId = await Effect.runPromise(engine.subscribe(topic, listener));
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
-  expect(engine.unsubscribe(listenerId)).toBe(true);
+  expect(await Effect.runPromise(engine.unsubscribe(listenerId))).toBe(true);
 });

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { TopicSchema } from "@do-sync-engine/core";
 import type { OperationParams, OperationResult, StringKey, Topic } from "@do-sync-engine/core";
 
@@ -63,8 +63,6 @@ export type DecodedClientCommand =
       params: readonly unknown[];
     };
 
-export type DecodeResult = { command: DecodedClientCommand } | { error: ErrorMessage };
-
 const requestIdSchema = Schema.String.check(Schema.isPattern(/\S/));
 const clientCommandSchema = Schema.Union([
   Schema.Struct({
@@ -86,36 +84,61 @@ const clientCommandSchema = Schema.Union([
   }),
 ]);
 
-export function decodeClientCommand(message: string | ArrayBuffer): DecodeResult {
-  if (typeof message !== "string") {
-    return { error: { type: "error", message: "Expected text WebSocket message" } };
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(message);
-  } catch {
-    return { error: { type: "error", message: "Invalid JSON message" } };
-  }
-  try {
-    return { command: Schema.decodeUnknownSync(clientCommandSchema)(value) };
-  } catch {
+export const decodeClientCommand = (message: string | ArrayBuffer) =>
+  Effect.gen(function* () {
+    if (typeof message !== "string") {
+      return yield* Effect.fail<ErrorMessage>({
+        type: "error",
+        message: "Expected text WebSocket message",
+      });
+    }
+    const value = yield* Effect.try({
+      try: () => JSON.parse(message) as unknown,
+      catch: () =>
+        ({
+          type: "error",
+          message: "Invalid JSON message",
+        }) satisfies ErrorMessage,
+    });
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return { error: { type: "error", message: "Invalid JSON message" } };
+      return yield* Effect.fail<ErrorMessage>({
+        type: "error",
+        message: "Invalid JSON message",
+      });
     }
-    const requestId = (value as Record<string, unknown>).requestId;
-    if (typeof requestId !== "string" || !requestId.trim()) {
-      return { error: { type: "error", message: "requestId required" } };
-    }
-    const record = value as Record<string, unknown>;
-    if ((record as Record<string, unknown>).type === "subscribe") {
-      return { error: { type: "error", requestId, message: "query and params required" } };
-    }
-    if ((record as Record<string, unknown>).type === "unsubscribe") {
-      return { error: { type: "error", requestId, message: "topic required" } };
-    }
-    if ((record as Record<string, unknown>).type === "sync") {
-      return { error: { type: "error", requestId, message: "mutation and params required" } };
-    }
-    return { error: { type: "error", requestId, message: "Unknown message type" } };
-  }
-}
+    return yield* Schema.decodeUnknownEffect(clientCommandSchema)(value).pipe(
+      Effect.mapError(() => {
+        const record = value as Record<string, unknown>;
+        const requestId = record.requestId;
+        if (typeof requestId !== "string" || !requestId.trim()) {
+          return { type: "error", message: "requestId required" } satisfies ErrorMessage;
+        }
+        if (record.type === "subscribe") {
+          return {
+            type: "error",
+            requestId,
+            message: "query and params required",
+          } satisfies ErrorMessage;
+        }
+        if (record.type === "unsubscribe") {
+          return {
+            type: "error",
+            requestId,
+            message: "topic required",
+          } satisfies ErrorMessage;
+        }
+        if (record.type === "sync") {
+          return {
+            type: "error",
+            requestId,
+            message: "mutation and params required",
+          } satisfies ErrorMessage;
+        }
+        return {
+          type: "error",
+          requestId,
+          message: "Unknown message type",
+        } satisfies ErrorMessage;
+      }),
+    );
+  });

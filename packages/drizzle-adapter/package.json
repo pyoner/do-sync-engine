@@ -21,6 +21,9 @@
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },
+  "dependencies": {
+    "effect": "catalog:"
+  },
   "devDependencies": {
     "@do-sync-engine/core": "workspace:*",
     "@types/node": "^26.1.1",
@@ -31,9 +34,5 @@
   "peerDependencies": {
     "drizzle-orm": "catalog:"
   },
-  "inlinedDependencies": {
-    "effect": "4.0.0-beta.102",
-    "fast-check": "4.9.0",
-    "pure-rand": "8.4.2"
-  }
+  "inlinedDependencies": {}
 }

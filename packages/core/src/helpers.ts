@@ -12,16 +12,17 @@ export class UnknownQueryError extends Schema.TaggedErrorClass<UnknownQueryError
     query: Schema.String,
   },
 ) {}
+export class UnknownMutationError extends Schema.TaggedErrorClass<UnknownMutationError>()(
+  "UnknownMutationError",
+  { mutation: Schema.String },
+) {}
+
+export class TopicValidationError extends Schema.TaggedErrorClass<TopicValidationError>()(
+  "TopicValidationError",
+  { cause: Schema.Unknown },
+) {}
 export function toTables(names: readonly string[]): Set<Table> {
   return new Set(names.map((name) => TableSchema.make(name)));
-}
-
-export function cloneOrThrow<T>(value: T, label: string): T {
-  try {
-    return structuredClone(value);
-  } catch (cause) {
-    throw new TypeError(`${label} must support structuredClone`, { cause });
-  }
 }
 
 export function assertSupportedParams(value: unknown, seen = new WeakSet<object>()): void {
@@ -93,25 +94,16 @@ export function buildTopic<Name extends string, Params extends readonly unknown[
 export function validateTopic(
   topic: unknown,
   knownQueryNames: { has(query: string): boolean },
-): Topic<string, readonly unknown[]> {
-  let candidate: typeof TopicSchema.Type;
-  try {
-    candidate = Schema.decodeUnknownSync(TopicSchema)(topic);
-  } catch {
-    if (typeof topic !== "object" || topic === null) {
-      throw new TypeError("Topic must be an object");
-    }
-    const value = topic as { name?: unknown; params?: unknown };
-    if (typeof value.name !== "string") {
-      throw new TypeError("Topic name must be a string");
-    }
-    if (!Array.isArray(value.params)) {
-      throw new TypeError("Topic params must be an array");
-    }
-    assertSupportedParams(value.params);
-    throw new TypeError("Topic must be a valid topic");
-  }
-  assertKnownQuery(candidate.name, knownQueryNames);
-  assertSupportedParams(candidate.params);
-  return candidate;
+): Effect.Effect<Topic<string, readonly unknown[]>, TopicValidationError | UnknownQueryError> {
+  return Effect.gen(function* () {
+    const candidate = yield* Schema.decodeUnknownEffect(TopicSchema)(topic).pipe(
+      Effect.mapError((cause) => TopicValidationError.make({ cause })),
+    );
+    yield* Effect.try({
+      try: () => assertSupportedParams(candidate.params),
+      catch: (cause) => TopicValidationError.make({ cause }),
+    });
+    yield* assertKnownQueryEffect(candidate.name, knownQueryNames);
+    return candidate;
+  });
 }

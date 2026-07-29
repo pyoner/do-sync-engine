@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, test } from "vite-plus/test";
@@ -15,12 +16,13 @@ for (const operation of operations) {
     for (const testData of fixture.testData) {
       test(testData.sql, async () => {
         const stub = FIXTURE_DATABASE.get(FIXTURE_DATABASE.newUniqueId());
-        await runInDurableObject(stub, (_instance, state) => {
+        await runInDurableObject(stub, async (_instance, state) => {
           for (const statement of fixture.setup.database) state.storage.sql.exec(statement);
           for (const statement of fixture.setup.seed) state.storage.sql.exec(statement);
-          const op = createAdapter(state.storage.sql)(testData.sql);
+          const adapter = await Effect.runPromise(createAdapter(state.storage.sql));
+          const op = await Effect.runPromise(adapter(testData.sql));
           expect(op.tables).toEqual(new Set(testData.tables));
-          const result = op.run(...(testData.params ?? [])) as {
+          const result = (await Effect.runPromise(op.run(...(testData.params ?? [])))) as {
             rowsWritten: number;
             toArray(): unknown[];
           };

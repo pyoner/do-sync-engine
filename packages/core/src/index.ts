@@ -1,4 +1,10 @@
-export { TopicBuildError, UnknownQueryError, toTables } from "./helpers";
+export {
+  TopicBuildError,
+  TopicValidationError,
+  UnknownMutationError,
+  UnknownQueryError,
+  toTables,
+} from "./helpers";
 export { SyncEngine } from "./engine";
 export { ListenerIdSchema, TableSchema, Topic, TopicSchema } from "./types";
 export type {
@@ -8,6 +14,7 @@ export type {
   ListenerId,
   Mutation,
   MutationMap,
+  OperationError,
   OperationParams,
   OperationResult,
   Query,

@@ -1,5 +1,10 @@
 import { Brand, Equal, Hash, Schema, SchemaTransformation, type Effect } from "effect";
-import type { TopicBuildError, UnknownQueryError } from "./helpers";
+import type {
+  TopicBuildError,
+  TopicValidationError,
+  UnknownMutationError,
+  UnknownQueryError,
+} from "./helpers";
 
 export type Branded<
   Primitive extends string | number | boolean | bigint | symbol,
@@ -9,16 +14,21 @@ export type Branded<
 export const TableSchema = Schema.String.pipe(Schema.brand("Table"));
 export type Table = typeof TableSchema.Type;
 
-type Operation<Params extends unknown[] = [], Result = unknown> = {
-  tables: Set<Table>;
-  run(...params: Params): Result;
+type Operation<Params extends unknown[] = [], Result = unknown, Error = never> = {
+  readonly tables: Set<Table>;
+  readonly run: (...params: Params) => Effect.Effect<Result, Error>;
 };
 
-export type Query<Params extends unknown[] = [], Result = unknown> = Operation<Params, Result>;
-
-export type Mutation<Params extends unknown[] = [], Metadata = unknown> = Operation<
+export type Query<Params extends unknown[] = [], Result = unknown, Error = never> = Operation<
   Params,
-  Metadata
+  Result,
+  Error
+>;
+
+export type Mutation<Params extends unknown[] = [], Metadata = unknown, Error = never> = Operation<
+  Params,
+  Metadata,
+  Error
 >;
 
 export type OperationParams<OperationDef> = OperationDef extends {
@@ -28,9 +38,15 @@ export type OperationParams<OperationDef> = OperationDef extends {
   : never;
 
 export type OperationResult<OperationDef> = OperationDef extends {
-  run(...params: never[]): infer Result;
+  run(...params: never[]): Effect.Effect<infer Result, unknown>;
 }
   ? Result
+  : never;
+
+export type OperationError<OperationDef> = OperationDef extends {
+  readonly run: (...params: never[]) => Effect.Effect<unknown, infer Error>;
+}
+  ? Error
   : never;
 
 const equalParams = (
@@ -155,31 +171,32 @@ export type StringKey<T> = Extract<keyof T, string>;
 
 export type QueryMap<Queries extends object = Record<string, Query<unknown[], unknown>>> = {
   [Name in keyof Queries]: Queries[Name] extends {
-    run(...params: infer Params): infer Result;
+    run(...params: infer Params): Effect.Effect<infer Result, infer Error>;
   }
-    ? Query<Extract<Params, unknown[]>, Result>
-    : never;
-};
-export type MutationMap<Mutations extends object = Record<string, Mutation<unknown[], unknown>>> = {
-  [Name in keyof Mutations]: Mutations[Name] extends {
-    run(...params: infer Params): infer Metadata;
-  }
-    ? Mutation<Extract<Params, unknown[]>, Metadata>
+    ? Query<Extract<Params, unknown[]>, Result, Error>
     : never;
 };
 
-export const ListenerIdSchema = Schema.String.check(Schema.isUUID()).pipe(
-  Schema.brand("ListenerId"),
-);
-export type ListenerId = typeof ListenerIdSchema.Type;
+export type MutationMap<Mutations extends object = Record<string, Mutation<unknown[], unknown>>> = {
+  [Name in keyof Mutations]: Mutations[Name] extends {
+    run(...params: infer Params): Effect.Effect<infer Metadata, infer Error>;
+  }
+    ? Mutation<Extract<Params, unknown[]>, Metadata, Error>
+    : never;
+};
 
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > {
-  queries: Queries;
-  mutations: Mutations;
+  readonly queries: Queries;
+  readonly mutations: Mutations;
 }
+
+export const ListenerIdSchema = Schema.String.check(Schema.isUUID()).pipe(
+  Schema.brand("ListenerId"),
+);
+export type ListenerId = typeof ListenerIdSchema.Type;
 
 export interface SyncEngineInterface<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -194,16 +211,26 @@ export interface SyncEngineInterface<
   >;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]>;
+  ): Effect.Effect<
+    OperationResult<Queries[Name]>,
+    TopicValidationError | UnknownQueryError | OperationError<Queries[Name]>
+  >;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): ListenerId;
-  unsubscribe(listenerId: ListenerId): boolean;
+  ): Effect.Effect<ListenerId, TopicValidationError | UnknownQueryError>;
+  unsubscribe(listenerId: ListenerId): Effect.Effect<boolean>;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void;
+  ): Effect.Effect<
+    void,
+    | UnknownMutationError
+    | OperationError<Mutations[Name]>
+    | TopicValidationError
+    | UnknownQueryError
+    | OperationError<Queries[StringKey<Queries>]>
+  >;
 }

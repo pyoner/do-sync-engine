@@ -4,6 +4,9 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 export default defineConfig({
   pack: {
     exports: true,
+    deps: {
+      onlyBundle: false,
+    },
   },
   lint: {
     options: {

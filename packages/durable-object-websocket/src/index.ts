@@ -1,5 +1,11 @@
 import { Effect } from "effect";
 import { DurableObject } from "cloudflare:workers";
+import {
+  TopicBuildError,
+  TopicValidationError,
+  UnknownMutationError,
+  UnknownQueryError,
+} from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -9,6 +15,7 @@ import type {
 } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
 import { decodeClientCommand } from "./protocol.ts";
+import type { ErrorMessage } from "./protocol.ts";
 export type * from "./protocol.ts";
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
   readonly engine: SyncEngineInterface<Q, M>;
@@ -31,83 +38,140 @@ export abstract class DurableObjectWebSocket<
     initialize: DurableObjectWebSocketInitializer<Q, M>,
   ) {
     super(ctx, env);
-    this.initialization = ctx.blockConcurrencyWhile(async () => {
-      const { engine } = await initialize();
-      this.engine = engine;
-      this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
-      for (const ws of ctx.getWebSockets()) {
-        await Effect.runPromise(this.registry.restore(ws, false));
-      }
-    });
+    this.initialization = ctx.blockConcurrencyWhile(() =>
+      Effect.runPromise(
+        Effect.gen(
+          function* (this: DurableObjectWebSocket<Env, Q, M>) {
+            const { engine } = yield* Effect.tryPromise({
+              try: () => Promise.resolve(initialize()),
+              catch: (cause) => cause,
+            });
+            this.engine = engine;
+            this.registry = new SubscriptionRegistry(engine, (ws, message) =>
+              this.send(ws, message),
+            );
+            for (const ws of ctx.getWebSockets()) yield* this.registry.restore(ws, false);
+          }.bind(this),
+        ),
+      ),
+    );
   }
-  async fetch(request: Request): Promise<Response> {
-    await this.initialization;
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
-      return new Response("Expected WebSocket", { status: 426 });
-    const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1]);
-    await Effect.runPromise(this.registry.restore(pair[1]));
-    return new Response(null, { status: 101, webSocket: pair[0] });
+  fetch(request: Request): Promise<Response> {
+    return Effect.runPromise(this.fetchEffect(request));
   }
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await this.initialization;
-    const decoded = decodeClientCommand(message);
-    if ("error" in decoded) return this.send(ws, decoded.error);
-    const { command } = decoded;
-    const requestId = command.requestId;
-    try {
-      if (command.type === "subscribe") {
-        await Effect.runPromise(
-          this.registry.subscribe(ws, command.query as StringKey<Q>, command.params, requestId),
-        );
-      } else if (command.type === "unsubscribe") {
-        this.send(ws, {
-          type: "unsubscribed",
-          requestId,
-          topic: command.topic,
-          removed: this.registry.unsubscribe(ws, command.topic),
+  webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    return Effect.runPromise(this.webSocketMessageEffect(ws, message));
+  }
+  webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+    return Effect.runPromise(this.socketCleanupEffect(ws));
+  }
+  webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
+    return Effect.runPromise(this.socketCleanupEffect(ws));
+  }
+  private fetchEffect(request: Request): Effect.Effect<Response, unknown> {
+    return Effect.gen(
+      function* (this: DurableObjectWebSocket<Env, Q, M>) {
+        yield* Effect.tryPromise({
+          try: () => this.initialization,
+          catch: (cause) => cause,
         });
-      } else {
-        this.engine.sync(
-          command.mutation as StringKey<M>,
-          command.params as OperationParams<M[StringKey<M>]>,
-        );
-        this.send(ws, { type: "synced", requestId });
-      }
-    } catch (error) {
-      const message =
-        typeof error === "object" && error !== null && "_tag" in error
-          ? error._tag === "UnknownQueryError" &&
-            "query" in error &&
-            typeof error.query === "string"
-            ? `Unknown query: ${error.query}`
-            : error._tag === "TopicBuildError" && "operation" in error
-              ? error.operation === "clone"
-                ? "Topic params must support structuredClone"
-                : "cause" in error && error.cause instanceof Error
-                  ? error.cause.message
-                  : "Topic construction failed"
-              : "Topic construction failed"
-          : error instanceof Error
-            ? error.message
-            : "Unknown websocket error";
-      this.send(ws, { type: "error", requestId, message });
-    }
+        if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+          return new Response("Expected WebSocket", { status: 426 });
+        const pair = new WebSocketPair();
+        this.ctx.acceptWebSocket(pair[1]);
+        yield* this.registry.restore(pair[1]);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }.bind(this),
+    );
   }
-  async webSocketClose(
+  private webSocketMessageEffect(
     ws: WebSocket,
-    _code: number,
-    _reason: string,
-    _wasClean: boolean,
-  ): Promise<void> {
-    await this.initialization;
-    this.registry.clear(ws);
+    message: string | ArrayBuffer,
+  ): Effect.Effect<void, unknown> {
+    return Effect.gen(
+      function* (this: DurableObjectWebSocket<Env, Q, M>) {
+        yield* Effect.tryPromise({
+          try: () => this.initialization,
+          catch: (cause) => cause,
+        });
+        let requestId: string | undefined;
+        const execute = Effect.gen(
+          function* (this: DurableObjectWebSocket<Env, Q, M>) {
+            const command = yield* decodeClientCommand(message);
+            requestId = command.requestId;
+            if (command.type === "subscribe") {
+              yield* this.registry.subscribe(
+                ws,
+                command.query as StringKey<Q>,
+                command.params,
+                requestId,
+              );
+            } else if (command.type === "unsubscribe") {
+              const removed = yield* this.registry.unsubscribe(ws, command.topic);
+              yield* Effect.sync(() =>
+                this.send(ws, {
+                  type: "unsubscribed",
+                  requestId,
+                  topic: command.topic,
+                  removed,
+                }),
+              );
+            } else {
+              yield* this.engine.sync(
+                command.mutation as StringKey<M>,
+                command.params as OperationParams<M[StringKey<M>]>,
+              );
+              yield* Effect.sync(() => this.send(ws, { type: "synced", requestId }));
+            }
+          }.bind(this),
+        );
+        yield* execute.pipe(
+          Effect.matchEffect({
+            onFailure: (error) =>
+              Effect.sync(() => {
+                const protocolError = isErrorMessage(error)
+                  ? error
+                  : { type: "error", requestId, message: formatError(error) };
+                this.send(ws, protocolError);
+              }),
+            onSuccess: () => Effect.void,
+          }),
+        );
+      }.bind(this),
+    );
   }
-  async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
-    await this.initialization;
-    this.registry.clear(ws);
+  private socketCleanupEffect(ws: WebSocket): Effect.Effect<void, unknown> {
+    return Effect.gen(
+      function* (this: DurableObjectWebSocket<Env, Q, M>) {
+        yield* Effect.tryPromise({
+          try: () => this.initialization,
+          catch: (cause) => cause,
+        });
+        yield* this.registry.clear(ws);
+      }.bind(this),
+    );
   }
   private send(ws: WebSocket, message: unknown): void {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
   }
 }
+
+const isErrorMessage = (value: unknown): value is ErrorMessage =>
+  typeof value === "object" &&
+  value !== null &&
+  "type" in value &&
+  value.type === "error" &&
+  "message" in value &&
+  typeof value.message === "string";
+
+const formatError = (error: unknown): string => {
+  if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
+  if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
+  if (error instanceof TopicBuildError) {
+    if (error.operation === "clone") return "Topic params must support structuredClone";
+    return error.cause instanceof Error ? error.cause.message : "Topic construction failed";
+  }
+  if (error instanceof TopicValidationError)
+    return error.cause instanceof Error ? error.cause.message : "Topic construction failed";
+  return error instanceof Error ? error.message : "Unknown websocket error";
+};

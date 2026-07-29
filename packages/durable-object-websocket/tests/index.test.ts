@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
@@ -33,58 +33,63 @@ function read(socket: WebSocket): Promise<Message> {
 }
 
 describe("Durable Object WebSocket transport", () => {
-  it("decodes valid commands and preserves protocol errors", () => {
+  it("decodes valid commands and preserves protocol errors", async () => {
+    const decode = (message: string | ArrayBuffer) =>
+      Effect.runPromiseExit(decodeClientCommand(message));
     expect(
-      decodeClientCommand(
-        '{"type":"subscribe","requestId":"s","query":"counter","params":["alpha"]}',
-      ),
-    ).toEqual({
-      command: { type: "subscribe", requestId: "s", query: "counter", params: ["alpha"] },
-    });
+      await decode('{"type":"subscribe","requestId":"s","query":"counter","params":["alpha"]}'),
+    ).toEqual(
+      Exit.succeed({ type: "subscribe", requestId: "s", query: "counter", params: ["alpha"] }),
+    );
     expect(
-      decodeClientCommand(
-        '{"type":"unsubscribe","requestId":"u","topic":{"name":"counter","params":[]}}',
-      ),
-    ).toEqual({
-      command: { type: "unsubscribe", requestId: "u", topic: { name: "counter", params: [] } },
-    });
+      await decode('{"type":"unsubscribe","requestId":"u","topic":{"name":"counter","params":[]}}'),
+    ).toEqual(
+      Exit.succeed({
+        type: "unsubscribe",
+        requestId: "u",
+        topic: { name: "counter", params: [] },
+      }),
+    );
     expect(
-      decodeClientCommand(
-        '{"type":"sync","requestId":"m","mutation":"increment","params":["alpha",1]}',
-      ),
-    ).toEqual({
-      command: { type: "sync", requestId: "m", mutation: "increment", params: ["alpha", 1] },
-    });
-    expect(decodeClientCommand(new ArrayBuffer(0))).toEqual({
-      error: { type: "error", message: "Expected text WebSocket message" },
-    });
-    expect(decodeClientCommand('{"type":"subscribe","requestId":"s","query":"counter"}')).toEqual({
-      error: { type: "error", requestId: "s", message: "query and params required" },
-    });
-    expect(decodeClientCommand('{"type":"unsubscribe","requestId":"u"}')).toEqual({
-      error: { type: "error", requestId: "u", message: "topic required" },
-    });
-    expect(decodeClientCommand('{"type":"sync","requestId":"m","mutation":"increment"}')).toEqual({
-      error: { type: "error", requestId: "m", message: "mutation and params required" },
-    });
-    expect(decodeClientCommand('{"type":"wat","requestId":"x"}')).toEqual({
-      error: { type: "error", requestId: "x", message: "Unknown message type" },
-    });
-    expect(decodeClientCommand("not json")).toEqual({
-      error: { type: "error", message: "Invalid JSON message" },
-    });
-    expect(decodeClientCommand("null")).toEqual({
-      error: { type: "error", message: "Invalid JSON message" },
-    });
-    expect(decodeClientCommand("[]")).toEqual({
-      error: { type: "error", message: "Invalid JSON message" },
-    });
-    expect(decodeClientCommand('{"type":"sync","params":[]}')).toEqual({
-      error: { type: "error", message: "requestId required" },
-    });
-    expect(decodeClientCommand('{"type":"sync","requestId":" ","params":[]}')).toEqual({
-      error: { type: "error", message: "requestId required" },
-    });
+      await decode('{"type":"sync","requestId":"m","mutation":"increment","params":["alpha",1]}'),
+    ).toEqual(
+      Exit.succeed({
+        type: "sync",
+        requestId: "m",
+        mutation: "increment",
+        params: ["alpha", 1],
+      }),
+    );
+    expect(await decode(new ArrayBuffer(0))).toEqual(
+      Exit.fail({ type: "error", message: "Expected text WebSocket message" }),
+    );
+    expect(await decode('{"type":"subscribe","requestId":"s","query":"counter"}')).toEqual(
+      Exit.fail({ type: "error", requestId: "s", message: "query and params required" }),
+    );
+    expect(await decode('{"type":"unsubscribe","requestId":"u"}')).toEqual(
+      Exit.fail({ type: "error", requestId: "u", message: "topic required" }),
+    );
+    expect(await decode('{"type":"sync","requestId":"m","mutation":"increment"}')).toEqual(
+      Exit.fail({ type: "error", requestId: "m", message: "mutation and params required" }),
+    );
+    expect(await decode('{"type":"wat","requestId":"x"}')).toEqual(
+      Exit.fail({ type: "error", requestId: "x", message: "Unknown message type" }),
+    );
+    expect(await decode("not json")).toEqual(
+      Exit.fail({ type: "error", message: "Invalid JSON message" }),
+    );
+    expect(await decode("null")).toEqual(
+      Exit.fail({ type: "error", message: "Invalid JSON message" }),
+    );
+    expect(await decode("[]")).toEqual(
+      Exit.fail({ type: "error", message: "Invalid JSON message" }),
+    );
+    expect(await decode('{"type":"sync","params":[]}')).toEqual(
+      Exit.fail({ type: "error", message: "requestId required" }),
+    );
+    expect(await decode('{"type":"sync","requestId":" ","params":[]}')).toEqual(
+      Exit.fail({ type: "error", message: "requestId required" }),
+    );
   });
   it("subscribes, syncs, restores after hibernation, and unsubscribes", async () => {
     const rejected = await worker.default.fetch(new Request("https://example.com"));
@@ -224,13 +229,13 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
     queries: {
       counter: {
         tables: toTables(["counters"]),
-        run: () => ({ value: 0 }),
+        run: () => Effect.succeed({ value: 0 }),
       },
     },
     mutations: {
       increment: {
         tables: toTables(["counters"]),
-        run: () => {},
+        run: () => Effect.succeed(undefined),
       },
     },
   });
@@ -249,6 +254,6 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
   messages.length = 0;
   await Effect.runPromise(registry.restore(socket));
   messages.length = 0;
-  engine.sync("increment", []);
+  await Effect.runPromise(engine.sync("increment", []));
   expect(messages).toHaveLength(1);
 });
