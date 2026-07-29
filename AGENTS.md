@@ -19,3 +19,7 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 - Use the Caveman skill by default for terse, filler-free communication. Default mode: full.
 - Use the Ponytail skill by default for minimal, YAGNI implementation. Default mode: full.
+
+## Coding Rules
+
+- Do not use `as never` in production code or tests; use accurate types or a direct public API instead.

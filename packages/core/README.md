@@ -6,7 +6,7 @@ Minimal engine for synchronizing query subscribers after mutations.
 
 ```ts
 import { Effect } from "effect";
-import { SyncEngine, TopicHasherLive, toTables } from "@do-sync-engine/core";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type { Mutation, Query, Table } from "@do-sync-engine/core";
 
 // Define query and mutation handlers
@@ -27,11 +27,9 @@ const mutations = {
 const engine = new SyncEngine({ queries, mutations });
 
 // Create a canonical topic, then subscribe one or more listeners to it.
-const topic = await Effect.runPromise(
-  engine.createTopic("allTodos", []).pipe(Effect.provide(TopicHasherLive)),
-);
+const topic = await Effect.runPromise(engine.createTopic("allTodos", []));
 const listenerId = engine.subscribe(topic, ({ topic, value }) => {
-  console.log(topic.hash, value);
+  console.log(topic.name, topic.params, value);
 });
 
 // Sync runs the mutation and publishes results for subscribed topics whose tables overlap.
@@ -41,7 +39,7 @@ engine.sync("addTodo", ["Buy milk"]);
 engine.unsubscribe(listenerId);
 ```
 
-A `Topic` contains the query `name`, query `params`, and a `hash`. The hash is the lowercase hexadecimal SHA-256 digest of `JSON.stringify({ name, params })`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by its hash. A single topic hash can have many listeners; `subscribe` returns the listener ID required by `unsubscribe`.
+A `Topic` contains the query `name` and query `params`. Topics participate in Effect equality and hashing for local in-memory lookup. Topic parameters are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by the topic. Parameters must be acyclic, non-sparse arrays containing only primitives, arrays, and plain objects; `Map`, `Set`, dates, typed arrays, and other non-plain values are rejected.
 
 ## Development
 

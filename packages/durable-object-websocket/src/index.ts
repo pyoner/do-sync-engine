@@ -1,5 +1,4 @@
 import { Effect } from "effect";
-import { TopicHasherLive } from "@do-sync-engine/core";
 import { DurableObject } from "cloudflare:workers";
 import type {
   MutationMap,
@@ -37,9 +36,7 @@ export abstract class DurableObjectWebSocket<
       this.engine = engine;
       this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
       for (const ws of ctx.getWebSockets()) {
-        await Effect.runPromise(
-          this.registry.restore(ws, false).pipe(Effect.provide(TopicHasherLive)),
-        );
+        await Effect.runPromise(this.registry.restore(ws, false));
       }
     });
   }
@@ -49,7 +46,7 @@ export abstract class DurableObjectWebSocket<
       return new Response("Expected WebSocket", { status: 426 });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    await Effect.runPromise(this.registry.restore(pair[1]).pipe(Effect.provide(TopicHasherLive)));
+    await Effect.runPromise(this.registry.restore(pair[1]));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -61,16 +58,14 @@ export abstract class DurableObjectWebSocket<
     try {
       if (command.type === "subscribe") {
         await Effect.runPromise(
-          this.registry
-            .subscribe(ws, command.query as StringKey<Q>, command.params, requestId)
-            .pipe(Effect.provide(TopicHasherLive)),
+          this.registry.subscribe(ws, command.query as StringKey<Q>, command.params, requestId),
         );
       } else if (command.type === "unsubscribe") {
         this.send(ws, {
           type: "unsubscribed",
           requestId,
-          topicHash: command.topicHash,
-          removed: this.registry.unsubscribe(ws, command.topicHash),
+          topic: command.topic,
+          removed: this.registry.unsubscribe(ws, command.topic),
         });
       } else {
         this.engine.sync(

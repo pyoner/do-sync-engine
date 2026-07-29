@@ -2,11 +2,10 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
-import { SyncEngine, TopicHasher, TopicHasherLive, toTables } from "@do-sync-engine/core";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 
-const runTopic = <A, E>(effect: Effect.Effect<A, E, TopicHasher>) =>
-  Effect.runPromise(effect.pipe(Effect.provide(TopicHasherLive)));
+const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
@@ -67,7 +66,7 @@ describe("SyncEngine topics and events", () => {
     storage.close();
   });
 
-  test("creates canonical SHA-256 topics", async () => {
+  test("creates equal Effect topics", async () => {
     const first = await runTopic(engine.createTopic("allUsers", []));
     const equivalent = await runTopic(engine.createTopic("allUsers", []));
     const changedParams = await runTopic(engine.createTopic("userById", [1]));
@@ -76,21 +75,16 @@ describe("SyncEngine topics and events", () => {
     const clonedTopic = await runTopic(engine.createTopic("userById", params));
     params[0] = 2;
     expect(clonedTopic.params).toEqual([1]);
-
-    expect(first).toEqual({
-      name: "allUsers",
-      params: [],
-      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
-    });
+    expect(first).toEqual({ name: "allUsers", params: [] });
     expect(equivalent).toEqual(first);
-    expect(changedParams.hash).not.toBe(first.hash);
-    expect(changedName.hash).not.toBe(first.hash);
+    expect(changedParams).not.toEqual(first);
+    expect(changedName).not.toEqual(first);
   });
 
   test("runs queries through the public engine interface", async () => {
     const topic = await runTopic(engine.createTopic("userById", [2]));
 
-    expect(() => engine.query({ ...topic, name: "missing" } as never)).toThrow(
+    expect(() => engine.query({ name: "missing", params: topic.params } as never)).toThrow(
       "Unknown query: missing",
     );
     expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
@@ -271,18 +265,15 @@ describe("SyncEngine topics and events", () => {
     expect(completed).toBe(true);
   });
 
-  test("validates manually supplied topics and hash collisions", async () => {
+  test("validates manually supplied topics", async () => {
     const validTopic = await runTopic(engine.createTopic("allUsers", []));
     expect(() =>
-      engine.subscribe({ ...validTopic, name: "missing" } as never, noopPublish),
+      engine.subscribe({ name: "missing", params: validTopic.params } as never, noopPublish),
     ).toThrow("Unknown query: missing");
-    expect(() => engine.subscribe({ ...validTopic, hash: "0" } as never, noopPublish)).toThrow(
-      "Topic hash must be 64 lowercase hexadecimal characters",
-    );
     engine.subscribe(validTopic, noopPublish);
-    expect(() => engine.subscribe({ ...validTopic, params: [1] } as never, noopPublish)).toThrow(
-      `Topic hash collision: ${validTopic.hash}`,
-    );
+    expect(() =>
+      engine.subscribe({ name: validTopic.name, params: [1] } as never, noopPublish),
+    ).not.toThrow();
     await expect(runTopic(engine.createTopic("allUsers", [1n] as never))).rejects.toThrow();
   });
 });

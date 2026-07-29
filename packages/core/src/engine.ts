@@ -1,12 +1,11 @@
-import { Effect } from "effect";
+import { Effect, Equal, Hash } from "effect";
 import { ListenerIdSchema } from "./types";
 import {
   assertKnownQueryEffect,
+  assertSupportedParams,
   buildTopic,
-  clone,
   cloneOrThrow,
   TopicBuildError,
-  TopicHasher,
   UnknownQueryError,
   validateTopic,
 } from "./helpers";
@@ -25,7 +24,6 @@ import type {
   SyncEngineOptions,
   Table,
   Topic,
-  TopicHash,
 } from "./types";
 
 export class SyncEngine<
@@ -35,8 +33,11 @@ export class SyncEngine<
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private readonly registry = new Map<
-    TopicHash,
-    { topic: Topic<StringKey<Queries>, readonly unknown[]>; listeners: Map<ListenerId, Listener> }
+    string,
+    Array<{
+      topic: Topic<StringKey<Queries>, readonly unknown[]>;
+      listeners: Map<ListenerId, Listener>;
+    }>
   >();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -53,13 +54,18 @@ export class SyncEngine<
     params: OperationParams<Queries[Name]>,
   ): Effect.Effect<
     Topic<Name, OperationParams<Queries[Name]>>,
-    TopicBuildError | UnknownQueryError,
-    TopicHasher
+    TopicBuildError | UnknownQueryError
   > {
     const queries = this.queries;
     return Effect.gen(function* () {
       yield* assertKnownQueryEffect(name, queries);
-      const topicParams = yield* clone(params);
+      const topicParams = yield* Effect.try({
+        try: () => {
+          assertSupportedParams(params);
+          return structuredClone(params);
+        },
+        catch: (cause) => TopicBuildError.make({ cause, operation: "clone" }),
+      });
       return yield* buildTopic(name, topicParams);
     });
   }
@@ -76,19 +82,18 @@ export class SyncEngine<
       throw new TypeError("Listener must be a function");
     }
 
-    let entry = this.registry.get(validatedTopic.hash);
+    const bucketKey = String(Hash.hash(validatedTopic));
+    const bucket = this.registry.get(bucketKey) ?? [];
+    this.registry.set(bucketKey, bucket);
+    let entry = bucket.find(({ topic: existingTopic }) =>
+      Equal.equals(existingTopic, validatedTopic),
+    );
     if (entry === undefined) {
       entry = {
         topic: validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>,
         listeners: new Map(),
       };
-      this.registry.set(validatedTopic.hash, entry);
-    } else {
-      const existingParams = JSON.stringify(entry.topic.params);
-      const nextParams = JSON.stringify(validatedTopic.params);
-      if (entry.topic.name !== validatedTopic.name || existingParams !== nextParams) {
-        throw new RangeError(`Topic hash collision: ${validatedTopic.hash}`);
-      }
+      bucket.push(entry);
     }
 
     for (const [listenerId, existingListener] of entry.listeners) {
@@ -103,10 +108,16 @@ export class SyncEngine<
   }
 
   unsubscribe(listenerId: ListenerId): boolean {
-    for (const [topicHash, entry] of this.registry) {
-      if (!entry.listeners.delete(listenerId)) continue;
-      if (entry.listeners.size === 0) this.registry.delete(topicHash);
-      return true;
+    for (const [bucketKey, bucket] of this.registry) {
+      for (let index = 0; index < bucket.length; index++) {
+        const entry = bucket[index];
+        if (!entry.listeners.delete(listenerId)) continue;
+        if (entry.listeners.size === 0) {
+          bucket.splice(index, 1);
+          if (bucket.length === 0) this.registry.delete(bucketKey);
+        }
+        return true;
+      }
     }
     return false;
   }
@@ -137,7 +148,8 @@ export class SyncEngine<
   }
 
   protected publish(event: ListenerEvent): void {
-    const entry = this.registry.get(event.topic.hash);
+    const bucket = this.registry.get(String(Hash.hash(event.topic)));
+    const entry = bucket?.find(({ topic }) => Equal.equals(topic, event.topic));
     if (!entry) return;
 
     for (const listener of entry.listeners.values()) {
@@ -151,20 +163,22 @@ export class SyncEngine<
   ): void {
     const changedTables = this.mutate(mutation, params);
 
-    for (const { topic } of this.registry.values()) {
-      const queryDefinition = this.queries.get(topic.name);
-      if (queryDefinition === undefined) continue;
-      let touchesChangedTable = false;
-      for (const table of queryDefinition.tables) {
-        if (changedTables.has(table)) {
-          touchesChangedTable = true;
-          break;
+    for (const bucket of this.registry.values()) {
+      for (const { topic } of bucket) {
+        const queryDefinition = this.queries.get(topic.name);
+        if (queryDefinition === undefined) continue;
+        let touchesChangedTable = false;
+        for (const table of queryDefinition.tables) {
+          if (changedTables.has(table)) {
+            touchesChangedTable = true;
+            break;
+          }
         }
-      }
-      if (!touchesChangedTable) continue;
+        if (!touchesChangedTable) continue;
 
-      const value = this.query(topic as never);
-      this.publish({ topic, value });
+        const value = this.query(topic as never);
+        this.publish({ topic, value });
+      }
     }
   }
 }

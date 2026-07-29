@@ -1,12 +1,6 @@
 import { Schema } from "effect";
-import { TopicHashSchema } from "@do-sync-engine/core";
-import type {
-  OperationParams,
-  OperationResult,
-  StringKey,
-  Topic,
-  TopicHash,
-} from "@do-sync-engine/core";
+import { TopicSchema } from "@do-sync-engine/core";
+import type { OperationParams, OperationResult, StringKey, Topic } from "@do-sync-engine/core";
 
 export type SubscribeCommand<Q extends object> = {
   [N in StringKey<Q>]: {
@@ -16,7 +10,7 @@ export type SubscribeCommand<Q extends object> = {
     params: OperationParams<Q[N]>;
   };
 }[StringKey<Q>];
-export type UnsubscribeCommand = { type: "unsubscribe"; requestId: string; topicHash: TopicHash };
+export type UnsubscribeCommand = { type: "unsubscribe"; requestId: string; topic: Topic };
 export type SyncCommand<M extends object> = {
   [N in StringKey<M>]: {
     type: "sync";
@@ -40,7 +34,7 @@ export type QueryResultMessage<Q extends object> = {
 export type UnsubscribedMessage = {
   type: "unsubscribed";
   requestId: string;
-  topicHash: TopicHash;
+  topic: Topic;
   removed: boolean;
 };
 export type SyncedMessage = { type: "synced"; requestId: string };
@@ -60,7 +54,7 @@ export type DecodedClientCommand =
   | {
       type: "unsubscribe";
       requestId: string;
-      topicHash: TopicHash;
+      topic: Topic;
     }
   | {
       type: "sync";
@@ -82,7 +76,7 @@ const clientCommandSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("unsubscribe"),
     requestId: requestIdSchema,
-    topicHash: TopicHashSchema,
+    topic: TopicSchema,
   }),
   Schema.Struct({
     type: Schema.Literal("sync"),
@@ -117,7 +111,7 @@ export function decodeClientCommand(message: string | ArrayBuffer): DecodeResult
       return { error: { type: "error", requestId, message: "query and params required" } };
     }
     if ((record as Record<string, unknown>).type === "unsubscribe") {
-      return { error: { type: "error", requestId, message: "topicHash required" } };
+      return { error: { type: "error", requestId, message: "topic required" } };
     }
     if ((record as Record<string, unknown>).type === "sync") {
       return { error: { type: "error", requestId, message: "mutation and params required" } };

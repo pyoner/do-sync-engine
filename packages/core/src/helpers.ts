@@ -1,20 +1,9 @@
-import { Context, Effect, Layer, Schema } from "effect";
-import {
-  TableSchema,
-  TopicHashSchema,
-  TopicSchema,
-  type Table,
-  type Topic,
-  type TopicHash,
-} from "./types";
+import { Effect, Schema } from "effect";
+import { TableSchema, Topic, TopicSchema, type Table } from "./types";
 
 export class TopicBuildError extends Schema.TaggedErrorClass<TopicBuildError>()("TopicBuildError", {
   cause: Schema.Unknown,
-  operation: Schema.Union([
-    Schema.Literal("clone"),
-    Schema.Literal("serialize"),
-    Schema.Literal("hash"),
-  ]),
+  operation: Schema.Union([Schema.Literal("clone"), Schema.Literal("serialize")]),
 }) {}
 
 export class UnknownQueryError extends Schema.TaggedErrorClass<UnknownQueryError>()(
@@ -32,6 +21,27 @@ export function cloneOrThrow<T>(value: T, label: string): T {
     return structuredClone(value);
   } catch (cause) {
     throw new TypeError(`${label} must support structuredClone`, { cause });
+  }
+}
+
+export function assertSupportedParams(value: unknown, stack = new WeakSet<object>()): void {
+  if (value === null || typeof value !== "object") return;
+  if (stack.has(value)) throw new TypeError("Topic params must not be cyclic");
+  stack.add(value);
+  try {
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        if (!(index in value)) throw new TypeError("Topic params must not contain sparse arrays");
+        assertSupportedParams(value[index], stack);
+      }
+      return;
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new TypeError("Topic params must contain only plain objects and arrays");
+    }
+    for (const child of Object.values(value)) assertSupportedParams(child, stack);
+  } finally {
+    stack.delete(value);
   }
 }
 
@@ -56,39 +66,16 @@ export const assertKnownQueryEffect = (
 ) =>
   knownQueries.has(query) ? Effect.succeed(query) : Effect.fail(UnknownQueryError.make({ query }));
 
-export class TopicHasher extends Context.Service<
-  TopicHasher,
-  {
-    readonly hash: (input: string) => Effect.Effect<TopicHash, TopicBuildError>;
-  }
->()("@do-sync-engine/core/TopicHasher") {}
-
-export const TopicHasherLive = Layer.succeed(TopicHasher, {
-  hash: (input) =>
-    Effect.tryPromise({
-      try: () => globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)),
-      catch: (cause) => TopicBuildError.make({ cause, operation: "hash" }),
-    }).pipe(
-      Effect.map((digest) =>
-        TopicHashSchema.make(
-          Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
-        ),
-      ),
-    ),
-});
-
 export function buildTopic<Name extends string, Params extends readonly unknown[]>(
   name: Name,
   params: Params,
-): Effect.Effect<Topic<Name, Params>, TopicBuildError, TopicHasher> {
+): Effect.Effect<Topic<Name, Params>, TopicBuildError> {
   return Effect.gen(function* () {
-    const serialized = yield* Effect.try({
+    yield* Effect.try({
       try: () => JSON.stringify({ name, params }),
       catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
     });
-    const hasher = yield* TopicHasher;
-    const hash = yield* hasher.hash(serialized);
-    return { name, params, hash };
+    return new Topic<Name, Params>({ name, params });
   });
 }
 
@@ -103,15 +90,16 @@ export function validateTopic(
     if (typeof topic !== "object" || topic === null) {
       throw new TypeError("Topic must be an object");
     }
-    const value = topic as { name?: unknown; params?: unknown; hash?: unknown };
+    const value = topic as { name?: unknown; params?: unknown };
     if (typeof value.name !== "string") {
       throw new TypeError("Topic name must be a string");
     }
     if (!Array.isArray(value.params)) {
       throw new TypeError("Topic params must be an array");
     }
-    throw new TypeError("Topic hash must be 64 lowercase hexadecimal characters");
+    throw new TypeError("Topic must be a valid topic");
   }
   assertKnownQuery(candidate.name, knownQueryNames);
+  assertSupportedParams(candidate.params);
   return candidate;
 }

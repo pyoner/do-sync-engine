@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { SyncEngine, TopicHasherLive, toTables } from "@do-sync-engine/core";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
@@ -41,11 +41,12 @@ describe("Durable Object WebSocket transport", () => {
     ).toEqual({
       command: { type: "subscribe", requestId: "s", query: "counter", params: ["alpha"] },
     });
-    const hash = "a".repeat(64);
     expect(
-      decodeClientCommand(`{"type":"unsubscribe","requestId":"u","topicHash":"${hash}"}`),
+      decodeClientCommand(
+        '{"type":"unsubscribe","requestId":"u","topic":{"name":"counter","params":[]}}',
+      ),
     ).toEqual({
-      command: { type: "unsubscribe", requestId: "u", topicHash: hash },
+      command: { type: "unsubscribe", requestId: "u", topic: { name: "counter", params: [] } },
     });
     expect(
       decodeClientCommand(
@@ -60,11 +61,9 @@ describe("Durable Object WebSocket transport", () => {
     expect(decodeClientCommand('{"type":"subscribe","requestId":"s","query":"counter"}')).toEqual({
       error: { type: "error", requestId: "s", message: "query and params required" },
     });
-    expect(decodeClientCommand('{"type":"unsubscribe","requestId":"u","topicHash":"bad"}')).toEqual(
-      {
-        error: { type: "error", requestId: "u", message: "topicHash required" },
-      },
-    );
+    expect(decodeClientCommand('{"type":"unsubscribe","requestId":"u"}')).toEqual({
+      error: { type: "error", requestId: "u", message: "topic required" },
+    });
     expect(decodeClientCommand('{"type":"sync","requestId":"m","mutation":"increment"}')).toEqual({
       error: { type: "error", requestId: "m", message: "mutation and params required" },
     });
@@ -137,8 +136,7 @@ describe("Durable Object WebSocket transport", () => {
       );
       expect((await read(socket)).value).toEqual({ key: "alpha", value: 3 });
       expect((await read(socket)).type).toBe("synced");
-      const hash = (first.topic as { hash: string }).hash;
-      socket.send(JSON.stringify({ type: "unsubscribe", requestId: "unsub", topicHash: hash }));
+      socket.send(JSON.stringify({ type: "unsubscribe", requestId: "unsub", topic: first.topic }));
       expect((await read(socket)).removed).toBe(true);
       await evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
         webSockets: "hibernate",
@@ -155,7 +153,7 @@ describe("Durable Object WebSocket transport", () => {
 
       for (const [requestId, message, expected] of [
         ["bad-sub", { type: "subscribe", requestId: "bad-sub" }, "query and params required"],
-        ["bad-unsub", { type: "unsubscribe", requestId: "bad-unsub" }, "topicHash required"],
+        ["bad-unsub", { type: "unsubscribe", requestId: "bad-unsub" }, "topic required"],
         ["bad-sync", { type: "sync", requestId: "bad-sync" }, "mutation and params required"],
         ["unknown", { type: "wat", requestId: "unknown" }, "Unknown message type"],
       ] as const) {
@@ -193,7 +191,11 @@ describe("Durable Object WebSocket transport", () => {
       );
       expect((await read(socket)).message).toContain("Unknown mutation: missing");
       socket.send(
-        JSON.stringify({ type: "unsubscribe", requestId: "again", topicHash: "0".repeat(64) }),
+        JSON.stringify({
+          type: "unsubscribe",
+          requestId: "again",
+          topic: { name: "counter", params: [] },
+        }),
       );
       expect((await read(socket)).removed).toBe(false);
       socket.send(
@@ -235,13 +237,11 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
     },
   } as WebSocket;
   const registry = new SubscriptionRegistry(engine, (_ws, message) => messages.push(message));
-  const topic = await Effect.runPromise(
-    engine.createTopic("counter", []).pipe(Effect.provide(TopicHasherLive)),
-  );
+  const topic = await Effect.runPromise(engine.createTopic("counter", []));
   attachment = { topics: [topic] };
-  await Effect.runPromise(registry.restore(socket).pipe(Effect.provide(TopicHasherLive)));
+  await Effect.runPromise(registry.restore(socket));
   messages.length = 0;
-  await Effect.runPromise(registry.restore(socket).pipe(Effect.provide(TopicHasherLive)));
+  await Effect.runPromise(registry.restore(socket));
   messages.length = 0;
   engine.sync("increment", []);
   expect(messages).toHaveLength(1);

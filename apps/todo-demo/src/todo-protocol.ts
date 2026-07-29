@@ -66,7 +66,7 @@ export const clientMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("unsubscribe"),
     requestId,
-    topicHash: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+    topic: Schema.Struct({ name: queryName, params }),
   }),
   Schema.Struct({
     type: Schema.Literal("sync"),
@@ -76,7 +76,7 @@ export const clientMessageSchema = Schema.Union([
   }),
 ]);
 export type ClientMessage = typeof clientMessageSchema.Type;
-const topic = Schema.Struct({ name: queryName, params, hash: Schema.String });
+const topic = Schema.Struct({ name: queryName, params });
 export const serverMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("queryResult"),
@@ -87,7 +87,7 @@ export const serverMessageSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("unsubscribed"),
     requestId,
-    topicHash: Schema.String,
+    topic,
     removed: Schema.Boolean,
   }),
   Schema.Struct({ type: Schema.Literal("synced"), requestId }),

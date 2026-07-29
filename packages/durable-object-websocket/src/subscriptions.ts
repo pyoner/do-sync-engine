@@ -1,4 +1,4 @@
-import { Effect, Exit } from "effect";
+import { Effect, Equal, Exit } from "effect";
 
 import {
   type ListenerId,
@@ -9,18 +9,21 @@ import {
   type SyncEngineInterface,
   type Topic,
   type TopicBuildError,
-  type TopicHash,
-  type TopicHasher,
   type UnknownQueryError,
 } from "@do-sync-engine/core";
 
-type DurableObjectWebSocketAttachment = { topics?: Topic[] };
-type Entry = {
-  topic: Topic;
-  listenerId: ListenerId;
-};
+type DurableObjectWebSocketAttachment = { topics?: unknown[] };
 export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
-  private readonly subscriptions = new Map<WebSocket, Map<TopicHash, Entry>>();
+  private readonly subscriptions = new Map<
+    WebSocket,
+    Map<
+      string,
+      Array<{
+        topic: Topic;
+        listenerId: ListenerId;
+      }>
+    >
+  >();
   constructor(
     private readonly engine: SyncEngineInterface<Q, M>,
     private readonly send: (ws: WebSocket, message: unknown) => void,
@@ -30,7 +33,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     name: StringKey<Q>,
     params: readonly unknown[],
     requestId: string,
-  ): Effect.Effect<void, TopicBuildError | UnknownQueryError, TopicHasher> {
+  ): Effect.Effect<void, TopicBuildError | UnknownQueryError> {
     return Effect.gen(
       function* (this: SubscriptionRegistry<Q, M>) {
         const topic = yield* this.engine.createTopic<StringKey<Q>>(
@@ -40,9 +43,13 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
         const value = this.engine.query<StringKey<Q>>(topic);
         const initial = { type: "queryResult", requestId, topic, value };
         JSON.stringify(initial);
-        const map = this.subscriptions.get(ws) ?? new Map<TopicHash, Entry>();
+        const map =
+          this.subscriptions.get(ws) ??
+          new Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>();
         this.subscriptions.set(ws, map);
-        if (map.has(topic.hash)) {
+        const bucket = map.get(topic.name) ?? [];
+        map.set(topic.name, bucket);
+        if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic))) {
           this.send(ws, initial);
           return;
         }
@@ -50,12 +57,14 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
         const listener = (event: { topic: Topic; value: unknown }) =>
           this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
         const listenerId = this.engine.subscribe<StringKey<Q>>(topic, listener);
-        map.set(topic.hash, { topic, listenerId });
+        bucket.push({ topic, listenerId });
         try {
-          ws.serializeAttachment({ topics: [...map.values()].map((e) => e.topic) });
+          ws.serializeAttachment({
+            topics: [...map.values()].flatMap((entries) => entries.map((entry) => entry.topic)),
+          });
         } catch (error) {
           this.engine.unsubscribe(listenerId);
-          map.delete(topic.hash);
+          bucket.pop();
           throw error;
         }
         try {
@@ -69,59 +78,71 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
             return;
           }
           this.engine.unsubscribe(listenerId);
-          map.delete(topic.hash);
+          bucket.pop();
           throw error;
         }
       }.bind(this),
     );
   }
-  unsubscribe(ws: WebSocket, hash: TopicHash): boolean {
+  unsubscribe(ws: WebSocket, topic: Topic): boolean {
     const map = this.subscriptions.get(ws);
-    const entry = map?.get(hash);
-    if (!map || !entry) return false;
+    const bucket = map?.get(topic.name);
+    const index =
+      bucket?.findIndex(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)) ?? -1;
+    if (!map || !bucket || index < 0) return false;
     ws.serializeAttachment({
-      topics: [...map.values()].filter((e) => e.topic.hash !== hash).map((e) => e.topic),
+      topics: [...map.values()].flatMap((entries) =>
+        entries
+          .filter((_, entryIndex) => entries !== bucket || entryIndex !== index)
+          .map((entry) => entry.topic),
+      ),
     });
+    const entry = bucket[index];
     const removed = this.engine.unsubscribe(entry.listenerId);
-    map.delete(hash);
+    bucket.splice(index, 1);
+    if (bucket.length === 0) map.delete(topic.name);
+    if (map.size === 0) this.subscriptions.delete(ws);
     return removed;
   }
-  restore(ws: WebSocket, sendSnapshots = true): Effect.Effect<void, never, TopicHasher> {
+  restore(ws: WebSocket, sendSnapshots = true): Effect.Effect<void> {
     return Effect.gen(
       function* (this: SubscriptionRegistry<Q, M>) {
         const existing = this.subscriptions.get(ws);
         if (existing) {
-          for (const entry of existing.values()) this.engine.unsubscribe(entry.listenerId);
+          for (const bucket of existing.values()) {
+            for (const entry of bucket) this.engine.unsubscribe(entry.listenerId);
+          }
         }
         const candidates = this.read(ws);
-        const map = new Map<TopicHash, Entry>();
+        const map = new Map<string, Array<{ topic: Topic; listenerId: ListenerId }>>();
         this.subscriptions.set(ws, map);
         const topics: Topic[] = [];
         const snapshots: Array<{ topic: Topic; value: unknown }> = [];
         for (const candidate of candidates) {
-          if (
-            typeof candidate?.name !== "string" ||
-            !Array.isArray(candidate.params) ||
-            typeof candidate.hash !== "string" ||
-            !/^[0-9a-f]{64}$/.test(candidate.hash)
-          )
+          if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
             continue;
+          if ("hash" in candidate) continue;
+          const record = candidate as { name?: unknown; params?: unknown };
+          if (typeof record.name !== "string" || !Array.isArray(record.params)) continue;
           const result = yield* Effect.exit(
             this.engine.createTopic<StringKey<Q>>(
-              candidate.name as StringKey<Q>,
-              candidate.params as OperationParams<Q[StringKey<Q>]>,
+              record.name as StringKey<Q>,
+              record.params as OperationParams<Q[StringKey<Q>]>,
             ),
           );
           if (Exit.isFailure(result)) continue;
           const topic = result.value;
-          if (topic.hash !== candidate.hash || map.has(topic.hash)) continue;
+          const bucket = map.get(topic.name) ?? [];
+          map.set(topic.name, bucket);
+          if (bucket.some(({ topic: existingTopic }) => Equal.equals(existingTopic, topic)))
+            continue;
           const listener = (event: { topic: Topic; value: unknown }) =>
             this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
           const typedTopic = topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>;
           const value = this.engine.query<StringKey<Q>>(typedTopic);
           const listenerId = this.engine.subscribe<StringKey<Q>>(typedTopic, listener);
           topics.push(topic);
-          map.set(topic.hash, { topic, listenerId });
+          bucket.push({ topic, listenerId });
           if (sendSnapshots) snapshots.push({ topic, value });
         }
         ws.serializeAttachment({ topics });
@@ -132,10 +153,12 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
   clear(ws: WebSocket): void {
     const map = this.subscriptions.get(ws);
     if (!map) return;
-    for (const entry of map.values()) this.engine.unsubscribe(entry.listenerId);
+    for (const bucket of map.values()) {
+      for (const entry of bucket) this.engine.unsubscribe(entry.listenerId);
+    }
     this.subscriptions.delete(ws);
   }
-  private read(ws: WebSocket): Topic[] {
+  private read(ws: WebSocket): unknown[] {
     const value = ws.deserializeAttachment() as DurableObjectWebSocketAttachment | undefined;
     return Array.isArray(value?.topics) ? value.topics : [];
   }

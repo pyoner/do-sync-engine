@@ -1,12 +1,6 @@
-export {
-  TopicBuildError,
-  TopicHasher,
-  TopicHasherLive,
-  UnknownQueryError,
-  toTables,
-} from "./helpers";
+export { TopicBuildError, UnknownQueryError, toTables } from "./helpers";
 export { SyncEngine } from "./engine";
-export { ListenerIdSchema, TableSchema, TopicHashSchema, TopicSchema } from "./types";
+export { ListenerIdSchema, TableSchema, Topic, TopicSchema } from "./types";
 export type {
   Branded,
   Listener,
@@ -22,6 +16,4 @@ export type {
   SyncEngineInterface,
   SyncEngineOptions,
   Table,
-  Topic,
-  TopicHash,
 } from "./types";

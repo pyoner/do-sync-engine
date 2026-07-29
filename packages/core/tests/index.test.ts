@@ -1,6 +1,7 @@
-import { Effect } from "effect";
+import { Effect, Equal, Hash, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
-import { SyncEngine, TopicHasherLive, toTables } from "../src/index.js";
+import { SyncEngine, Topic, TopicSchema, toTables } from "../src/index.js";
+import { validateTopic } from "../src/helpers.js";
 import type {
   Branded,
   Mutation,
@@ -9,8 +10,6 @@ import type {
   Query,
   ListenerId,
   SyncEngineInterface,
-  Topic,
-  TopicHash,
 } from "../src/index.js";
 
 test("exports canonical topic and listener APIs", async () => {
@@ -41,8 +40,6 @@ test("exports canonical topic and listener APIs", async () => {
     const symbolValue: symbol = brandedSymbol;
     // @ts-expect-error — raw strings are not ListenerId values
     const rawListenerId: ListenerId = "listener-id";
-    // @ts-expect-error — raw strings are not TopicHash values
-    const rawTopicHash: TopicHash = "hash";
     const otherId = undefined as unknown as Branded<number, "OtherId">;
     // @ts-expect-error — differently tagged numbers are not ListenerId values
     const otherListenerId: ListenerId = otherId;
@@ -52,25 +49,28 @@ test("exports canonical topic and listener APIs", async () => {
     void bigIntValue;
     void symbolValue;
     void rawListenerId;
-    void rawTopicHash;
     void otherListenerId;
   }
 
-  const topic = await Effect.runPromise(
-    engine.createTopic("numbers", []).pipe(Effect.provide(TopicHasherLive)),
-  );
-  const topicHash: TopicHash = topic.hash;
-  expect(topicHash).toBeTypeOf("string");
+  const topic = await Effect.runPromise(engine.createTopic("numbers", []));
+  expect(topic).toBeInstanceOf(Topic);
 
-  expect(topic).toEqual({
-    name: "numbers",
-    params: [],
-    hash: "7847f04c5bf09defec728bc6476dd97e2ff6f42f192ee38632308a5713d2f43f",
+  expect(topic).toEqual({ name: "numbers", params: [] });
+
+  const decodedTopic = Schema.decodeUnknownSync(TopicSchema)({
+    name: topic.name,
+    params: topic.params,
   });
+  expect(decodedTopic).toBeInstanceOf(Topic);
+  expect(Equal.equals(topic, decodedTopic)).toBe(true);
+  expect(Hash.hash(decodedTopic)).toBe(Hash.hash(topic));
 
   const listener: Listener = () => {};
   const listenerId: ListenerId = engine.subscribe(topic, listener);
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  expect(() =>
+    validateTopic(new Topic({ name: "numbers", params: [new Map()] }), new Set(["numbers"])),
+  ).toThrow("plain objects and arrays");
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -102,9 +102,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     queries,
     mutations,
   });
-  const topic: Topic<"numbers", []> = await Effect.runPromise(
-    engine.createTopic("numbers", []).pipe(Effect.provide(TopicHasherLive)),
-  );
+  const topic: Topic<"numbers", []> = await Effect.runPromise(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
   const listenerId = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
@@ -130,9 +128,6 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     const params = topic.params;
     // @ts-expect-error — Topic properties are readonly
     topic.params = params;
-    const hash = topic.hash;
-    // @ts-expect-error — Topic properties are readonly
-    topic.hash = hash;
     const event: ListenerEvent = { topic, value: [] };
     // @ts-expect-error — ListenerEvent properties are readonly
     event.topic = topic;
@@ -155,9 +150,7 @@ test("typed createTopic params and listener handle", async () => {
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations });
-  const topic = await Effect.runPromise(
-    engine.createTopic("numbers", [42]).pipe(Effect.provide(TopicHasherLive)),
-  );
+  const topic = await Effect.runPromise(engine.createTopic("numbers", [42]));
   const listener: Listener = () => {};
 
   if (false as boolean) {
