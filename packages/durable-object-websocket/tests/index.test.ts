@@ -1,7 +1,8 @@
+import { Effect } from "effect";
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { SyncEngine, TopicHasherLive, toTables } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
@@ -234,11 +235,13 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
     },
   } as WebSocket;
   const registry = new SubscriptionRegistry(engine, (_ws, message) => messages.push(message));
-  const topic = await engine.createTopic("counter", []);
+  const topic = await Effect.runPromise(
+    engine.createTopic("counter", []).pipe(Effect.provide(TopicHasherLive)),
+  );
   attachment = { topics: [topic] };
-  await registry.restore(socket);
+  await Effect.runPromise(registry.restore(socket).pipe(Effect.provide(TopicHasherLive)));
   messages.length = 0;
-  await registry.restore(socket);
+  await Effect.runPromise(registry.restore(socket).pipe(Effect.provide(TopicHasherLive)));
   messages.length = 0;
   engine.sync("increment", []);
   expect(messages).toHaveLength(1);

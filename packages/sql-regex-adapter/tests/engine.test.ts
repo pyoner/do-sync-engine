@@ -1,8 +1,12 @@
+import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
-import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { SyncEngine, TopicHasher, TopicHasherLive, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
+
+const runTopic = <A, E>(effect: Effect.Effect<A, E, TopicHasher>) =>
+  Effect.runPromise(effect.pipe(Effect.provide(TopicHasherLive)));
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
@@ -64,12 +68,12 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("creates canonical SHA-256 topics", async () => {
-    const first = await engine.createTopic("allUsers", []);
-    const equivalent = await engine.createTopic("allUsers", []);
-    const changedParams = await engine.createTopic("userById", [1]);
-    const changedName = await engine.createTopic("postsOnly", []);
+    const first = await runTopic(engine.createTopic("allUsers", []));
+    const equivalent = await runTopic(engine.createTopic("allUsers", []));
+    const changedParams = await runTopic(engine.createTopic("userById", [1]));
+    const changedName = await runTopic(engine.createTopic("postsOnly", []));
     const params = [1];
-    const clonedTopic = await engine.createTopic("userById", params);
+    const clonedTopic = await runTopic(engine.createTopic("userById", params));
     params[0] = 2;
     expect(clonedTopic.params).toEqual([1]);
 
@@ -84,7 +88,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("runs queries through the public engine interface", async () => {
-    const topic = await engine.createTopic("userById", [2]);
+    const topic = await runTopic(engine.createTopic("userById", [2]));
 
     expect(() => engine.query({ ...topic, name: "missing" } as never)).toThrow(
       "Unknown query: missing",
@@ -93,7 +97,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("sync runs matching topics once and fans out the same event", async () => {
-    const topic = await engine.createTopic("allUsers", []);
+    const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     engine.subscribe(topic, first.listener);
@@ -129,8 +133,8 @@ describe("SyncEngine topics and events", () => {
       queries: { trackedUserById, trackedPosts },
       mutations: { updateUserName },
     });
-    const topic = await engine.createTopic("trackedUserById", [2]);
-    const postsTopic = await engine.createTopic("trackedPosts", []);
+    const topic = await runTopic(engine.createTopic("trackedUserById", [2]));
+    const postsTopic = await runTopic(engine.createTopic("trackedPosts", []));
     const captured = captureEvents();
     engine.subscribe(topic, captured.listener);
     engine.subscribe(postsTopic, captured.listener);
@@ -166,13 +170,13 @@ describe("SyncEngine topics and events", () => {
     engine.sync("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
 
-    const failingTopic = await engine.createTopic("failingQuery", []);
+    const failingTopic = await runTopic(engine.createTopic("failingQuery", []));
     engine.subscribe(failingTopic, noopPublish);
     expect(() => engine.sync("insertUser", ["dave"])).toThrow("query failed");
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
-    const topic = await engine.createTopic("allUsers", []);
+    const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     const firstListenerId = engine.subscribe(topic, first.listener);
@@ -190,7 +194,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("removes topics after their final listener unsubscribes", async () => {
-    const topic = await engine.createTopic("allUsers", []);
+    const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     const firstListenerId = engine.subscribe(topic, first.listener);
@@ -209,8 +213,8 @@ describe("SyncEngine topics and events", () => {
       queries: { allUsers, postsOnly },
       mutations: {},
     });
-    const usersTopic = await exposed.createTopic("allUsers", []);
-    const postsTopic = await exposed.createTopic("postsOnly", []);
+    const usersTopic = await runTopic(exposed.createTopic("allUsers", []));
+    const postsTopic = await runTopic(exposed.createTopic("postsOnly", []));
     const users = captureEvents();
     const posts = captureEvents();
     exposed.subscribe(usersTopic, users.listener);
@@ -244,7 +248,7 @@ describe("SyncEngine topics and events", () => {
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
     });
-    const topic = await engine.createTopic("synchronousQuery", []);
+    const topic = await runTopic(engine.createTopic("synchronousQuery", []));
     engine.subscribe(topic, () => calls.push("listener"));
 
     engine.sync("synchronousMutation", []);
@@ -253,7 +257,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("allows asynchronous listeners without delaying sync", async () => {
-    const topic = await engine.createTopic("allUsers", []);
+    const topic = await runTopic(engine.createTopic("allUsers", []));
     let completed = false;
     engine.subscribe(topic, async () => {
       await Promise.resolve();
@@ -268,7 +272,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("validates manually supplied topics and hash collisions", async () => {
-    const validTopic = await engine.createTopic("allUsers", []);
+    const validTopic = await runTopic(engine.createTopic("allUsers", []));
     expect(() =>
       engine.subscribe({ ...validTopic, name: "missing" } as never, noopPublish),
     ).toThrow("Unknown query: missing");
@@ -279,6 +283,6 @@ describe("SyncEngine topics and events", () => {
     expect(() => engine.subscribe({ ...validTopic, params: [1] } as never, noopPublish)).toThrow(
       `Topic hash collision: ${validTopic.hash}`,
     );
-    await expect(engine.createTopic("allUsers", [1n] as never)).rejects.toThrow();
+    await expect(runTopic(engine.createTopic("allUsers", [1n] as never))).rejects.toThrow();
   });
 });

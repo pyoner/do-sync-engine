@@ -17,6 +17,7 @@ catalog:
   drizzle-orm: 1.0.0-rc.4
   better-sqlite3: 13.0.1
   "@types/better-sqlite3": 7.6.13
+  effect: 4.0.0-beta.102
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
@@ -30,5 +31,6 @@ peerDependencyRules:
 allowBuilds:
   better-sqlite3: set this to true or false
   esbuild: set this to true or false
+  msgpackr-extract: false
   sharp: set this to true or false
   workerd: true

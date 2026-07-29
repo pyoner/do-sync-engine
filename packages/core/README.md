@@ -5,7 +5,8 @@ Minimal engine for synchronizing query subscribers after mutations.
 ## Usage
 
 ```ts
-import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { Effect } from "effect";
+import { SyncEngine, TopicHasherLive, toTables } from "@do-sync-engine/core";
 import type { Mutation, Query, Table } from "@do-sync-engine/core";
 
 // Define query and mutation handlers
@@ -26,7 +27,9 @@ const mutations = {
 const engine = new SyncEngine({ queries, mutations });
 
 // Create a canonical topic, then subscribe one or more listeners to it.
-const topic = await engine.createTopic("allTodos", []);
+const topic = await Effect.runPromise(
+  engine.createTopic("allTodos", []).pipe(Effect.provide(TopicHasherLive)),
+);
 const listenerId = engine.subscribe(topic, ({ topic, value }) => {
   console.log(topic.hash, value);
 });

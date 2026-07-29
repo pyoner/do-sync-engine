@@ -1,4 +1,14 @@
-import { assertKnownQuery, buildTopic, cloneOrThrow, validateTopic } from "./helpers";
+import { Effect } from "effect";
+import {
+  assertKnownQueryEffect,
+  buildTopic,
+  clone,
+  cloneOrThrow,
+  TopicBuildError,
+  TopicHasher,
+  UnknownQueryError,
+  validateTopic,
+} from "./helpers";
 import type {
   Listener,
   ListenerEvent,
@@ -37,13 +47,20 @@ export class SyncEngine<
     );
   }
 
-  async createTopic<Name extends StringKey<Queries>>(
+  createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<Topic<Name, OperationParams<Queries[Name]>>> {
-    assertKnownQuery(name, this.queries);
-    const topicParams = cloneOrThrow(params, "Topic params");
-    return buildTopic(name, topicParams);
+  ): Effect.Effect<
+    Topic<Name, OperationParams<Queries[Name]>>,
+    TopicBuildError | UnknownQueryError,
+    TopicHasher
+  > {
+    const queries = this.queries;
+    return Effect.gen(function* () {
+      yield* assertKnownQueryEffect(name, queries);
+      const topicParams = yield* clone(params);
+      return yield* buildTopic(name, topicParams);
+    });
   }
 
   subscribe<Name extends StringKey<Queries>>(

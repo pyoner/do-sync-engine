@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+import { TopicHasherLive } from "@do-sync-engine/core";
 import { DurableObject } from "cloudflare:workers";
 import type {
   MutationMap,
@@ -34,7 +36,11 @@ export abstract class DurableObjectWebSocket<
       const { engine } = await initialize();
       this.engine = engine;
       this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
-      for (const ws of ctx.getWebSockets()) await this.registry.restore(ws, false);
+      for (const ws of ctx.getWebSockets()) {
+        await Effect.runPromise(
+          this.registry.restore(ws, false).pipe(Effect.provide(TopicHasherLive)),
+        );
+      }
     });
   }
   async fetch(request: Request): Promise<Response> {
@@ -43,7 +49,7 @@ export abstract class DurableObjectWebSocket<
       return new Response("Expected WebSocket", { status: 426 });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    await this.registry.restore(pair[1]);
+    await Effect.runPromise(this.registry.restore(pair[1]).pipe(Effect.provide(TopicHasherLive)));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -54,7 +60,11 @@ export abstract class DurableObjectWebSocket<
     const requestId = command.requestId;
     try {
       if (command.type === "subscribe") {
-        await this.registry.subscribe(ws, command.query as StringKey<Q>, command.params, requestId);
+        await Effect.runPromise(
+          this.registry
+            .subscribe(ws, command.query as StringKey<Q>, command.params, requestId)
+            .pipe(Effect.provide(TopicHasherLive)),
+        );
       } else if (command.type === "unsubscribe") {
         this.send(ws, {
           type: "unsubscribed",
@@ -70,7 +80,23 @@ export abstract class DurableObjectWebSocket<
         this.send(ws, { type: "synced", requestId });
       }
     } catch (error) {
-      this.send(ws, { type: "error", requestId, message: String(error) });
+      const message =
+        typeof error === "object" && error !== null && "_tag" in error
+          ? error._tag === "UnknownQueryError" &&
+            "query" in error &&
+            typeof error.query === "string"
+            ? `Unknown query: ${error.query}`
+            : error._tag === "TopicBuildError" && "operation" in error
+              ? error.operation === "clone"
+                ? "Topic params must support structuredClone"
+                : "cause" in error && error.cause instanceof Error
+                  ? error.cause.message
+                  : "Topic construction failed"
+              : "Topic construction failed"
+          : error instanceof Error
+            ? error.message
+            : "Unknown websocket error";
+      this.send(ws, { type: "error", requestId, message });
     }
   }
   async webSocketClose(

@@ -1,5 +1,6 @@
+import { Effect } from "effect";
 import { expect, test } from "vite-plus/test";
-import { SyncEngine, toTables } from "../src/index.js";
+import { SyncEngine, TopicHasherLive, toTables } from "../src/index.js";
 import type {
   Branded,
   Mutation,
@@ -55,7 +56,9 @@ test("exports canonical topic and listener APIs", async () => {
     void otherListenerId;
   }
 
-  const topic = await engine.createTopic("numbers", []);
+  const topic = await Effect.runPromise(
+    engine.createTopic("numbers", []).pipe(Effect.provide(TopicHasherLive)),
+  );
   const topicHash: TopicHash = topic.hash;
   expect(topicHash).toBeTypeOf("string");
 
@@ -99,7 +102,9 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     queries,
     mutations,
   });
-  const topic: Topic<"numbers", []> = await engine.createTopic("numbers", []);
+  const topic: Topic<"numbers", []> = await Effect.runPromise(
+    engine.createTopic("numbers", []).pipe(Effect.provide(TopicHasherLive)),
+  );
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
   const listenerId = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
@@ -150,7 +155,9 @@ test("typed createTopic params and listener handle", async () => {
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations });
-  const topic = await engine.createTopic("numbers", [42]);
+  const topic = await Effect.runPromise(
+    engine.createTopic("numbers", [42]).pipe(Effect.provide(TopicHasherLive)),
+  );
   const listener: Listener = () => {};
 
   if (false as boolean) {

@@ -1,4 +1,10 @@
-export { toTables } from "./helpers";
+export {
+  TopicBuildError,
+  TopicHasher,
+  TopicHasherLive,
+  UnknownQueryError,
+  toTables,
+} from "./helpers";
 export { SyncEngine } from "./engine";
 export type {
   Branded,

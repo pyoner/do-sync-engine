@@ -1,3 +1,5 @@
+import type { Effect } from "effect";
+import type { TopicBuildError, TopicHasher, UnknownQueryError } from "./helpers";
 declare const brand: unique symbol;
 
 export type Branded<
@@ -87,7 +89,11 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
+  ): Effect.Effect<
+    Topic<Name, OperationParams<Queries[Name]>>,
+    TopicBuildError | UnknownQueryError,
+    TopicHasher
+  >;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
   ): OperationResult<Queries[Name]>;
