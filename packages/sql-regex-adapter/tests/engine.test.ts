@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
-import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { SyncEngine, Topic, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 
 const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
@@ -84,10 +84,26 @@ describe("SyncEngine topics and events", () => {
   test("runs queries through the public engine interface", async () => {
     const topic = await runTopic(engine.createTopic("userById", [2]));
 
-    expect(() => engine.query({ name: "missing", params: topic.params } as never)).toThrow(
+    expect(() => engine.query(new Topic({ name: "missing", params: topic.params }))).toThrow(
       "Unknown query: missing",
     );
     expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
+  });
+
+  test("routes same-query topics by full parameters", async () => {
+    const firstTopic = await runTopic(engine.createTopic("userById", [1]));
+    const secondTopic = await runTopic(engine.createTopic("userById", [2]));
+    const first = captureEvents();
+    const second = captureEvents();
+    engine.subscribe(firstTopic, first.listener);
+    engine.subscribe(secondTopic, second.listener);
+
+    engine.sync("updateUserName", ["alice-updated", 1]);
+
+    expect(first.events).toHaveLength(1);
+    expect(second.events).toHaveLength(1);
+    expect(first.events[0].value).toEqual([{ id: 1, name: "alice-updated" }]);
+    expect(second.events[0].value).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("sync runs matching topics once and fans out the same event", async () => {
@@ -268,12 +284,14 @@ describe("SyncEngine topics and events", () => {
   test("validates manually supplied topics", async () => {
     const validTopic = await runTopic(engine.createTopic("allUsers", []));
     expect(() =>
-      engine.subscribe({ name: "missing", params: validTopic.params } as never, noopPublish),
+      engine.subscribe(new Topic({ name: "missing", params: validTopic.params }), noopPublish),
     ).toThrow("Unknown query: missing");
     engine.subscribe(validTopic, noopPublish);
     expect(() =>
-      engine.subscribe({ name: validTopic.name, params: [1] } as never, noopPublish),
+      engine.subscribe(new Topic({ name: validTopic.name, params: [1] }), noopPublish),
     ).not.toThrow();
-    await expect(runTopic(engine.createTopic("allUsers", [1n] as never))).rejects.toThrow();
+    expect(() =>
+      engine.subscribe(new Topic({ name: "allUsers", params: [() => 1] }), noopPublish),
+    ).toThrow("JSON-safe values");
   });
 });

@@ -26,6 +26,16 @@ import type {
   Topic,
 } from "./types";
 
+function queryTopic(
+  topic: Topic,
+  queries: ReadonlyMap<string, Query<unknown[], unknown>>,
+): unknown {
+  const validated = validateTopic(topic, queries);
+  const queryDefinition = queries.get(validated.name);
+  if (queryDefinition === undefined) throw new ReferenceError(`Unknown query: ${validated.name}`);
+  return queryDefinition.run(...validated.params);
+}
+
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -76,6 +86,8 @@ export class SyncEngine<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
   ): ListenerId {
+    assertSupportedParams(topic.params);
+    validateTopic(topic, this.queries);
     const clonedTopic = cloneOrThrow(topic, "Topic");
     const validatedTopic = validateTopic(clonedTopic, this.queries);
     if (typeof listener !== "function") {
@@ -176,7 +188,7 @@ export class SyncEngine<
         }
         if (!touchesChangedTable) continue;
 
-        const value = this.query(topic as never);
+        const value = queryTopic(topic, this.queries);
         this.publish({ topic, value });
       }
     }

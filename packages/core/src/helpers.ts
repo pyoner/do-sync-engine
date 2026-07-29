@@ -24,25 +24,36 @@ export function cloneOrThrow<T>(value: T, label: string): T {
   }
 }
 
-export function assertSupportedParams(value: unknown, stack = new WeakSet<object>()): void {
-  if (value === null || typeof value !== "object") return;
-  if (stack.has(value)) throw new TypeError("Topic params must not be cyclic");
-  stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index++) {
-        if (!(index in value)) throw new TypeError("Topic params must not contain sparse arrays");
-        assertSupportedParams(value[index], stack);
-      }
-      return;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      throw new TypeError("Topic params must contain only plain objects and arrays");
-    }
-    for (const child of Object.values(value)) assertSupportedParams(child, stack);
-  } finally {
-    stack.delete(value);
+export function assertSupportedParams(value: unknown, seen = new WeakSet<object>()): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && !Object.is(value, -0)) return;
+    throw new TypeError("Topic params must contain only JSON-safe values");
   }
+  if (typeof value !== "object") {
+    throw new TypeError("Topic params must contain only JSON-safe values");
+  }
+  if (seen.has(value)) {
+    throw new TypeError("Topic params must not contain cycles or shared references");
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (
+      Object.getOwnPropertySymbols(value).length > 0 ||
+      Object.keys(value).length !== value.length
+    ) {
+      throw new TypeError("Topic params must contain only dense arrays");
+    }
+    for (const child of value) assertSupportedParams(child, seen);
+    return;
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError("Topic params must contain only plain objects and arrays");
+  }
+  if (Reflect.ownKeys(value).length !== Object.keys(value).length) {
+    throw new TypeError("Topic params must contain only enumerable string properties");
+  }
+  for (const child of Object.values(value)) assertSupportedParams(child, seen);
 }
 
 export const clone = <T>(value: T) =>
@@ -97,6 +108,7 @@ export function validateTopic(
     if (!Array.isArray(value.params)) {
       throw new TypeError("Topic params must be an array");
     }
+    assertSupportedParams(value.params);
     throw new TypeError("Topic must be a valid topic");
   }
   assertKnownQuery(candidate.name, knownQueryNames);

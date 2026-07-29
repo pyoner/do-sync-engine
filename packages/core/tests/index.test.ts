@@ -71,6 +71,12 @@ test("exports canonical topic and listener APIs", async () => {
   expect(() =>
     validateTopic(new Topic({ name: "numbers", params: [new Map()] }), new Set(["numbers"])),
   ).toThrow("plain objects and arrays");
+  expect(() =>
+    validateTopic(new Topic({ name: "numbers", params: [() => 1] }), new Set(["numbers"])),
+  ).toThrow("JSON-safe values");
+  expect(() =>
+    validateTopic(new Topic({ name: "numbers", params: [Symbol("x")] }), new Set(["numbers"])),
+  ).toThrow("JSON-safe values");
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",

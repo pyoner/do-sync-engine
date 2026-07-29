@@ -39,7 +39,7 @@ engine.sync("addTodo", ["Buy milk"]);
 engine.unsubscribe(listenerId);
 ```
 
-A `Topic` contains the query `name` and query `params`. Topics participate in Effect equality and hashing for local in-memory lookup. Topic parameters are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by the topic. Parameters must be acyclic, non-sparse arrays containing only primitives, arrays, and plain objects; `Map`, `Set`, dates, typed arrays, and other non-plain values are rejected.
+A `Topic` contains the query `name` and query `params`. Topics participate in Effect equality and hashing for local in-memory lookup. Topic parameters are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by the topic. Parameters must be JSON-safe, acyclic, and free of shared references: strings, booleans, `null`, finite numbers except `-0`, dense arrays, and plain objects are supported. `undefined`, `bigint`, `symbol`, functions, non-finite numbers, `Map`, `Set`, dates, typed arrays, and other non-plain values are rejected.
 
 ## Development
 

@@ -136,7 +136,13 @@ describe("Durable Object WebSocket transport", () => {
       );
       expect((await read(socket)).value).toEqual({ key: "alpha", value: 3 });
       expect((await read(socket)).type).toBe("synced");
-      socket.send(JSON.stringify({ type: "unsubscribe", requestId: "unsub", topic: first.topic }));
+      socket.send(
+        JSON.stringify({
+          type: "unsubscribe",
+          requestId: "unsub",
+          topic: JSON.parse(JSON.stringify(first.topic)),
+        }),
+      );
       expect((await read(socket)).removed).toBe(true);
       await evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
         webSockets: "hibernate",
