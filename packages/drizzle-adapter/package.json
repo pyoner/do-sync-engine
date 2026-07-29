@@ -33,6 +33,5 @@
   },
   "peerDependencies": {
     "drizzle-orm": "catalog:"
-  },
-  "inlinedDependencies": {}
+  }
 }
