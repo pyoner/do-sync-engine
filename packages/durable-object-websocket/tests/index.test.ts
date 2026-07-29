@@ -1,6 +1,8 @@
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
+import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
@@ -132,7 +134,6 @@ describe("Durable Object WebSocket transport", () => {
           params: ["alpha", 1],
         }),
       );
-      expect((await read(socket)).value).toEqual({ key: "alpha", value: 2 });
       expect((await read(socket)).value).toEqual({ key: "alpha", value: 3 });
       expect((await read(socket)).type).toBe("synced");
       const hash = (first.topic as { hash: string }).hash;
@@ -208,4 +209,37 @@ describe("Durable Object WebSocket transport", () => {
       socket.close();
     }
   });
+});
+it("does not retain duplicate listeners when restoring a socket", async () => {
+  const engine = new SyncEngine({
+    queries: {
+      counter: {
+        tables: toTables(["counters"]),
+        run: () => ({ value: 0 }),
+      },
+    },
+    mutations: {
+      increment: {
+        tables: toTables(["counters"]),
+        run: () => {},
+      },
+    },
+  });
+  const messages: unknown[] = [];
+  let attachment: unknown;
+  const socket = {
+    deserializeAttachment: () => attachment,
+    serializeAttachment: (value: unknown) => {
+      attachment = value;
+    },
+  } as WebSocket;
+  const registry = new SubscriptionRegistry(engine, (_ws, message) => messages.push(message));
+  const topic = await engine.createTopic("counter", []);
+  attachment = { topics: [topic] };
+  await registry.restore(socket);
+  messages.length = 0;
+  await registry.restore(socket);
+  messages.length = 0;
+  engine.sync("increment", []);
+  expect(messages).toHaveLength(1);
 });

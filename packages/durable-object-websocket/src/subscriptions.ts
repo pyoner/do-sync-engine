@@ -1,13 +1,13 @@
 import type {
   ListenerId,
-  QueryMap,
   MutationMap,
+  OperationParams,
+  QueryMap,
+  StringKey,
   SyncEngineInterface,
   Topic,
   TopicHash,
-  StringKey,
 } from "@do-sync-engine/core";
-import type { QueryResultMessage } from "./protocol.ts";
 
 type DurableObjectWebSocketAttachment = { topics?: Topic[] };
 type Entry = {
@@ -26,14 +26,12 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     params: unknown[],
     requestId: string,
   ): Promise<void> {
-    const topic = await this.engine.createTopic(name as never, params as never);
-    const value = this.engine.query(topic as never);
-    const initial: QueryResultMessage<Q> = {
-      type: "queryResult",
-      requestId,
-      topic: topic as never,
-      value: value as never,
-    };
+    const topic = await this.engine.createTopic<StringKey<Q>>(
+      name,
+      params as OperationParams<Q[StringKey<Q>]>,
+    );
+    const value = this.engine.query<StringKey<Q>>(topic);
+    const initial = { type: "queryResult", requestId, topic, value };
     JSON.stringify(initial);
     const map = this.subscriptions.get(ws) ?? new Map<TopicHash, Entry>();
     this.subscriptions.set(ws, map);
@@ -44,7 +42,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     const previous = ws.deserializeAttachment();
     const listener = (event: { topic: Topic; value: unknown }) =>
       this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
-    const listenerId = this.engine.subscribe(topic as never, listener as never);
+    const listenerId = this.engine.subscribe<StringKey<Q>>(topic, listener);
     map.set(topic.hash, { topic, listenerId });
     try {
       ws.serializeAttachment({ topics: [...map.values()].map((e) => e.topic) });
@@ -79,7 +77,11 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     map.delete(hash);
     return removed;
   }
-  async restore(ws: WebSocket): Promise<void> {
+  async restore(ws: WebSocket, sendSnapshots = true): Promise<void> {
+    const existing = this.subscriptions.get(ws);
+    if (existing) {
+      for (const entry of existing.values()) this.engine.unsubscribe(entry.listenerId);
+    }
     const candidates = this.read(ws);
     const map = new Map<TopicHash, Entry>();
     this.subscriptions.set(ws, map);
@@ -95,18 +97,22 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
         continue;
       let topic: Topic;
       try {
-        topic = await this.engine.createTopic(candidate.name as never, candidate.params as never);
+        topic = await this.engine.createTopic<StringKey<Q>>(
+          candidate.name as StringKey<Q>,
+          candidate.params as OperationParams<Q[StringKey<Q>]>,
+        );
       } catch {
         continue;
       }
       if (topic.hash !== candidate.hash || map.has(topic.hash)) continue;
-      const value = this.engine.query(topic as never);
       const listener = (event: { topic: Topic; value: unknown }) =>
         this.send(ws, { type: "queryResult", topic: event.topic, value: event.value });
-      const listenerId = this.engine.subscribe(topic as never, listener as never);
-      map.set(topic.hash, { topic, listenerId });
+      const typedTopic = topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>;
+      const value = this.engine.query<StringKey<Q>>(typedTopic);
+      const listenerId = this.engine.subscribe<StringKey<Q>>(typedTopic, listener);
       topics.push(topic);
-      snapshots.push({ topic, value });
+      map.set(topic.hash, { topic, listenerId });
+      if (sendSnapshots) snapshots.push({ topic, value });
     }
     ws.serializeAttachment({ topics });
     for (const snapshot of snapshots) this.send(ws, { type: "queryResult", ...snapshot });

@@ -1,5 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import type { MutationMap, QueryMap, StringKey, SyncEngineInterface } from "@do-sync-engine/core";
+import type {
+  MutationMap,
+  OperationParams,
+  QueryMap,
+  StringKey,
+  SyncEngineInterface,
+} from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "./subscriptions.ts";
 import { decodeClientCommand } from "./protocol.ts";
 export type * from "./protocol.ts";
@@ -28,7 +34,7 @@ export abstract class DurableObjectWebSocket<
       const { engine } = await initialize();
       this.engine = engine;
       this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
-      for (const ws of ctx.getWebSockets()) await this.registry.restore(ws);
+      for (const ws of ctx.getWebSockets()) await this.registry.restore(ws, false);
     });
   }
   async fetch(request: Request): Promise<Response> {
@@ -57,7 +63,10 @@ export abstract class DurableObjectWebSocket<
           removed: this.registry.unsubscribe(ws, command.topicHash),
         });
       } else {
-        this.engine.sync(command.mutation as StringKey<M>, command.params as never);
+        this.engine.sync(
+          command.mutation as StringKey<M>,
+          command.params as OperationParams<M[StringKey<M>]>,
+        );
         this.send(ws, { type: "synced", requestId });
       }
     } catch (error) {
