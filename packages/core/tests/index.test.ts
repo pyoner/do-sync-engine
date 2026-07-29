@@ -85,7 +85,12 @@ test("exports canonical topic and listener APIs", async () => {
   if (Exit.isFailure(invalidTopic)) {
     const error = Exit.findErrorOption(invalidTopic);
     expect(Option.isSome(error)).toBe(true);
-    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+    if (Option.isSome(error)) {
+      expect(error.value).toBeInstanceOf(TopicValidationError);
+      expect(error.value.cause).toMatchObject({
+        message: "Topic params must contain only plain objects and arrays",
+      });
+    }
   }
 
   const unsupportedFunction = await Effect.runPromiseExit(
@@ -95,7 +100,12 @@ test("exports canonical topic and listener APIs", async () => {
   if (Exit.isFailure(unsupportedFunction)) {
     const error = Exit.findErrorOption(unsupportedFunction);
     expect(Option.isSome(error)).toBe(true);
-    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+    if (Option.isSome(error)) {
+      expect(error.value).toBeInstanceOf(TopicValidationError);
+      expect(error.value.cause).toMatchObject({
+        message: "Topic params must contain only JSON-safe values",
+      });
+    }
   }
 
   const unsupportedSymbol = await Effect.runPromiseExit(
@@ -105,7 +115,12 @@ test("exports canonical topic and listener APIs", async () => {
   if (Exit.isFailure(unsupportedSymbol)) {
     const error = Exit.findErrorOption(unsupportedSymbol);
     expect(Option.isSome(error)).toBe(true);
-    if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+    if (Option.isSome(error)) {
+      expect(error.value).toBeInstanceOf(TopicValidationError);
+      expect(error.value.cause).toMatchObject({
+        message: "Topic params must contain only JSON-safe values",
+      });
+    }
   }
 
   const unknownQuery = await Effect.runPromiseExit(

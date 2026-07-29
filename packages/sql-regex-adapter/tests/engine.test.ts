@@ -105,7 +105,10 @@ describe("SyncEngine topics and events", () => {
     if (Exit.isFailure(missing)) {
       const error = Exit.findErrorOption(missing);
       expect(Option.isSome(error)).toBe(true);
-      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(UnknownQueryError);
+        if (error.value instanceof UnknownQueryError) expect(error.value.query).toBe("missing");
+      }
     }
     expect(await runTopic(engine.query(topic))).toEqual([{ id: 2, name: "bob" }]);
   });
@@ -323,7 +326,10 @@ describe("SyncEngine topics and events", () => {
     if (Exit.isFailure(missing)) {
       const error = Exit.findErrorOption(missing);
       expect(Option.isSome(error)).toBe(true);
-      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(UnknownQueryError);
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(UnknownQueryError);
+        if (error.value instanceof UnknownQueryError) expect(error.value.query).toBe("missing");
+      }
     }
     await runTopic(engine.subscribe(validTopic, noopPublish));
     await runTopic(
@@ -336,7 +342,12 @@ describe("SyncEngine topics and events", () => {
     if (Exit.isFailure(invalidParams)) {
       const error = Exit.findErrorOption(invalidParams);
       expect(Option.isSome(error)).toBe(true);
-      if (Option.isSome(error)) expect(error.value).toBeInstanceOf(TopicValidationError);
+      if (Option.isSome(error)) {
+        expect(error.value).toBeInstanceOf(TopicValidationError);
+        expect(error.value.cause).toMatchObject({
+          message: "Topic params must contain only JSON-safe values",
+        });
+      }
     }
   });
 });
