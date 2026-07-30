@@ -1,11 +1,6 @@
 import { Cause, Effect } from "effect";
 import { DurableObject } from "cloudflare:workers";
-import {
-  TopicBuildError,
-  TopicValidationError,
-  UnknownMutationError,
-  UnknownQueryError,
-} from "@do-sync-engine/core";
+import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -13,7 +8,7 @@ import type {
   StringKey,
   SyncEngineInterface,
 } from "@do-sync-engine/core";
-import { SubscriptionRegistry } from "./subscriptions.ts";
+import { SubscriptionRegistry, WebSocketOperationError } from "./subscriptions.ts";
 import { decodeClientCommand } from "./protocol.ts";
 export type * from "./protocol.ts";
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
@@ -163,10 +158,13 @@ export abstract class DurableObjectWebSocket<
     return recovered;
   }
 
-  private sendEffect(ws: WebSocket, message: unknown): Effect.Effect<void, unknown> {
+  private sendEffect(
+    ws: WebSocket,
+    message: unknown,
+  ): Effect.Effect<void, WebSocketOperationError> {
     return Effect.try({
       try: () => this.send(ws, message),
-      catch: (cause) => cause,
+      catch: (cause) => new WebSocketOperationError({ cause }),
     });
   }
 
@@ -178,11 +176,7 @@ export abstract class DurableObjectWebSocket<
 const formatError = (error: unknown, seen = new Set<unknown>()): string => {
   if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
   if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
-  if (error instanceof TopicBuildError) {
-    if (error.operation === "clone") return "Topic params must support structuredClone";
-    return formatError(error.cause, seen);
-  }
-  if (error instanceof TopicValidationError) return formatError(error.cause, seen);
+  if (error instanceof WebSocketOperationError) return formatError(error.cause, seen);
   if (error instanceof Error && error.message.trim() !== "") return error.message;
   if (typeof error === "object" && error !== null && !seen.has(error)) {
     seen.add(error);

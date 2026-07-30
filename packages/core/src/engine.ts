@@ -1,44 +1,31 @@
-import { Effect, Equal, Hash } from "effect";
-import { ListenerIdSchema } from "./types";
-import {
-  assertKnownQueryEffect,
-  assertSupportedParams,
-  buildTopic,
-  clone,
-  TopicBuildError,
-  TopicValidationError,
-  UnknownMutationError,
-  UnknownQueryError,
-  validateTopic,
-} from "./helpers";
+import { Effect, MutableHashMap, Option } from "effect";
+import { ListenerIdSchema, Topic } from "./types";
+import { assertKnownQueryEffect, UnknownMutationError, UnknownQueryError } from "./helpers";
 import type {
   Listener,
   ListenerEvent,
   ListenerId,
   Mutation,
   MutationMap,
+  OperationError,
   OperationParams,
   OperationResult,
-  OperationError,
   Query,
   QueryMap,
   StringKey,
   SyncEngineInterface,
   SyncEngineOptions,
   Table,
-  Topic,
 } from "./types";
 
-const queryEffect = (
-  topic: Topic,
-  queries: ReadonlyMap<string, Query<unknown[], unknown>>,
-): Effect.Effect<unknown, TopicValidationError | UnknownQueryError | OperationError<Query>> =>
-  Effect.gen(function* () {
-    const validated = yield* validateTopic(topic, queries);
-    const definition = queries.get(validated.name);
-    if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: validated.name }));
-    return yield* definition.run(...validated.params);
-  });
+const queryEffect = Effect.fn("SyncEngine.query")(function* <
+  Name extends string,
+  Params extends readonly unknown[],
+>(topic: Topic<Name, Params>, queries: ReadonlyMap<string, Query<unknown[], unknown>>) {
+  const definition = queries.get(topic.name);
+  if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: topic.name }));
+  return yield* definition.run(...topic.params);
+});
 
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -46,12 +33,9 @@ export class SyncEngine<
 > implements SyncEngineInterface<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private readonly registry = new Map<
-    string,
-    Array<{
-      topic: Topic<StringKey<Queries>, readonly unknown[]>;
-      listeners: Map<ListenerId, Listener>;
-    }>
+  private readonly registry = MutableHashMap.empty<
+    Topic<StringKey<Queries>, readonly unknown[]>,
+    Map<ListenerId, Listener>
   >();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -66,20 +50,9 @@ export class SyncEngine<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Effect.Effect<
-    Topic<Name, OperationParams<Queries[Name]>>,
-    TopicBuildError | UnknownQueryError
-  > {
-    return Effect.gen(
-      function* (this: SyncEngine<Queries, Mutations>) {
-        yield* assertKnownQueryEffect(name, this.queries);
-        yield* Effect.try({
-          try: () => assertSupportedParams(params),
-          catch: (cause) => TopicBuildError.make({ cause, operation: "clone" }),
-        });
-        const cloned = yield* clone(params);
-        return yield* buildTopic(name, cloned);
-      }.bind(this),
+  ): Effect.Effect<Topic<Name, OperationParams<Queries[Name]>>, UnknownQueryError> {
+    return assertKnownQueryEffect(name, this.queries).pipe(
+      Effect.map(() => new Topic({ name, params })),
     );
   }
 
@@ -88,53 +61,31 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Effect.Effect<ListenerId, TopicValidationError | UnknownQueryError> {
-    return Effect.gen(
-      function* (this: SyncEngine<Queries, Mutations>) {
-        const validated = yield* validateTopic(topic, this.queries);
-        const cloned = yield* clone(validated).pipe(
-          Effect.mapError((error) => new TopicValidationError({ cause: error })),
-        );
-        const validatedClone = yield* validateTopic(cloned, this.queries);
-        yield* Effect.try({
-          try: () => {
-            if (typeof listener !== "function") throw new TypeError("Listener must be a function");
-          },
-          catch: (cause) => new TopicValidationError({ cause }),
-        });
-        return yield* Effect.sync(() => {
-          const key = String(Hash.hash(validatedClone));
-          const bucket = this.registry.get(key) ?? [];
-          this.registry.set(key, bucket);
-          let entry = bucket.find(({ topic: existing }) => Equal.equals(existing, validatedClone));
-          if (!entry) {
-            entry = {
-              topic: validatedClone as Topic<StringKey<Queries>, readonly unknown[]>,
-              listeners: new Map(),
-            };
-            bucket.push(entry);
-          }
-          for (const [id, existing] of entry.listeners) if (existing === listener) return id;
+  ): Effect.Effect<ListenerId, UnknownQueryError> {
+    return assertKnownQueryEffect(topic.name, this.queries).pipe(
+      Effect.flatMap(() =>
+        Effect.sync(() => {
+          const listeners = Option.getOrElse(MutableHashMap.get(this.registry, topic), () => {
+            const listenerMap = new Map<ListenerId, Listener>();
+            MutableHashMap.set(this.registry, topic, listenerMap);
+            return listenerMap;
+          });
+          for (const [id, existing] of listeners) if (existing === listener) return id;
           const id = ListenerIdSchema.make(globalThis.crypto.randomUUID());
-          entry.listeners.set(id, listener as Listener);
+          listeners.set(id, listener as Listener);
           return id;
-        });
-      }.bind(this),
+        }),
+      ),
     );
   }
 
   unsubscribe(listenerId: ListenerId): Effect.Effect<boolean> {
     return Effect.sync(() => {
-      for (const [key, bucket] of this.registry)
-        for (let i = 0; i < bucket.length; i++) {
-          const entry = bucket[i];
-          if (!entry.listeners.delete(listenerId)) continue;
-          if (entry.listeners.size === 0) {
-            bucket.splice(i, 1);
-            if (bucket.length === 0) this.registry.delete(key);
-          }
-          return true;
-        }
+      for (const [topic, listeners] of this.registry) {
+        if (!listeners.delete(listenerId)) continue;
+        if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
+        return true;
+      }
       return false;
     });
   }
@@ -152,19 +103,18 @@ export class SyncEngine<
     topic: Topic<Name, OperationParams<Queries[Name]>>,
   ): Effect.Effect<
     OperationResult<Queries[Name]>,
-    TopicValidationError | UnknownQueryError | OperationError<Queries[Name]>
+    UnknownQueryError | OperationError<Queries[Name]>
   > {
     return queryEffect(topic, this.queries) as Effect.Effect<
       OperationResult<Queries[Name]>,
-      TopicValidationError | UnknownQueryError | OperationError<Queries[Name]>
+      UnknownQueryError | OperationError<Queries[Name]>
     >;
   }
 
   protected publish(event: ListenerEvent): void {
-    const bucket = this.registry.get(String(Hash.hash(event.topic)));
-    const entry = bucket?.find(({ topic }) => Equal.equals(topic, event.topic));
-    if (!entry) return;
-    for (const listener of entry.listeners.values()) void listener(event);
+    const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, event.topic));
+    if (!listeners) return;
+    for (const listener of listeners.values()) void listener(event);
   }
 
   sync<Name extends StringKey<Mutations>>(
@@ -174,22 +124,25 @@ export class SyncEngine<
     void,
     | UnknownMutationError
     | OperationError<Mutations[Name]>
-    | TopicValidationError
     | UnknownQueryError
     | OperationError<Queries[StringKey<Queries>]>
   > {
-    return Effect.gen(
-      function* (this: SyncEngine<Queries, Mutations>) {
-        const changed = yield* this.mutate(mutation, params);
-        for (const bucket of this.registry.values())
-          for (const { topic } of bucket) {
-            const definition = this.queries.get(topic.name);
-            if (!definition || !Array.from(definition.tables).some((table) => changed.has(table)))
-              continue;
-            const value = yield* queryEffect(topic, this.queries);
-            yield* Effect.sync(() => this.publish({ topic, value }));
+    const self = this;
+    return Effect.gen(function* () {
+      const changed = yield* self.mutate(mutation, params);
+      for (const topic of MutableHashMap.keys(self.registry)) {
+        const definition = self.queries.get(topic.name);
+        if (!definition) continue;
+        let overlaps = false;
+        for (const table of definition.tables)
+          if (changed.has(table)) {
+            overlaps = true;
+            break;
           }
-      }.bind(this),
-    );
+        if (!overlaps) continue;
+        const value = yield* queryEffect(topic, self.queries);
+        yield* Effect.sync(() => self.publish({ topic, value }));
+      }
+    });
   }
 }

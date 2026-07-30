@@ -7,9 +7,8 @@ Minimal engine for synchronizing query subscribers after mutations.
 ```ts
 import { Effect } from "effect";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type { Mutation, Query, Table } from "@do-sync-engine/core";
+import type { Mutation, Query } from "@do-sync-engine/core";
 
-// Define query and mutation handlers
 const queries = {
   allTodos: {
     tables: toTables(["todos"]),
@@ -26,20 +25,19 @@ const mutations = {
 
 const engine = new SyncEngine({ queries, mutations });
 
-// Create a canonical topic, then subscribe one or more listeners to it.
-const topic = await Effect.runPromise(engine.createTopic("allTodos", []));
-const listenerId = engine.subscribe(topic, ({ topic, value }) => {
-  console.log(topic.name, topic.params, value);
+const program = Effect.gen(function* () {
+  const topic = yield* engine.createTopic("allTodos", []);
+  const listenerId = yield* engine.subscribe(topic, ({ topic, value }) => {
+    console.log(topic.name, topic.params, value);
+  });
+  yield* engine.sync("addTodo", ["Buy milk"]);
+  yield* engine.unsubscribe(listenerId);
 });
 
-// Sync runs the mutation and publishes results for subscribed topics whose tables overlap.
-engine.sync("addTodo", ["Buy milk"]);
-
-// Unsubscribe one listener without removing the topic binding.
-engine.unsubscribe(listenerId);
+Effect.runSync(program);
 ```
 
-A `Topic` contains the query `name` and query `params`. Topics participate in Effect equality and hashing for local in-memory lookup. Topic parameters are cloned when the topic is created, so later caller mutation cannot change the query inputs represented by the topic. Parameters must be JSON-safe, acyclic, and free of shared references: strings, booleans, `null`, finite numbers except `-0`, dense arrays, and plain objects are supported. `undefined`, `bigint`, `symbol`, functions, non-finite numbers, `Map`, `Set`, dates, typed arrays, and other non-plain values are rejected.
+A `Topic` contains the query `name` and query `params`. Topics participate in Effect equality and hashing for local in-memory lookup. Parameters are retained by reference and must be treated as immutable after their first equality or hash use.
 
 ## Development
 

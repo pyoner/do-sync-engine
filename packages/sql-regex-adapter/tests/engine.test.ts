@@ -2,13 +2,7 @@ import { Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlAdapterError, type SqlRow } from "../src/index.ts";
-import {
-  SyncEngine,
-  Topic,
-  TopicValidationError,
-  UnknownQueryError,
-  toTables,
-} from "@do-sync-engine/core";
+import { SyncEngine, Topic, UnknownQueryError, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 
 const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
@@ -86,9 +80,8 @@ describe("SyncEngine topics and events", () => {
     const changedParams = await runTopic(engine.createTopic("userById", [1]));
     const changedName = await runTopic(engine.createTopic("postsOnly", []));
     const params = [1];
-    const clonedTopic = await runTopic(engine.createTopic("userById", params));
-    params[0] = 2;
-    expect(clonedTopic.params).toEqual([1]);
+    const topic = await runTopic(engine.createTopic("userById", params));
+    expect(topic.params).toBe(params);
     expect(first).toEqual({ name: "allUsers", params: [] });
     expect(equivalent).toEqual(first);
     expect(changedParams).not.toEqual(first);
@@ -237,12 +230,13 @@ describe("SyncEngine topics and events", () => {
     const firstListenerId = await runTopic(engine.subscribe(topic, first.listener));
     const secondListenerId = await runTopic(engine.subscribe(topic, second.listener));
     // Test-only access verifies the private topic lifecycle.
-    const registry = (engine as unknown as { registry: Map<unknown, unknown> }).registry;
+    const registry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } })
+      .registry;
 
     expect(await runTopic(engine.unsubscribe(firstListenerId))).toBe(true);
-    expect(registry.size).toBe(1);
+    expect(registry.backing.size).toBe(1);
     expect(await runTopic(engine.unsubscribe(secondListenerId))).toBe(true);
-    expect(registry.size).toBe(0);
+    expect(registry.backing.size).toBe(0);
   });
 
   test("listener dispatch is scoped by topic hash", async () => {
@@ -317,7 +311,7 @@ describe("SyncEngine topics and events", () => {
     expect(completed).toBe(true);
   });
 
-  test("validates manually supplied topics", async () => {
+  test("rejects unknown manually supplied topics", async () => {
     const validTopic = await runTopic(engine.createTopic("allUsers", []));
     const missing = await Effect.runPromiseExit(
       engine.subscribe(new Topic({ name: "missing", params: validTopic.params }), noopPublish),
@@ -335,19 +329,8 @@ describe("SyncEngine topics and events", () => {
     await runTopic(
       engine.subscribe(new Topic({ name: validTopic.name, params: [1] }), noopPublish),
     );
-    const invalidParams = await Effect.runPromiseExit(
-      engine.subscribe(new Topic({ name: "allUsers", params: [() => 1] }), noopPublish),
+    await runTopic(
+      engine.subscribe(new Topic({ name: validTopic.name, params: [() => 1] }), noopPublish),
     );
-    expect(Exit.isFailure(invalidParams)).toBe(true);
-    if (Exit.isFailure(invalidParams)) {
-      const error = Exit.findErrorOption(invalidParams);
-      expect(Option.isSome(error)).toBe(true);
-      if (Option.isSome(error)) {
-        expect(error.value).toBeInstanceOf(TopicValidationError);
-        expect(error.value.cause).toMatchObject({
-          message: "Topic params must contain only JSON-safe values",
-        });
-      }
-    }
   });
 });

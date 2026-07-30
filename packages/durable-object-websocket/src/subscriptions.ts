@@ -1,7 +1,6 @@
-import { Effect, Equal, Exit } from "effect";
+import { Data, Effect, Equal, Exit } from "effect";
 
 import {
-  TopicBuildError,
   type ListenerId,
   type MutationMap,
   type OperationError,
@@ -10,21 +9,23 @@ import {
   type StringKey,
   type SyncEngineInterface,
   type Topic,
-  type TopicValidationError,
   type UnknownQueryError,
 } from "@do-sync-engine/core";
 
+export class WebSocketOperationError extends Data.TaggedError("WebSocketOperationError")<{
+  readonly cause: unknown;
+}> {}
+
 type DurableObjectWebSocketAttachment = { topics?: unknown[] };
 type SubscriptionError<Q extends QueryMap<Q>> =
-  | TopicBuildError
-  | TopicValidationError
+  | WebSocketOperationError
   | UnknownQueryError
   | OperationError<Q[StringKey<Q>]>;
 
 const serializeAttachment = (ws: WebSocket, value: unknown) =>
   Effect.try({
     try: () => ws.serializeAttachment(value),
-    catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+    catch: (cause) => new WebSocketOperationError({ cause }),
   });
 
 export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
@@ -57,7 +58,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       const initial = { type: "queryResult", requestId, topic, value };
       yield* Effect.try({
         try: () => JSON.stringify(initial),
-        catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+        catch: (cause) => new WebSocketOperationError({ cause }),
       });
       const map =
         this.subscriptions.get(ws) ??
@@ -69,7 +70,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       }
       const previous = yield* Effect.try({
         try: () => ws.deserializeAttachment(),
-        catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+        catch: (cause) => new WebSocketOperationError({ cause }),
       });
       const listener = (event: { topic: Topic; value: unknown }) => {
         try {
@@ -102,7 +103,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       );
     });
   }
-  unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, TopicBuildError> {
+  unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, WebSocketOperationError> {
     return Effect.gen(
       function* (this: SubscriptionRegistry<Q, M>) {
         const map = this.subscriptions.get(ws);
@@ -188,10 +189,13 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     );
   }
 
-  private sendEffect(ws: WebSocket, message: unknown): Effect.Effect<void, TopicBuildError> {
+  private sendEffect(
+    ws: WebSocket,
+    message: unknown,
+  ): Effect.Effect<void, WebSocketOperationError> {
     return Effect.try({
       try: () => this.send(ws, message),
-      catch: (cause) => TopicBuildError.make({ cause, operation: "serialize" }),
+      catch: (cause) => new WebSocketOperationError({ cause }),
     });
   }
 
