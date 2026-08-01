@@ -18,16 +18,6 @@ import type {
   Table,
 } from "./types";
 
-const queryEffect = Effect.fn("SyncEngine.query")(function* (
-  name: string,
-  params: readonly unknown[],
-  queries: ReadonlyMap<string, Query<unknown[], unknown>>,
-) {
-  const definition = queries.get(name);
-  if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: name }));
-  return yield* definition.run(...params);
-});
-
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -122,7 +112,12 @@ export class SyncEngine<
     OperationResult<Queries[Name]>,
     UnknownQueryError | OperationError<Queries[Name]>
   > {
-    return queryEffect(name, params, this.queries) as Effect.Effect<
+    const queries = this.queries;
+    return Effect.gen(function* () {
+      const definition = queries.get(name);
+      if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: name }));
+      return yield* definition.run(...params);
+    }) as Effect.Effect<
       OperationResult<Queries[Name]>,
       UnknownQueryError | OperationError<Queries[Name]>
     >;
@@ -157,7 +152,10 @@ export class SyncEngine<
             break;
           }
         if (!overlaps) continue;
-        const value = yield* queryEffect(topic.name, topic.params, self.queries);
+        const value = yield* self.query(
+          topic.name,
+          topic.params as OperationParams<Queries[StringKey<Queries>]>,
+        );
         yield* Effect.sync(() => self.publish({ topic, value }));
       }
     });
