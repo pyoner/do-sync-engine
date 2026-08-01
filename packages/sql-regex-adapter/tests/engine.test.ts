@@ -21,6 +21,9 @@ class ExposedEngine extends SyncEngine<any, any> {
   exposePublish(event: ListenerEvent) {
     return this.publish(event);
   }
+  exposeQuery(name: string, params: unknown[]) {
+    return this.query(name, params);
+  }
 }
 
 function setupDb(storage: DatabaseSync) {
@@ -38,7 +41,7 @@ describe("SyncEngine topics and events", () => {
   let postsOnly: Query<[], SqlRow[], SqlAdapterError>;
   let insertUser: Mutation<[string], unknown, SqlAdapterError>;
   let updateUserName: Mutation<[string, number], unknown, SqlAdapterError>;
-  let engine: SyncEngine<any, any>;
+  let engine: ExposedEngine;
 
   beforeEach(async () => {
     storage = new DatabaseSync(":memory:");
@@ -64,7 +67,7 @@ describe("SyncEngine topics and events", () => {
       SqlAdapterError
     >;
 
-    engine = new SyncEngine({
+    engine = new ExposedEngine({
       queries: { allUsers, userById, postsOnly },
       mutations: { insertUser, updateUserName },
     });
@@ -88,12 +91,8 @@ describe("SyncEngine topics and events", () => {
     expect(changedName).not.toEqual(first);
   });
 
-  test("runs queries through the public engine interface", async () => {
-    const topic = await runTopic(engine.createTopic("userById", [2]));
-
-    const missing = await Effect.runPromiseExit(
-      engine.query(new Topic({ name: "missing", params: topic.params })),
-    );
+  test("runs queries through the protected engine hook", async () => {
+    const missing = await Effect.runPromiseExit(engine.exposeQuery("missing", []));
     expect(Exit.isFailure(missing)).toBe(true);
     if (Exit.isFailure(missing)) {
       const error = Exit.findErrorOption(missing);
@@ -103,10 +102,11 @@ describe("SyncEngine topics and events", () => {
         if (error.value instanceof UnknownQueryError) expect(error.value.query).toBe("missing");
       }
     }
-    expect(await runTopic(engine.query(topic))).toEqual([{ id: 2, name: "bob" }]);
+    expect(await runTopic(engine.exposeQuery("userById", [2]))).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("routes same-query topics by full parameters", async () => {
+    expect(await runTopic(engine.exposeQuery("userById", [2]))).toEqual([{ id: 2, name: "bob" }]);
     const firstTopic = await runTopic(engine.createTopic("userById", [1]));
     const secondTopic = await runTopic(engine.createTopic("userById", [2]));
     const first = captureEvents();
@@ -155,7 +155,7 @@ describe("SyncEngine topics and events", () => {
         return postsOnly.run();
       },
     };
-    engine = new SyncEngine({
+    engine = new ExposedEngine({
       queries: { trackedUserById, trackedPosts },
       mutations: { updateUserName },
     });
@@ -187,7 +187,7 @@ describe("SyncEngine topics and events", () => {
       tables: toTables(["users"]),
       run: () => Effect.fail(new Error("query failed")),
     };
-    engine = new SyncEngine({
+    engine = new ExposedEngine({
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
@@ -278,7 +278,7 @@ describe("SyncEngine topics and events", () => {
           return yield* synchronousMutation.run();
         }),
     };
-    engine = new SyncEngine({
+    engine = new ExposedEngine({
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
     });

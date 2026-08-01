@@ -133,18 +133,12 @@ export interface SyncEngineInterface<
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Effect.Effect<Topic<Name, OperationParams<Queries[Name]>>, UnknownQueryError>;
-  query<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): Effect.Effect<
-    OperationResult<Queries[Name]>,
-    UnknownQueryError | OperationError<Queries[Name]>
-  >;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Effect.Effect<ListenerId, UnknownQueryError>;
+  ): Effect.Effect<ListenerId, UnknownQueryError | OperationError<Queries[Name]>>;
   unsubscribe(listenerId: ListenerId): Effect.Effect<boolean>;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,

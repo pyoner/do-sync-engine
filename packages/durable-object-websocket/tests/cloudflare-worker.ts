@@ -7,7 +7,7 @@ declare global {
 }
 import { Effect } from "effect";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type { Mutation, Query } from "@do-sync-engine/core";
+import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { DurableObjectWebSocket } from "../src/index.ts";
 
 type FixtureQueries = { counter: Query<[string], { key: string; value: number }> };
@@ -49,7 +49,12 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
             }),
         },
       } satisfies FixtureMutations;
-      return { engine: new SyncEngine({ queries, mutations }) };
+      return {
+        engine: new SyncEngine({ queries, mutations }) as unknown as SyncEngineInterface<
+          FixtureQueries,
+          FixtureMutations
+        >,
+      };
     });
   }
 }

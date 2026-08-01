@@ -18,13 +18,14 @@ import type {
   Table,
 } from "./types";
 
-const queryEffect = Effect.fn("SyncEngine.query")(function* <
-  Name extends string,
-  Params extends readonly unknown[],
->(topic: Topic<Name, Params>, queries: ReadonlyMap<string, Query<unknown[], unknown>>) {
-  const definition = queries.get(topic.name);
-  if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: topic.name }));
-  return yield* definition.run(...topic.params);
+const queryEffect = Effect.fn("SyncEngine.query")(function* (
+  name: string,
+  params: readonly unknown[],
+  queries: ReadonlyMap<string, Query<unknown[], unknown>>,
+) {
+  const definition = queries.get(name);
+  if (!definition) return yield* Effect.fail(UnknownQueryError.make({ query: name }));
+  return yield* definition.run(...params);
 });
 
 export class SyncEngine<
@@ -61,21 +62,36 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Effect.Effect<ListenerId, UnknownQueryError> {
-    return assertKnownQueryEffect(topic.name, this.queries).pipe(
-      Effect.flatMap(() =>
-        Effect.sync(() => {
+  ): Effect.Effect<ListenerId, UnknownQueryError | OperationError<Queries[Name]>> {
+    return Effect.gen(
+      function* (this: SyncEngine<Queries, Mutations>) {
+        yield* assertKnownQueryEffect(topic.name, this.queries);
+        const subscription = yield* Effect.sync(() => {
           const listeners = Option.getOrElse(MutableHashMap.get(this.registry, topic), () => {
             const listenerMap = new Map<ListenerId, Listener>();
             MutableHashMap.set(this.registry, topic, listenerMap);
             return listenerMap;
           });
-          for (const [id, existing] of listeners) if (existing === listener) return id;
+          for (const [id, existing] of listeners)
+            if (existing === listener) return { id, added: false };
           const id = ListenerIdSchema.make(globalThis.crypto.randomUUID());
           listeners.set(id, listener as Listener);
-          return id;
-        }),
-      ),
+          return { id, added: true };
+        });
+        if (!subscription.added) return subscription.id;
+        return yield* this.query(topic.name, topic.params).pipe(
+          Effect.flatMap((value) => Effect.sync(() => listener({ topic, value }))),
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, topic));
+              if (!listeners) return;
+              listeners.delete(subscription.id);
+              if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
+            }).pipe(Effect.flatMap(() => Effect.fail(error))),
+          ),
+          Effect.as(subscription.id),
+        );
+      }.bind(this),
     );
   }
 
@@ -90,7 +106,7 @@ export class SyncEngine<
     });
   }
 
-  private mutate<Name extends StringKey<Mutations>>(
+  protected mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): Effect.Effect<Set<Table>, UnknownMutationError | OperationError<Mutations[Name]>> {
@@ -99,13 +115,14 @@ export class SyncEngine<
     return definition.run(...params).pipe(Effect.map(() => definition.tables));
   }
 
-  query<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
+  protected query<Name extends StringKey<Queries>>(
+    name: Name,
+    params: OperationParams<Queries[Name]>,
   ): Effect.Effect<
     OperationResult<Queries[Name]>,
     UnknownQueryError | OperationError<Queries[Name]>
   > {
-    return queryEffect(topic, this.queries) as Effect.Effect<
+    return queryEffect(name, params, this.queries) as Effect.Effect<
       OperationResult<Queries[Name]>,
       UnknownQueryError | OperationError<Queries[Name]>
     >;
@@ -140,7 +157,7 @@ export class SyncEngine<
             break;
           }
         if (!overlaps) continue;
-        const value = yield* queryEffect(topic, self.queries);
+        const value = yield* queryEffect(topic.name, topic.params, self.queries);
         yield* Effect.sync(() => self.publish({ topic, value }));
       }
     });

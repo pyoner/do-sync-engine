@@ -3,6 +3,7 @@ import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
+import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
@@ -218,7 +219,6 @@ describe("Durable Object WebSocket transport", () => {
         }),
       );
       expect((await read(socket)).message).toBeDefined();
-      socket.close();
     } finally {
       socket.close();
     }
@@ -247,7 +247,13 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
       attachment = value;
     },
   } as WebSocket;
-  const registry = new SubscriptionRegistry(engine, (_ws, message) => messages.push(message));
+  const registry = new SubscriptionRegistry(
+    engine as unknown as SyncEngineInterface<
+      { counter: Query<[string], { value: number }> },
+      { increment: Mutation<[string, number], void> }
+    >,
+    (_ws, message) => messages.push(message),
+  );
   const topic = await Effect.runPromise(engine.createTopic("counter", []));
   attachment = { topics: [topic] };
   await Effect.runPromise(registry.restore(socket));
@@ -256,4 +262,40 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
   messages.length = 0;
   await Effect.runPromise(engine.sync("increment", []));
   expect(messages).toHaveLength(1);
+});
+
+it("rolls back failed restore snapshots", async () => {
+  const engine = new SyncEngine({
+    queries: {
+      counter: {
+        tables: toTables(["counters"]),
+        run: () => Effect.succeed({ value: 0 }),
+      },
+    },
+    mutations: {},
+  });
+  let attachment: unknown;
+  const socket = {
+    deserializeAttachment: () => attachment,
+    serializeAttachment: (value: unknown) => {
+      attachment = value;
+    },
+  } as WebSocket;
+  const topic = await Effect.runPromise(engine.createTopic("counter", []));
+  attachment = { topics: [topic] };
+  const registry = new SubscriptionRegistry(
+    engine as unknown as SyncEngineInterface<
+      { counter: Query<[], { value: number }> },
+      Record<string, never>
+    >,
+    () => {
+      throw new Error("snapshot send failed");
+    },
+  );
+  const result = Effect.runSyncExit(registry.restore(socket));
+  expect(Exit.isFailure(result)).toBe(true);
+  const coreRegistry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } })
+    .registry;
+  expect(coreRegistry.backing.size).toBe(0);
+  expect(attachment).toEqual({ topics: [] });
 });

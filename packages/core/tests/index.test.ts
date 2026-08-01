@@ -31,7 +31,7 @@ test("topics retain params and use structural equality", () => {
   const second = Effect.runSync(engine.subscribe(equivalent, listener));
   expect(second).toBe(first);
   Effect.runSync(engine.sync("noop", []));
-  expect(events).toHaveLength(1);
+  expect(events).toHaveLength(2);
   expect(Effect.runSync(engine.unsubscribe(first))).toBe(true);
   expect(Effect.runSync(engine.unsubscribe(first))).toBe(false);
   const asyncEvents: Promise<void>[] = [];
@@ -41,8 +41,25 @@ test("topics retain params and use structural equality", () => {
     }),
   );
   Effect.runSync(engine.sync("noop", []));
-  expect(asyncEvents).toHaveLength(1);
+  expect(asyncEvents).toHaveLength(2);
   expect(Effect.runSync(engine.unsubscribe(asyncId))).toBe(true);
+});
+
+test("removes failed initial subscriptions", () => {
+  const failing = new SyncEngine({
+    queries: {
+      failing: {
+        tables: toTables(["numbers"]),
+        run: () => Effect.fail(new Error("query failed")).pipe(Effect.as<number>(0)),
+      } satisfies Query<[], number, Error>,
+    },
+    mutations: {},
+  });
+  const topic = Effect.runSync(failing.createTopic("failing", []));
+  expect(Effect.runSyncExit(failing.subscribe(topic, () => {}))).toMatchObject({ _tag: "Failure" });
+  const registry = (failing as unknown as { registry: { backing: Map<unknown, unknown> } })
+    .registry;
+  expect(registry.backing.size).toBe(0);
 });
 
 test("topic schema preserves canonical equality and hash", () => {
@@ -54,22 +71,19 @@ test("topic schema preserves canonical equality and hash", () => {
 });
 
 test("unknown query and mutation names fail", () => {
-  const engine = new SyncEngine({
-    queries: {} as Record<string, Query<unknown[], unknown>>,
-    mutations: {} as Record<string, Mutation<unknown[], unknown>>,
+  class TestEngine extends SyncEngine<
+    Record<string, Query<unknown[], unknown>>,
+    Record<string, Mutation<unknown[], unknown>>
+  > {
+    runQuery(name: string, params: unknown[]) {
+      return this.query(name, params);
+    }
+  }
+  const engine = new TestEngine({
+    queries: {},
+    mutations: {},
   });
   expect(Exit.isFailure(Effect.runSyncExit(engine.createTopic("missing", [])))).toBe(true);
-  expect(
-    Exit.isFailure(
-      Effect.runSyncExit(
-        engine.query(
-          new Topic<string, unknown[]>({
-            name: "missing",
-            params: [],
-          }),
-        ),
-      ),
-    ),
-  ).toBe(true);
+  expect(Exit.isFailure(Effect.runSyncExit(engine.runQuery("missing", [])))).toBe(true);
   expect(Exit.isFailure(Effect.runSyncExit(engine.sync("missing", [])))).toBe(true);
 });
