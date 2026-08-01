@@ -139,25 +139,26 @@ export class SyncEngine<
     | UnknownQueryError
     | OperationError<Queries[StringKey<Queries>]>
   > {
-    const self = this;
-    return Effect.gen(function* () {
-      const changed = yield* self.mutate(mutation, params);
-      for (const topic of MutableHashMap.keys(self.registry)) {
-        const definition = self.queries.get(topic.name);
-        if (!definition) continue;
-        let overlaps = false;
-        for (const table of definition.tables)
-          if (changed.has(table)) {
-            overlaps = true;
-            break;
-          }
-        if (!overlaps) continue;
-        const value = yield* self.query(
-          topic.name,
-          topic.params as OperationParams<Queries[StringKey<Queries>]>,
-        );
-        yield* Effect.sync(() => self.publish({ topic, value }));
-      }
-    });
+    return Effect.gen(
+      function* (this: SyncEngine<Queries, Mutations>) {
+        const changed = yield* this.mutate(mutation, params);
+        for (const topic of MutableHashMap.keys(this.registry)) {
+          const definition = this.queries.get(topic.name);
+          if (!definition) continue;
+          let overlaps = false;
+          for (const table of definition.tables)
+            if (changed.has(table)) {
+              overlaps = true;
+              break;
+            }
+          if (!overlaps) continue;
+          const value = yield* this.query(
+            topic.name,
+            topic.params as OperationParams<Queries[StringKey<Queries>]>,
+          );
+          yield* Effect.sync(() => this.publish({ topic, value }));
+        }
+      }.bind(this),
+    );
   }
 }
