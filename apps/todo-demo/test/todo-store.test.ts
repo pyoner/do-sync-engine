@@ -2,8 +2,7 @@ import { Cause, Effect, Exit, Fiber, Option, Queue, Schema, Scope, Stream } from
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { Topic } from "@do-sync-engine/core";
-import { makeWebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
+import { makeWebSocketRpcClient, Topic } from "@do-sync-engine/durable-object-websocket";
 import type { WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
 import {
   todoCountSchema,

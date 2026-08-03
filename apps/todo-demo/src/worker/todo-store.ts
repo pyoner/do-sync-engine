@@ -116,7 +116,7 @@ export class TodoStore extends DurableObjectWebSocket<Cloudflare.Env, TodoQuerie
     super(ctx, env, () =>
       Effect.runPromise(
         Effect.gen(function* (): Effect.gen.Return<
-          { readonly engine: SyncEngine<TodoQueries, TodoMutations> },
+          SyncEngine<TodoQueries, TodoMutations>,
           SqlAdapterError,
           never
         > {
@@ -128,9 +128,7 @@ export class TodoStore extends DurableObjectWebSocket<Cloudflare.Env, TodoQuerie
           const storage = new DurableObjectSqlStorage(ctx.storage.sql, adapter);
           const queries = yield* createQueries(storage);
           const mutations = yield* createMutations(storage);
-          return {
-            engine: new SyncEngine<TodoQueries, TodoMutations>({ queries, mutations }),
-          };
+          return new SyncEngine<TodoQueries, TodoMutations>({ queries, mutations });
         }),
       ),
     );

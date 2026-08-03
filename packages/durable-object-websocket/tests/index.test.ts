@@ -1,19 +1,13 @@
 import { Effect, Exit, Fiber, Option, Queue, Result, Schema, Stream } from "effect";
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
-import { describe, expect, it } from "vite-plus/test";
+import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { SyncEngine, toTables, UnknownMutationError, Topic } from "@do-sync-engine/core";
+import { SyncEngine, toTables, UnknownMutationError } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
-import {
-  RpcOperationError,
-  Subscribe,
-  Sync,
-  Unsubscribe,
-  WebSocketRpc,
-  makeWebSocketRpcClient,
-} from "../src/index.ts";
-import { makeWebSocketRpcClientFor } from "../src/client.ts";
+import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol.ts";
+import { makeWebSocketRpcClient, Topic } from "../src/client.ts";
+import { makeWebSocketRpcClientFor } from "../src/client-transport.ts";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
 
@@ -38,16 +32,6 @@ const InvalidSync = Rpc.make("sync", {
   error: Schema.Union([UnknownMutationError, RpcOperationError]),
 });
 const InvalidRpc = RpcGroup.make(Subscribe, Unsubscribe, InvalidSync);
-
-describe("Effect RPC protocol", () => {
-  it("exposes the declared websocket procedures", () => {
-    expect(WebSocketRpc).toBeDefined();
-    expect(WebSocketRpc.requests.has(Subscribe._tag)).toBe(true);
-    expect(WebSocketRpc.requests.has(Unsubscribe._tag)).toBe(true);
-    expect(WebSocketRpc.requests.has(Sync._tag)).toBe(true);
-    expect(makeWebSocketRpcClient).toBeDefined();
-  });
-});
 
 const registryEngine = () =>
   new SyncEngine({

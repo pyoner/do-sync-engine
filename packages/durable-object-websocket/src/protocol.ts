@@ -1,7 +1,6 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { TopicSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
-import type { OperationParams, OperationResult, StringKey, Topic } from "@do-sync-engine/core";
 
 const Params = Schema.Array(Schema.Unknown);
 export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError>()(
@@ -40,20 +39,3 @@ export const Sync = Rpc.make("sync", {
 });
 
 export const WebSocketRpc = RpcGroup.make(Subscribe, Unsubscribe, Sync);
-
-export type SubscribePayload<Q extends object> = {
-  readonly query: StringKey<Q>;
-  readonly params: readonly unknown[];
-};
-export type UnsubscribePayload = { readonly topic: Topic };
-export type SyncPayload<M extends object> = {
-  readonly mutation: StringKey<M>;
-  readonly params: readonly unknown[];
-};
-export type QueryEventPayload<Q extends object> = {
-  readonly topic: Topic<StringKey<Q>>;
-  readonly value: OperationResult<Q[StringKey<Q>]>;
-};
-export type SubscribeResult<Q extends object> = QueryEventPayload<Q>;
-export type OperationParamsFor<Q extends object> = OperationParams<Q[StringKey<Q>]>;
-export type { Topic };

@@ -11,20 +11,24 @@ import {
   type UnknownQueryError,
 } from "@do-sync-engine/core";
 
-export class WebSocketOperationError extends Error {
-  readonly _tag = "WebSocketOperationError";
-  constructor(readonly cause: unknown) {
-    super("WebSocket operation failed");
-  }
-}
-export type PersistedSubscription = {
-  readonly requestId: string | number;
-  readonly query: string;
-  readonly params: readonly unknown[];
-  readonly headers: ReadonlyArray<[string, string]>;
-};
+const webSocketOperationError = (cause: unknown) =>
+  new Error("WebSocket operation failed", { cause });
+const Persisted = Schema.Struct({
+  requestId: Schema.Union([Schema.String, Schema.Number]),
+  query: Schema.String,
+  params: Schema.Array(Schema.Unknown),
+  headers: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
+});
+export type PersistedSubscription = typeof Persisted.Type;
+const empty = { version: 1 as const, subscriptions: [] as readonly PersistedSubscription[] };
+const attachment = (ws: WebSocket, value: unknown) =>
+  Effect.try({
+    try: () => ws.serializeAttachment(value),
+    catch: webSocketOperationError,
+  });
+
 type SubscriptionError<Q extends QueryMap<Q>> =
-  | WebSocketOperationError
+  | Error
   | UnknownQueryError
   | OperationError<Q[StringKey<Q>]>;
 type QueryEvent = { readonly topic: Topic; readonly value: unknown };
@@ -38,18 +42,6 @@ type Entry = {
   readonly sessions: Map<string | number, Session>;
 };
 type SocketState = Map<string, Entry[]>;
-const Persisted = Schema.Struct({
-  requestId: Schema.Union([Schema.String, Schema.Number]),
-  query: Schema.String,
-  params: Schema.Array(Schema.Unknown),
-  headers: Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
-});
-const empty = { version: 1 as const, subscriptions: [] as readonly PersistedSubscription[] };
-const attachment = (ws: WebSocket, value: unknown) =>
-  Effect.try({
-    try: () => ws.serializeAttachment(value),
-    catch: (cause) => new WebSocketOperationError(cause),
-  });
 
 export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   private readonly states = new Map<WebSocket, SocketState>();
@@ -108,7 +100,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       }),
     );
   }
-  unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, WebSocketOperationError> {
+  unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, Error> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
       const state = this.states.get(ws);
       const entries = state?.get(topic.name)?.filter((e) => Equal.equals(e.topic, topic)) ?? [];
@@ -133,7 +125,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
       const raw: unknown = yield* Effect.try({
         try: () => ws.deserializeAttachment(),
-        catch: (c) => new WebSocketOperationError(c),
+        catch: webSocketOperationError,
       });
       const records = yield* Effect.sync(() => {
         const value = raw;

@@ -8,7 +8,7 @@ declare global {
 import { Effect } from "effect";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
-import { DurableObjectWebSocket } from "../src/index.ts";
+import { DurableObjectWebSocket } from "../src/server.ts";
 
 type FixtureQueries = { counter: Query<[string], { key: string; value: number }> };
 type FixtureMutations = {
@@ -56,12 +56,10 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
           run: () => Effect.fail(new Error("fixture mutation failed")),
         },
       } satisfies FixtureMutations;
-      return {
-        engine: new SyncEngine({ queries, mutations }) as unknown as SyncEngineInterface<
-          FixtureQueries,
-          FixtureMutations
-        >,
-      };
+      return new SyncEngine<FixtureQueries, FixtureMutations>({
+        queries,
+        mutations,
+      }) as SyncEngineInterface<FixtureQueries, FixtureMutations>;
     });
   }
 }

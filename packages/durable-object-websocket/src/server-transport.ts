@@ -1,5 +1,4 @@
-import { Effect } from "effect";
-import { Queue } from "effect";
+import { Effect, Queue } from "effect";
 import { RpcMessage, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 export interface CloudflareRpcServerTransport {

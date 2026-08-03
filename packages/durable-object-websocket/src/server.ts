@@ -15,19 +15,6 @@ import { RpcOperationError, WebSocketRpc } from "./protocol.ts";
 import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
 import type { CloudflareRpcServerTransport } from "./server-transport.ts";
 
-export { RpcOperationError, Subscribe, Sync, Unsubscribe, WebSocketRpc } from "./protocol.ts";
-export type {
-  OperationParamsFor,
-  QueryEventPayload,
-  SubscribePayload,
-  SubscribeResult,
-  SyncPayload,
-  Topic,
-  UnsubscribePayload,
-} from "./protocol.ts";
-export { makeWebSocketRpcClient } from "./client.ts";
-export type { WebSocketRpcClient } from "./client.ts";
-
 const toRpcOperationError = (error: unknown): RpcOperationError => {
   let current: unknown = error;
   const seen = new Set<unknown>();
@@ -41,15 +28,6 @@ const toRpcOperationError = (error: unknown): RpcOperationError => {
   }
   return RpcOperationError.make({ message: "WebSocket operation failed" });
 };
-
-export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
-  readonly engine: SyncEngineInterface<Q, M>;
-};
-
-export type DurableObjectWebSocketInitializer<
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
-> = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
 
 type SocketTransport = {
   readonly scope: Scope.Closeable;
@@ -70,14 +48,14 @@ export abstract class DurableObjectWebSocket<
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
-    initialize: DurableObjectWebSocketInitializer<Q, M>,
+    initialize: () => SyncEngineInterface<Q, M> | Promise<SyncEngineInterface<Q, M>>,
   ) {
     super(ctx, env);
     this.initialization = ctx.blockConcurrencyWhile(() =>
       Effect.runPromise(
         Effect.gen(
           function* (this: DurableObjectWebSocket<Env, Q, M>) {
-            const { engine } = yield* Effect.tryPromise({
+            const engine = yield* Effect.tryPromise({
               try: () => Promise.resolve(initialize()),
               catch: (cause) => cause,
             });
