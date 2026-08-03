@@ -1,6 +1,7 @@
-import { Cause, Effect } from "effect";
-import { DurableObject } from "cloudflare:workers";
+import { Effect, Exit, Scope, Stream } from "effect";
+import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { DurableObject } from "cloudflare:workers";
 import type {
   MutationMap,
   OperationParams,
@@ -8,16 +9,53 @@ import type {
   StringKey,
   SyncEngineInterface,
 } from "@do-sync-engine/core";
-import { SubscriptionRegistry, WebSocketOperationError } from "./subscriptions.ts";
-import { decodeClientCommand } from "./protocol.ts";
-export type * from "./protocol.ts";
+import { SubscriptionRegistry } from "./subscriptions.ts";
+import type { PersistedSubscription } from "./subscriptions.ts";
+import { RpcOperationError, WebSocketRpc } from "./protocol.ts";
+import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
+import type { CloudflareRpcServerTransport } from "./server-transport.ts";
+
+export { RpcOperationError, Subscribe, Sync, Unsubscribe, WebSocketRpc } from "./protocol.ts";
+export type {
+  OperationParamsFor,
+  QueryEventPayload,
+  SubscribePayload,
+  SubscribeResult,
+  SyncPayload,
+  Topic,
+  UnsubscribePayload,
+} from "./protocol.ts";
+export { makeWebSocketRpcClient } from "./client.ts";
+export type { WebSocketRpcClient } from "./client.ts";
+
+const toRpcOperationError = (error: unknown): RpcOperationError => {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (!seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error && current.message !== "") {
+      return RpcOperationError.make({ message: current.message });
+    }
+    if (typeof current !== "object" || current === null || !("cause" in current)) break;
+    current = current.cause;
+  }
+  return RpcOperationError.make({ message: "WebSocket operation failed" });
+};
+
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
   readonly engine: SyncEngineInterface<Q, M>;
 };
+
 export type DurableObjectWebSocketInitializer<
   Q extends QueryMap<Q>,
   M extends MutationMap<M>,
 > = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
+
+type SocketTransport = {
+  readonly scope: Scope.Closeable;
+  readonly transport: CloudflareRpcServerTransport;
+};
+
 export abstract class DurableObjectWebSocket<
   Env,
   Q extends QueryMap<Q>,
@@ -25,8 +63,10 @@ export abstract class DurableObjectWebSocket<
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
   private readonly socketCallbacks = new WeakMap<WebSocket, Promise<void>>();
+  private readonly socketTransports = new WeakMap<WebSocket, SocketTransport>();
   private engine!: SyncEngineInterface<Q, M>;
   private registry!: SubscriptionRegistry<Q, M>;
+
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
@@ -42,27 +82,33 @@ export abstract class DurableObjectWebSocket<
               catch: (cause) => cause,
             });
             this.engine = engine;
-            this.registry = new SubscriptionRegistry(engine, (ws, message) =>
-              this.send(ws, message),
-            );
-            for (const ws of ctx.getWebSockets()) yield* this.registry.restore(ws, false);
+            this.registry = new SubscriptionRegistry(engine);
+            for (const ws of ctx.getWebSockets()) {
+              const restored = yield* this.registry.restore(ws);
+              yield* this.initializeSocketRpc(ws, restored);
+            }
           }.bind(this),
         ),
       ),
     );
   }
+
   fetch(request: Request): Promise<Response> {
     return Effect.runPromise(this.fetchEffect(request));
   }
+
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     return this.enqueueSocket(ws, this.webSocketMessageEffect(ws, message));
   }
+
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-    return this.enqueueSocket(ws, this.socketCleanupEffect(ws));
+    return this.enqueueSocket(ws, this.socketCleanupEffect(ws, Exit.void));
   }
-  webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
-    return this.enqueueSocket(ws, this.socketCleanupEffect(ws));
+
+  webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+    return this.enqueueSocket(ws, this.socketCleanupEffect(ws, Exit.die(error)));
   }
+
   private fetchEffect(request: Request): Effect.Effect<Response, unknown> {
     return Effect.gen(
       function* (this: DurableObjectWebSocket<Env, Q, M>) {
@@ -74,11 +120,13 @@ export abstract class DurableObjectWebSocket<
           return new Response("Expected WebSocket", { status: 426 });
         const pair = new WebSocketPair();
         this.ctx.acceptWebSocket(pair[1]);
-        yield* this.registry.restore(pair[1]);
+        const restored = yield* this.registry.restore(pair[1]);
+        yield* this.initializeSocketRpc(pair[1], restored);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }.bind(this),
     );
   }
+
   private webSocketMessageEffect(
     ws: WebSocket,
     message: string | ArrayBuffer,
@@ -89,67 +137,104 @@ export abstract class DurableObjectWebSocket<
           try: () => this.initialization,
           catch: (cause) => cause,
         });
-        yield* decodeClientCommand(message).pipe(
-          Effect.matchEffect({
-            onFailure: (error) => this.sendEffect(ws, error).pipe(Effect.ignoreCause),
-            onSuccess: (command) => {
-              const execute = Effect.gen(
-                function* (this: DurableObjectWebSocket<Env, Q, M>) {
-                  if (command.type === "subscribe") {
-                    yield* this.registry.subscribe(
-                      ws,
-                      command.query as StringKey<Q>,
-                      command.params,
-                      command.requestId,
-                    );
-                  } else if (command.type === "unsubscribe") {
-                    const removed = yield* this.registry.unsubscribe(ws, command.topic);
-                    yield* this.sendEffect(ws, {
-                      type: "unsubscribed",
-                      requestId: command.requestId,
-                      topic: command.topic,
-                      removed,
-                    });
-                  } else {
-                    yield* this.engine.sync(
-                      command.mutation as StringKey<M>,
-                      command.params as OperationParams<M[StringKey<M>]>,
-                    );
-                    yield* this.sendEffect(ws, {
-                      type: "synced",
-                      requestId: command.requestId,
-                    });
-                  }
-                }.bind(this),
-              );
-              return execute.pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) =>
-                    this.sendEffect(ws, {
-                      type: "error",
-                      requestId: command.requestId,
-                      message: formatError(Cause.squash(cause)),
-                    }).pipe(Effect.ignoreCause),
-                  onSuccess: () => Effect.void,
-                }),
-              );
-            },
-          }),
-        );
+        let entry = this.socketTransports.get(ws);
+        if (!entry) {
+          yield* this.initializeSocketRpc(ws);
+          entry = this.socketTransports.get(ws);
+        }
+        if (entry) yield* entry.transport.receive(message);
       }.bind(this),
     );
   }
-  private socketCleanupEffect(ws: WebSocket): Effect.Effect<void, unknown> {
+
+  private initializeSocketRpc(
+    ws: WebSocket,
+    restored: readonly PersistedSubscription[] = [],
+  ): Effect.Effect<void, unknown> {
+    if (this.socketTransports.has(ws)) return Effect.void;
+    return Effect.gen(
+      function* (this: DurableObjectWebSocket<Env, Q, M>) {
+        const scope = yield* Scope.make();
+        const transport = yield* makeCloudflareRpcServerTransport(ws);
+        const handlers = yield* WebSocketRpc.toHandlers({
+          subscribe: (payload, { requestId, headers }) =>
+            this.registry
+              .subscribeStream(ws, {
+                requestId,
+                query: payload.query,
+                params: payload.params,
+                headers: Object.entries(headers),
+              })
+              .pipe(
+                Stream.mapError((error) =>
+                  error instanceof UnknownQueryError ? error : toRpcOperationError(error),
+                ),
+              ),
+          unsubscribe: (payload) =>
+            this.registry
+              .unsubscribe(ws, payload.topic)
+              .pipe(Effect.mapError((error) => toRpcOperationError(error))),
+          sync: (payload) =>
+            this.engine
+              .sync(
+                payload.mutation as StringKey<M>,
+                payload.params as OperationParams<M[StringKey<M>]>,
+              )
+              .pipe(
+                Effect.mapError((error) =>
+                  error instanceof UnknownMutationError ? error : toRpcOperationError(error),
+                ),
+              ),
+        });
+        const server = RpcServer.make(WebSocketRpc).pipe(
+          Effect.provide(handlers),
+          Effect.provideService(RpcServer.Protocol, transport.protocol),
+          Effect.provideService(RpcSerialization.RpcSerialization, RpcSerialization.json),
+          Scope.provide(scope),
+        );
+        yield* Effect.forkIn(server, scope);
+        this.socketTransports.set(ws, { scope, transport });
+
+        const parser = RpcSerialization.json.makeUnsafe();
+        for (const session of restored) {
+          const encoded = parser.encode({
+            _tag: "Request",
+            id: session.requestId,
+            tag: "subscribe",
+            payload: { query: session.query, params: session.params },
+            headers: session.headers,
+          });
+          if (encoded !== undefined) {
+            yield* transport.receive(
+              typeof encoded === "string" ? encoded : new TextDecoder().decode(encoded),
+            );
+          }
+        }
+      }.bind(this),
+    );
+  }
+
+  private socketCleanupEffect(
+    ws: WebSocket,
+    exit: Exit.Exit<unknown, unknown>,
+  ): Effect.Effect<void, unknown> {
     return Effect.gen(
       function* (this: DurableObjectWebSocket<Env, Q, M>) {
         yield* Effect.tryPromise({
           try: () => this.initialization,
           catch: (cause) => cause,
         });
+        const entry = this.socketTransports.get(ws);
+        if (entry) {
+          yield* entry.transport.disconnect;
+          yield* Scope.close(entry.scope, exit);
+          this.socketTransports.delete(ws);
+        }
         yield* this.registry.clear(ws);
       }.bind(this),
     );
   }
+
   private enqueueSocket(ws: WebSocket, workflow: Effect.Effect<void, unknown>): Promise<void> {
     const previous = this.socketCallbacks.get(ws) ?? Promise.resolve();
     const current = previous.then(() => Effect.runPromise(workflow));
@@ -157,30 +242,4 @@ export abstract class DurableObjectWebSocket<
     this.socketCallbacks.set(ws, recovered);
     return recovered;
   }
-
-  private sendEffect(
-    ws: WebSocket,
-    message: unknown,
-  ): Effect.Effect<void, WebSocketOperationError> {
-    return Effect.try({
-      try: () => this.send(ws, message),
-      catch: (cause) => new WebSocketOperationError({ cause }),
-    });
-  }
-
-  private send(ws: WebSocket, message: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
-  }
 }
-
-const formatError = (error: unknown, seen = new Set<unknown>()): string => {
-  if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
-  if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
-  if (error instanceof WebSocketOperationError) return formatError(error.cause, seen);
-  if (error instanceof Error && error.message.trim() !== "") return error.message;
-  if (typeof error === "object" && error !== null && !seen.has(error)) {
-    seen.add(error);
-    if ("cause" in error) return formatError(error.cause, seen);
-  }
-  return "Unknown websocket error";
-};

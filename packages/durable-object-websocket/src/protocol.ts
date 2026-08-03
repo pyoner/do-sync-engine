@@ -1,144 +1,59 @@
-import { Effect, Schema } from "effect";
-import { TopicSchema } from "@do-sync-engine/core";
+import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { TopicSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type { OperationParams, OperationResult, StringKey, Topic } from "@do-sync-engine/core";
 
-export type SubscribeCommand<Q extends object> = {
-  [N in StringKey<Q>]: {
-    type: "subscribe";
-    requestId: string;
-    query: N;
-    params: OperationParams<Q[N]>;
-  };
-}[StringKey<Q>];
-export type UnsubscribeCommand = { type: "unsubscribe"; requestId: string; topic: Topic };
-export type SyncCommand<M extends object> = {
-  [N in StringKey<M>]: {
-    type: "sync";
-    requestId: string;
-    mutation: N;
-    params: OperationParams<M[N]>;
-  };
-}[StringKey<M>];
-export type ClientCommand<Q extends object, M extends object> =
-  | SubscribeCommand<Q>
-  | UnsubscribeCommand
-  | SyncCommand<M>;
-export type QueryResultMessage<Q extends object> = {
-  [N in StringKey<Q>]: {
-    type: "queryResult";
-    requestId?: string;
-    topic: Topic<N, OperationParams<Q[N]>>;
-    value: OperationResult<Q[N]>;
-  };
-}[StringKey<Q>];
-export type UnsubscribedMessage = {
-  type: "unsubscribed";
-  requestId: string;
-  topic: Topic;
-  removed: boolean;
-};
-export type SyncedMessage = { type: "synced"; requestId: string };
-export type ErrorMessage = { type: "error"; requestId?: string; message: string };
-export type ServerMessage<Q extends object> =
-  | QueryResultMessage<Q>
-  | UnsubscribedMessage
-  | SyncedMessage
-  | ErrorMessage;
-export type DecodedClientCommand =
-  | {
-      type: "subscribe";
-      requestId: string;
-      query: string;
-      params: readonly unknown[];
-    }
-  | {
-      type: "unsubscribe";
-      requestId: string;
-      topic: Topic;
-    }
-  | {
-      type: "sync";
-      requestId: string;
-      mutation: string;
-      params: readonly unknown[];
-    };
+const Params = Schema.Array(Schema.Unknown);
+export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError>()(
+  "RpcOperationError",
+  { message: Schema.String },
+) {}
 
-const requestIdSchema = Schema.String.check(Schema.isPattern(/\S/));
-const clientCommandSchema = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("subscribe"),
-    requestId: requestIdSchema,
+const QueryEvent = Schema.Struct({
+  topic: TopicSchema,
+  value: Schema.Unknown,
+});
+
+export const Subscribe = Rpc.make("subscribe", {
+  payload: Schema.Struct({
     query: Schema.String,
-    params: Schema.Array(Schema.Unknown),
+    params: Params,
   }),
-  Schema.Struct({
-    type: Schema.Literal("unsubscribe"),
-    requestId: requestIdSchema,
-    topic: TopicSchema,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("sync"),
-    requestId: requestIdSchema,
-    mutation: Schema.String,
-    params: Schema.Array(Schema.Unknown),
-  }),
-]);
+  success: QueryEvent,
+  error: Schema.Union([UnknownQueryError, RpcOperationError]),
+  stream: true,
+});
 
-export const decodeClientCommand = (message: string | ArrayBuffer) =>
-  Effect.gen(function* () {
-    if (typeof message !== "string") {
-      return yield* Effect.fail<ErrorMessage>({
-        type: "error",
-        message: "Expected text WebSocket message",
-      });
-    }
-    const value = yield* Effect.try({
-      try: () => JSON.parse(message) as unknown,
-      catch: () =>
-        ({
-          type: "error",
-          message: "Invalid JSON message",
-        }) satisfies ErrorMessage,
-    });
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return yield* Effect.fail<ErrorMessage>({
-        type: "error",
-        message: "Invalid JSON message",
-      });
-    }
-    return yield* Schema.decodeUnknownEffect(clientCommandSchema)(value).pipe(
-      Effect.mapError(() => {
-        const record = value as Record<string, unknown>;
-        const requestId = record.requestId;
-        if (typeof requestId !== "string" || !requestId.trim()) {
-          return { type: "error", message: "requestId required" } satisfies ErrorMessage;
-        }
-        if (record.type === "subscribe") {
-          return {
-            type: "error",
-            requestId,
-            message: "query and params required",
-          } satisfies ErrorMessage;
-        }
-        if (record.type === "unsubscribe") {
-          return {
-            type: "error",
-            requestId,
-            message: "topic required",
-          } satisfies ErrorMessage;
-        }
-        if (record.type === "sync") {
-          return {
-            type: "error",
-            requestId,
-            message: "mutation and params required",
-          } satisfies ErrorMessage;
-        }
-        return {
-          type: "error",
-          requestId,
-          message: "Unknown message type",
-        } satisfies ErrorMessage;
-      }),
-    );
-  });
+export const Unsubscribe = Rpc.make("unsubscribe", {
+  payload: Schema.Struct({ topic: TopicSchema }),
+  success: Schema.Boolean,
+  error: RpcOperationError,
+});
+
+export const Sync = Rpc.make("sync", {
+  payload: Schema.Struct({
+    mutation: Schema.String,
+    params: Params,
+  }),
+  success: Schema.Void,
+  error: Schema.Union([UnknownMutationError, RpcOperationError]),
+});
+
+export const WebSocketRpc = RpcGroup.make(Subscribe, Unsubscribe, Sync);
+
+export type SubscribePayload<Q extends object> = {
+  readonly query: StringKey<Q>;
+  readonly params: readonly unknown[];
+};
+export type UnsubscribePayload = { readonly topic: Topic };
+export type SyncPayload<M extends object> = {
+  readonly mutation: StringKey<M>;
+  readonly params: readonly unknown[];
+};
+export type QueryEventPayload<Q extends object> = {
+  readonly topic: Topic<StringKey<Q>>;
+  readonly value: OperationResult<Q[StringKey<Q>]>;
+};
+export type SubscribeResult<Q extends object> = QueryEventPayload<Q>;
+export type OperationParamsFor<Q extends object> = OperationParams<Q[StringKey<Q>]>;
+export type { Topic };

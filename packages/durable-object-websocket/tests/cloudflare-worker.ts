@@ -11,7 +11,10 @@ import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core"
 import { DurableObjectWebSocket } from "../src/index.ts";
 
 type FixtureQueries = { counter: Query<[string], { key: string; value: number }> };
-type FixtureMutations = { increment: Mutation<[string, number], void> };
+type FixtureMutations = {
+  increment: Mutation<[string, number], void>;
+  fail: Mutation<[], void, Error>;
+};
 export class FixtureSyncObject extends DurableObjectWebSocket<
   Cloudflare.Env,
   FixtureQueries,
@@ -47,6 +50,10 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
                 amount,
               );
             }),
+        },
+        fail: {
+          tables: toTables([]),
+          run: () => Effect.fail(new Error("fixture mutation failed")),
         },
       } satisfies FixtureMutations;
       return {

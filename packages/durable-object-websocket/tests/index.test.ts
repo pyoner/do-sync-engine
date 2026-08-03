@@ -1,231 +1,56 @@
-import { Effect, Exit } from "effect";
+import { Effect, Exit, Fiber, Option, Queue, Result, Schema, Stream } from "effect";
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { SyncEngine, toTables } from "@do-sync-engine/core";
+import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { SyncEngine, toTables, UnknownMutationError, Topic } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
+import {
+  RpcOperationError,
+  Subscribe,
+  Sync,
+  Unsubscribe,
+  WebSocketRpc,
+  makeWebSocketRpcClient,
+} from "../src/index.ts";
+import { makeWebSocketRpcClientFor } from "../src/client.ts";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
-import { decodeClientCommand } from "../src/protocol.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
+
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
 const fixtureEnv = env as typeof env & {
   FIXTURE_SYNC_OBJECT: DurableObjectNamespace<FixtureSyncObject>;
 };
 
-type Message = {
-  type: string;
-  requestId?: string;
-  topic?: { hash: string; name: string; params: unknown[] };
-  value?: unknown;
-  removed?: boolean;
-  message?: string;
-};
-function connect() {
-  return worker.default.fetch(
+const openSocket = async () => {
+  const response = await worker.default.fetch(
     new Request("https://example.com", { headers: { Upgrade: "websocket" } }),
   );
-}
-function read(socket: WebSocket): Promise<Message> {
-  return new Promise((resolve) =>
-    socket.addEventListener("message", (event) => resolve(JSON.parse(String(event.data))), {
-      once: true,
-    }),
-  );
-}
+  expect(response.status).toBe(101);
+  const socket = response.webSocket!;
+  socket.accept();
+  return socket;
+};
 
-describe("Durable Object WebSocket transport", () => {
-  it("decodes valid commands and preserves protocol errors", async () => {
-    const decode = (message: string | ArrayBuffer) =>
-      Effect.runPromiseExit(decodeClientCommand(message));
-    expect(
-      await decode('{"type":"subscribe","requestId":"s","query":"counter","params":["alpha"]}'),
-    ).toEqual(
-      Exit.succeed({ type: "subscribe", requestId: "s", query: "counter", params: ["alpha"] }),
-    );
-    expect(
-      await decode('{"type":"unsubscribe","requestId":"u","topic":{"name":"counter","params":[]}}'),
-    ).toEqual(
-      Exit.succeed({
-        type: "unsubscribe",
-        requestId: "u",
-        topic: { name: "counter", params: [] },
-      }),
-    );
-    expect(
-      await decode('{"type":"sync","requestId":"m","mutation":"increment","params":["alpha",1]}'),
-    ).toEqual(
-      Exit.succeed({
-        type: "sync",
-        requestId: "m",
-        mutation: "increment",
-        params: ["alpha", 1],
-      }),
-    );
-    expect(await decode(new ArrayBuffer(0))).toEqual(
-      Exit.fail({ type: "error", message: "Expected text WebSocket message" }),
-    );
-    expect(await decode('{"type":"subscribe","requestId":"s","query":"counter"}')).toEqual(
-      Exit.fail({ type: "error", requestId: "s", message: "query and params required" }),
-    );
-    expect(await decode('{"type":"unsubscribe","requestId":"u"}')).toEqual(
-      Exit.fail({ type: "error", requestId: "u", message: "topic required" }),
-    );
-    expect(await decode('{"type":"sync","requestId":"m","mutation":"increment"}')).toEqual(
-      Exit.fail({ type: "error", requestId: "m", message: "mutation and params required" }),
-    );
-    expect(await decode('{"type":"wat","requestId":"x"}')).toEqual(
-      Exit.fail({ type: "error", requestId: "x", message: "Unknown message type" }),
-    );
-    expect(await decode("not json")).toEqual(
-      Exit.fail({ type: "error", message: "Invalid JSON message" }),
-    );
-    expect(await decode("null")).toEqual(
-      Exit.fail({ type: "error", message: "Invalid JSON message" }),
-    );
-    expect(await decode("[]")).toEqual(
-      Exit.fail({ type: "error", message: "Invalid JSON message" }),
-    );
-    expect(await decode('{"type":"sync","params":[]}')).toEqual(
-      Exit.fail({ type: "error", message: "requestId required" }),
-    );
-    expect(await decode('{"type":"sync","requestId":" ","params":[]}')).toEqual(
-      Exit.fail({ type: "error", message: "requestId required" }),
-    );
-  });
-  it("subscribes, syncs, restores after hibernation, and unsubscribes", async () => {
-    const rejected = await worker.default.fetch(new Request("https://example.com"));
-    expect([rejected.status, await rejected.text()]).toEqual([426, "Expected WebSocket"]);
-    const response = await connect();
-    const socket = response.webSocket!;
-    socket.accept();
-    try {
-      socket.send(
-        JSON.stringify({
-          type: "subscribe",
-          requestId: "sub",
-          query: "counter",
-          params: ["alpha"],
-        }),
-      );
-      const first = await read(socket);
-      expect(first.requestId).toBe("sub");
-      expect(first.value).toEqual({ key: "alpha", value: 0 });
-      socket.send(
-        JSON.stringify({
-          type: "subscribe",
-          requestId: "sub-again",
-          query: "counter",
-          params: ["alpha"],
-        }),
-      );
-      expect((await read(socket)).requestId).toBe("sub-again");
-      socket.send(
-        JSON.stringify({
-          type: "sync",
-          requestId: "inc",
-          mutation: "increment",
-          params: ["alpha", 2],
-        }),
-      );
-      expect((await read(socket)).value).toEqual({ key: "alpha", value: 2 });
-      expect((await read(socket)).type).toBe("synced");
-      await evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
-        webSockets: "hibernate",
-      });
-      socket.send(
-        JSON.stringify({
-          type: "sync",
-          requestId: "inc2",
-          mutation: "increment",
-          params: ["alpha", 1],
-        }),
-      );
-      expect((await read(socket)).value).toEqual({ key: "alpha", value: 3 });
-      expect((await read(socket)).type).toBe("synced");
-      socket.send(
-        JSON.stringify({
-          type: "unsubscribe",
-          requestId: "unsub",
-          topic: JSON.parse(JSON.stringify(first.topic)),
-        }),
-      );
-      expect((await read(socket)).removed).toBe(true);
-      await evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
-        webSockets: "hibernate",
-      });
-      socket.send(
-        JSON.stringify({
-          type: "sync",
-          requestId: "post-unsub",
-          mutation: "increment",
-          params: ["alpha", 1],
-        }),
-      );
-      expect((await read(socket)).type).toBe("synced");
+const InvalidSync = Rpc.make("sync", {
+  payload: Schema.Struct({ mutation: Schema.String, params: Schema.Unknown }),
+  success: Schema.Void,
+  error: Schema.Union([UnknownMutationError, RpcOperationError]),
+});
+const InvalidRpc = RpcGroup.make(Subscribe, Unsubscribe, InvalidSync);
 
-      for (const [requestId, message, expected] of [
-        ["bad-sub", { type: "subscribe", requestId: "bad-sub" }, "query and params required"],
-        ["bad-unsub", { type: "unsubscribe", requestId: "bad-unsub" }, "topic required"],
-        ["bad-sync", { type: "sync", requestId: "bad-sync" }, "mutation and params required"],
-        ["unknown", { type: "wat", requestId: "unknown" }, "Unknown message type"],
-      ] as const) {
-        socket.send(JSON.stringify(message));
-        const result = await read(socket);
-        expect([result.requestId, result.message]).toEqual([requestId, expected]);
-      }
-      for (const message of ["not json", "null"]) {
-        socket.send(message);
-        expect(await read(socket)).toEqual({ type: "error", message: "Invalid JSON message" });
-      }
-      socket.send(new Uint8Array([1, 2]));
-      expect(await read(socket)).toEqual({
-        type: "error",
-        message: "Expected text WebSocket message",
-      });
-      socket.send(JSON.stringify({}));
-      expect(await read(socket)).toEqual({ type: "error", message: "requestId required" });
-      socket.send(
-        JSON.stringify({
-          type: "subscribe",
-          requestId: "missing-query",
-          query: "missing",
-          params: ["x"],
-        }),
-      );
-      expect((await read(socket)).message).toContain("Unknown query: missing");
-      socket.send(
-        JSON.stringify({
-          type: "sync",
-          requestId: "missing-mutation",
-          mutation: "missing",
-          params: ["x"],
-        }),
-      );
-      expect((await read(socket)).message).toContain("Unknown mutation: missing");
-      socket.send(
-        JSON.stringify({
-          type: "unsubscribe",
-          requestId: "again",
-          topic: { name: "counter", params: [] },
-        }),
-      );
-      expect((await read(socket)).removed).toBe(false);
-      socket.send(
-        JSON.stringify({
-          type: "subscribe",
-          requestId: "too-large",
-          query: "counter",
-          params: ["x".repeat(20_000)],
-        }),
-      );
-      expect((await read(socket)).message).toBeDefined();
-    } finally {
-      socket.close();
-    }
+describe("Effect RPC protocol", () => {
+  it("exposes the declared websocket procedures", () => {
+    expect(WebSocketRpc).toBeDefined();
+    expect(WebSocketRpc.requests.has(Subscribe._tag)).toBe(true);
+    expect(WebSocketRpc.requests.has(Unsubscribe._tag)).toBe(true);
+    expect(WebSocketRpc.requests.has(Sync._tag)).toBe(true);
+    expect(makeWebSocketRpcClient).toBeDefined();
   });
 });
-it("does not retain duplicate listeners when restoring a socket", async () => {
-  const engine = new SyncEngine({
+
+const registryEngine = () =>
+  new SyncEngine({
     queries: {
       counter: {
         tables: toTables(["counters"]),
@@ -239,8 +64,19 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
       },
     },
   });
-  const messages: unknown[] = [];
-  let attachment: unknown;
+
+it("restores duplicate sessions with one listener and filters invalid IDs", async () => {
+  const engine = registryEngine();
+  let attachment: unknown = {
+    version: 1,
+    subscriptions: [
+      { requestId: "first", query: "counter", params: ["same"], headers: [] },
+      { requestId: "first", query: "counter", params: ["duplicate"], headers: [] },
+      { requestId: 42, query: "counter", params: ["same"], headers: [["x-test", "yes"]] },
+      { requestId: {}, query: "counter", params: ["invalid"], headers: [] },
+      { requestId: "malformed", query: "counter", params: "invalid", headers: [] },
+    ],
+  };
   const socket = {
     deserializeAttachment: () => attachment,
     serializeAttachment: (value: unknown) => {
@@ -252,50 +88,274 @@ it("does not retain duplicate listeners when restoring a socket", async () => {
       { counter: Query<[string], { value: number }> },
       { increment: Mutation<[string, number], void> }
     >,
-    (_ws, message) => messages.push(message),
   );
-  const topic = await Effect.runPromise(engine.createTopic("counter", []));
-  attachment = { topics: [topic] };
-  await Effect.runPromise(registry.restore(socket));
-  messages.length = 0;
-  await Effect.runPromise(registry.restore(socket));
-  messages.length = 0;
-  await Effect.runPromise(engine.sync("increment", []));
-  expect(messages).toHaveLength(1);
+
+  const restored = await Effect.runPromise(registry.restore(socket));
+  expect(restored.map(({ requestId }) => requestId)).toEqual(["first", 42]);
+  expect(attachment).toEqual({
+    version: 1,
+    subscriptions: [
+      { requestId: "first", query: "counter", params: ["same"], headers: [] },
+      { requestId: 42, query: "counter", params: ["same"], headers: [["x-test", "yes"]] },
+    ],
+  });
+  const backing = (engine as unknown as { registry: { backing: Map<unknown, unknown> } }).registry;
+  expect(backing.backing.size).toBe(1);
+  await Effect.runPromise(registry.clear(socket));
 });
 
-it("rolls back failed restore snapshots", async () => {
+it("rolls back every listener when restoring snapshots fails", async () => {
   const engine = new SyncEngine({
     queries: {
-      counter: {
+      first: {
         tables: toTables(["counters"]),
         run: () => Effect.succeed({ value: 0 }),
+      },
+      second: {
+        tables: toTables(["counters"]),
+        run: () => Effect.fail(new Error("snapshot failed")),
       },
     },
     mutations: {},
   });
-  let attachment: unknown;
+  let attachment: unknown = {
+    version: 1,
+    subscriptions: [
+      { requestId: "first", query: "first", params: [], headers: [] },
+      { requestId: "second", query: "second", params: [], headers: [] },
+    ],
+  };
   const socket = {
     deserializeAttachment: () => attachment,
     serializeAttachment: (value: unknown) => {
       attachment = value;
     },
   } as WebSocket;
-  const topic = await Effect.runPromise(engine.createTopic("counter", []));
-  attachment = { topics: [topic] };
   const registry = new SubscriptionRegistry(
     engine as unknown as SyncEngineInterface<
-      { counter: Query<[], { value: number }> },
+      { first: Query<[], { value: number }>; second: Query<[], { value: number }> },
       Record<string, never>
     >,
-    () => {
-      throw new Error("snapshot send failed");
-    },
   );
+
   const result = Effect.runSyncExit(registry.restore(socket));
   expect(Exit.isFailure(result)).toBe(true);
-  const coreRegistry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } })
-    .registry;
-  expect(coreRegistry.backing.size).toBe(0);
-  expect(attachment).toEqual({ topics: [] });
+  const backing = (engine as unknown as { registry: { backing: Map<unknown, unknown> } }).registry;
+  expect(backing.backing.size).toBe(0);
+  expect(attachment).toEqual({ version: 1, subscriptions: [] });
+});
+
+it("runs typed RPC requests over the real Durable Object socket", async () => {
+  const socket = await openSocket();
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClient(socket);
+          yield* client.sync({ mutation: "increment", params: ["typed", 2] });
+          const result = yield* Stream.runHead(
+            client.subscribe({ query: "counter", params: ["typed"] }),
+          );
+          expect(result._tag).toBe("Some");
+          if (result._tag === "Some")
+            expect(result.value.value).toEqual({ key: "typed", value: 2 });
+        }),
+      ),
+    );
+  } finally {
+    socket.close();
+  }
+});
+
+it("returns each declared typed operation failure", async () => {
+  const socket = await openSocket();
+  try {
+    const result = await Effect.runPromiseExit(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClient(socket);
+          const unknownMutation = yield* Effect.exit(
+            client.sync({ mutation: "missing", params: [] }),
+          );
+          const unknownQuery = yield* Effect.exit(
+            Stream.runHead(client.subscribe({ query: "missing", params: [] })),
+          );
+          const failedMutation = yield* Effect.exit(client.sync({ mutation: "fail", params: [] }));
+          return { unknownMutation, unknownQuery, failedMutation };
+        }),
+      ),
+    );
+    expect(Exit.isSuccess(result)).toBe(true);
+    if (Exit.isSuccess(result)) {
+      const unknownMutation = Exit.findErrorOption(result.value.unknownMutation);
+      const unknownQuery = Exit.findErrorOption(result.value.unknownQuery);
+      const failedMutation = Exit.findErrorOption(result.value.failedMutation);
+      expect(Option.isSome(unknownMutation)).toBe(true);
+      expect(Option.isSome(unknownQuery)).toBe(true);
+      expect(Option.isSome(failedMutation)).toBe(true);
+      if (Option.isSome(unknownMutation))
+        expect(unknownMutation.value).toMatchObject({
+          _tag: "UnknownMutationError",
+          mutation: "missing",
+        });
+      if (Option.isSome(unknownQuery))
+        expect(unknownQuery.value).toMatchObject({ _tag: "UnknownQueryError", query: "missing" });
+      if (Option.isSome(failedMutation))
+        expect(failedMutation.value).toMatchObject({
+          _tag: "RpcOperationError",
+          message: "fixture mutation failed",
+        });
+    }
+  } finally {
+    socket.close();
+  }
+});
+
+it("correlates malformed payload defects without poisoning other requests", async () => {
+  const socket = await openSocket();
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClientFor(socket, InvalidRpc);
+          const events = yield* Queue.unbounded<unknown>();
+          const stream = client
+            .subscribe({ query: "counter", params: ["schema"] })
+            .pipe(Stream.runForEach((event) => Queue.offer(events, event.value)));
+          const fiber = yield* Effect.forkScoped(stream);
+          expect(yield* Queue.take(events)).toEqual({ key: "schema", value: 0 });
+
+          const malformed = yield* Effect.exit(
+            client.sync({ mutation: "increment", params: "invalid" }),
+          );
+          expect(Exit.hasDies(malformed)).toBe(true);
+          const defect = Exit.findDefect(malformed);
+          expect(Result.isSuccess(defect)).toBe(true);
+          if (Result.isSuccess(defect)) expect(String(defect.success)).toMatch(/array/i);
+
+          yield* client.sync({ mutation: "increment", params: ["schema", 1] });
+          expect(yield* Queue.take(events)).toEqual({ key: "schema", value: 1 });
+          yield* client.unsubscribe({ topic: new Topic({ name: "counter", params: ["schema"] }) });
+          yield* Fiber.await(fiber);
+        }),
+      ),
+    );
+  } finally {
+    socket.close();
+  }
+});
+
+it("keeps a malformed-frame socket open for typed RPC", async () => {
+  const socket = await openSocket();
+  try {
+    const frames: unknown[] = [];
+    let resolveDefect!: (frame: unknown) => void;
+    const defect = new Promise<unknown>((resolve) => {
+      resolveDefect = resolve;
+    });
+    const listener = (event: MessageEvent) => {
+      const frame = JSON.parse(event.data);
+      frames.push(frame);
+      if (typeof frame === "object" && frame !== null && "_tag" in frame && frame._tag === "Defect")
+        resolveDefect(frame);
+    };
+    socket.addEventListener("message", listener);
+    socket.send("not valid json");
+    expect(await defect).toMatchObject({ _tag: "Defect" });
+    expect(frames).toHaveLength(1);
+    socket.removeEventListener("message", listener);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClient(socket);
+          yield* client.sync({ mutation: "increment", params: ["framing", 1] });
+        }),
+      ),
+    );
+  } finally {
+    socket.close();
+  }
+});
+
+it("ends an active stream after typed unsubscribe", async () => {
+  const socket = await openSocket();
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClient(socket);
+          const events = yield* Queue.unbounded<unknown>();
+          const fiber = yield* Effect.forkScoped(
+            Stream.runForEach(
+              client.subscribe({ query: "counter", params: ["unsubscribe"] }),
+              (event) => Queue.offer(events, event.value),
+            ),
+          );
+          expect(yield* Queue.take(events)).toEqual({ key: "unsubscribe", value: 0 });
+          const removed = yield* client.unsubscribe({
+            topic: new Topic({ name: "counter", params: ["unsubscribe"] }),
+          });
+          expect(removed).toBe(true);
+          yield* Fiber.await(fiber);
+        }),
+      ),
+    );
+  } finally {
+    socket.close();
+  }
+});
+
+it("resumes the original stream across Durable Object hibernation", async () => {
+  const socket = await openSocket();
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* makeWebSocketRpcClient(socket);
+          yield* client.sync({ mutation: "increment", params: ["hibernation", 2] });
+          const events = yield* Queue.unbounded<unknown>();
+          const fiber = yield* Effect.forkScoped(
+            Stream.runForEach(
+              client.subscribe({ query: "counter", params: ["hibernation"] }),
+              (event) => Queue.offer(events, event.value),
+            ),
+          );
+          expect(yield* Queue.take(events)).toEqual({ key: "hibernation", value: 2 });
+
+          yield* Effect.promise(() =>
+            evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
+              webSockets: "hibernate",
+            }),
+          );
+          yield* client.sync({ mutation: "increment", params: ["hibernation", 1] });
+          expect(yield* Queue.take(events)).toEqual({ key: "hibernation", value: 3 });
+          yield* Effect.yieldNow;
+          yield* Effect.yieldNow;
+          expect(yield* Queue.poll(events)).toEqual(Option.none());
+
+          const removed = yield* client.unsubscribe({
+            topic: new Topic({ name: "counter", params: ["hibernation"] }),
+          });
+          expect(removed).toBe(true);
+          yield* Fiber.await(fiber);
+        }),
+      ),
+    );
+  } finally {
+    socket.close();
+  }
+});
+
+it("interrupts a typed RPC when the socket closes", async () => {
+  const socket = await openSocket();
+  const result = await Effect.runPromiseExit(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const client = yield* makeWebSocketRpcClient(socket);
+        socket.close();
+        return yield* client.sync({ mutation: "increment", params: ["closed", 1] });
+      }),
+    ),
+  );
+  expect(result._tag).toBe("Failure");
 });
