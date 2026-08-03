@@ -1,38 +1,7 @@
-import { Effect, Exit, Scope, Stream } from "effect";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { Effect, Exit } from "effect";
 import { DurableObject } from "cloudflare:workers";
-import type {
-  MutationMap,
-  OperationParams,
-  QueryMap,
-  StringKey,
-  SyncEngineInterface,
-} from "@do-sync-engine/core";
-import { SubscriptionRegistry } from "./subscriptions.ts";
-import type { PersistedSubscription } from "./subscriptions.ts";
-import { RpcOperationError, WebSocketRpc } from "./protocol.ts";
-import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
-import type { CloudflareRpcServerTransport } from "./server-transport.ts";
-
-const toRpcOperationError = (error: unknown): RpcOperationError => {
-  let current: unknown = error;
-  const seen = new Set<unknown>();
-  while (!seen.has(current)) {
-    seen.add(current);
-    if (current instanceof Error && current.message !== "") {
-      return RpcOperationError.make({ message: current.message });
-    }
-    if (typeof current !== "object" || current === null || !("cause" in current)) break;
-    current = current.cause;
-  }
-  return RpcOperationError.make({ message: "WebSocket operation failed" });
-};
-
-type SocketTransport = {
-  readonly scope: Scope.Closeable;
-  readonly transport: CloudflareRpcServerTransport;
-};
+import type { MutationMap, QueryMap, SyncEngineInterface } from "@do-sync-engine/core";
+import { SocketRuntime } from "./socket-runtime.ts";
 
 export abstract class DurableObjectWebSocket<
   Env,
@@ -40,10 +9,8 @@ export abstract class DurableObjectWebSocket<
   M extends MutationMap<M>,
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
-  private readonly socketCallbacks = new WeakMap<WebSocket, Promise<void>>();
-  private readonly socketTransports = new WeakMap<WebSocket, SocketTransport>();
+  private readonly sockets = new WeakMap<WebSocket, SocketRuntime<Q, M>>();
   private engine!: SyncEngineInterface<Q, M>;
-  private registry!: SubscriptionRegistry<Q, M>;
 
   protected constructor(
     ctx: DurableObjectState,
@@ -53,20 +20,17 @@ export abstract class DurableObjectWebSocket<
     super(ctx, env);
     this.initialization = ctx.blockConcurrencyWhile(() =>
       Effect.runPromise(
-        Effect.gen(
-          function* (this: DurableObjectWebSocket<Env, Q, M>) {
-            const engine = yield* Effect.tryPromise({
-              try: () => Promise.resolve(initialize()),
+        Effect.gen({ self: this }, function* (this: DurableObjectWebSocket<Env, Q, M>) {
+          this.engine = yield* Effect.tryPromise({
+            try: () => Promise.resolve(initialize()),
+            catch: (cause) => cause,
+          });
+          for (const ws of ctx.getWebSockets())
+            yield* Effect.tryPromise({
+              try: () => this.runtime(ws).start(),
               catch: (cause) => cause,
             });
-            this.engine = engine;
-            this.registry = new SubscriptionRegistry(engine);
-            for (const ws of ctx.getWebSockets()) {
-              const restored = yield* this.registry.restore(ws);
-              yield* this.initializeSocketRpc(ws, restored);
-            }
-          }.bind(this),
-        ),
+        }),
       ),
     );
   }
@@ -76,148 +40,52 @@ export abstract class DurableObjectWebSocket<
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    return this.enqueueSocket(ws, this.webSocketMessageEffect(ws, message));
+    return this.afterInitialization(() => this.runtime(ws).receive(message));
   }
 
   webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-    return this.enqueueSocket(ws, this.socketCleanupEffect(ws, Exit.void));
+    return this.closeSocket(ws, Exit.void);
   }
 
   webSocketError(ws: WebSocket, error: unknown): Promise<void> {
-    return this.enqueueSocket(ws, this.socketCleanupEffect(ws, Exit.die(error)));
+    return this.closeSocket(ws, Exit.die(error));
+  }
+
+  private closeSocket(ws: WebSocket, exit: Exit.Exit<unknown, unknown>): Promise<void> {
+    return this.afterInitialization(async () => {
+      await this.runtime(ws).close(exit);
+      this.sockets.delete(ws);
+    });
   }
 
   private fetchEffect(request: Request): Effect.Effect<Response, unknown> {
-    return Effect.gen(
-      function* (this: DurableObjectWebSocket<Env, Q, M>) {
-        yield* Effect.tryPromise({
-          try: () => this.initialization,
-          catch: (cause) => cause,
-        });
-        if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
-          return new Response("Expected WebSocket", { status: 426 });
-        const pair = new WebSocketPair();
-        this.ctx.acceptWebSocket(pair[1]);
-        const restored = yield* this.registry.restore(pair[1]);
-        yield* this.initializeSocketRpc(pair[1], restored);
-        return new Response(null, { status: 101, webSocket: pair[0] });
-      }.bind(this),
-    );
+    return Effect.gen({ self: this }, function* (this: DurableObjectWebSocket<Env, Q, M>) {
+      yield* Effect.tryPromise({
+        try: () => this.initialization,
+        catch: (cause) => cause,
+      });
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+        return new Response("Expected WebSocket", { status: 426 });
+      const pair = new WebSocketPair();
+      this.ctx.acceptWebSocket(pair[1]);
+      yield* Effect.tryPromise({
+        try: () => this.runtime(pair[1]).start(),
+        catch: (cause) => cause,
+      });
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    });
   }
 
-  private webSocketMessageEffect(
-    ws: WebSocket,
-    message: string | ArrayBuffer,
-  ): Effect.Effect<void, unknown> {
-    return Effect.gen(
-      function* (this: DurableObjectWebSocket<Env, Q, M>) {
-        yield* Effect.tryPromise({
-          try: () => this.initialization,
-          catch: (cause) => cause,
-        });
-        let entry = this.socketTransports.get(ws);
-        if (!entry) {
-          yield* this.initializeSocketRpc(ws);
-          entry = this.socketTransports.get(ws);
-        }
-        if (entry) yield* entry.transport.receive(message);
-      }.bind(this),
-    );
+  private runtime(ws: WebSocket): SocketRuntime<Q, M> {
+    let runtime = this.sockets.get(ws);
+    if (!runtime) {
+      runtime = new SocketRuntime(ws, this.engine);
+      this.sockets.set(ws, runtime);
+    }
+    return runtime;
   }
 
-  private initializeSocketRpc(
-    ws: WebSocket,
-    restored: readonly PersistedSubscription[] = [],
-  ): Effect.Effect<void, unknown> {
-    if (this.socketTransports.has(ws)) return Effect.void;
-    return Effect.gen(
-      function* (this: DurableObjectWebSocket<Env, Q, M>) {
-        const scope = yield* Scope.make();
-        const transport = yield* makeCloudflareRpcServerTransport(ws);
-        const handlers = yield* WebSocketRpc.toHandlers({
-          subscribe: (payload, { requestId, headers }) =>
-            this.registry
-              .subscribeStream(ws, {
-                requestId,
-                query: payload.query,
-                params: payload.params,
-                headers: Object.entries(headers),
-              })
-              .pipe(
-                Stream.mapError((error) =>
-                  error instanceof UnknownQueryError ? error : toRpcOperationError(error),
-                ),
-              ),
-          unsubscribe: (payload) =>
-            this.registry
-              .unsubscribe(ws, payload.topic)
-              .pipe(Effect.mapError((error) => toRpcOperationError(error))),
-          sync: (payload) =>
-            this.engine
-              .sync(
-                payload.mutation as StringKey<M>,
-                payload.params as OperationParams<M[StringKey<M>]>,
-              )
-              .pipe(
-                Effect.mapError((error) =>
-                  error instanceof UnknownMutationError ? error : toRpcOperationError(error),
-                ),
-              ),
-        });
-        const server = RpcServer.make(WebSocketRpc).pipe(
-          Effect.provide(handlers),
-          Effect.provideService(RpcServer.Protocol, transport.protocol),
-          Effect.provideService(RpcSerialization.RpcSerialization, RpcSerialization.json),
-          Scope.provide(scope),
-        );
-        yield* Effect.forkIn(server, scope);
-        this.socketTransports.set(ws, { scope, transport });
-
-        const parser = RpcSerialization.json.makeUnsafe();
-        for (const session of restored) {
-          const encoded = parser.encode({
-            _tag: "Request",
-            id: session.requestId,
-            tag: "subscribe",
-            payload: { query: session.query, params: session.params },
-            headers: session.headers,
-          });
-          if (encoded !== undefined) {
-            yield* transport.receive(
-              typeof encoded === "string" ? encoded : new TextDecoder().decode(encoded),
-            );
-          }
-        }
-      }.bind(this),
-    );
-  }
-
-  private socketCleanupEffect(
-    ws: WebSocket,
-    exit: Exit.Exit<unknown, unknown>,
-  ): Effect.Effect<void, unknown> {
-    return Effect.gen(
-      function* (this: DurableObjectWebSocket<Env, Q, M>) {
-        yield* Effect.tryPromise({
-          try: () => this.initialization,
-          catch: (cause) => cause,
-        });
-        const entry = this.socketTransports.get(ws);
-        if (entry) {
-          yield* entry.transport.disconnect;
-          yield* Scope.close(entry.scope, exit);
-          this.socketTransports.delete(ws);
-        }
-        yield* this.registry.clear(ws);
-      }.bind(this),
-    );
-  }
-
-  private enqueueSocket(ws: WebSocket, workflow: Effect.Effect<void, unknown>): Promise<void> {
-    const previous = this.socketCallbacks.get(ws) ?? Promise.resolve();
-    const current = previous.then(() => Effect.runPromise(workflow));
-    const recovered = current.catch(() => undefined);
-    this.socketCallbacks.set(ws, recovered);
-    return recovered;
+  private afterInitialization(work: () => Promise<void>): Promise<void> {
+    return this.initialization.then(work);
   }
 }

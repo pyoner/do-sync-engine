@@ -52,53 +52,65 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
   ): Stream.Stream<QueryEvent, SubscriptionError<Q>> {
     return Stream.unwrap(
       Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-        const topic = yield* this.engine.createTopic<StringKey<Q>>(
-          session.query as StringKey<Q>,
-          session.params as OperationParams<Q[StringKey<Q>]>,
-        );
         const state = this.states.get(ws) ?? new Map<string, Entry[]>();
         this.states.set(ws, state);
-        const bucket = state.get(topic.name) ?? [];
-        let entry = bucket.find((x) => Equal.equals(x.topic, topic));
         const queue = yield* Queue.unbounded<QueryEvent>();
-        const accepted: Session = { ...session, topic, queue };
-        if (entry) {
-          const restored = entry.sessions.get(session.requestId);
-          if (restored && !restored.queue) entry.sessions.set(session.requestId, accepted);
-          else {
-            entry.sessions.set(session.requestId, accepted);
-            let snapshot: QueryEvent | undefined;
-            const id = yield* this.engine.subscribe<StringKey<Q>>(topic, (e) => {
-              snapshot = e;
-            });
-            yield* this.engine.unsubscribe(id);
-            if (snapshot) yield* Queue.offer(queue, snapshot);
-          }
-          yield* attachment(ws, { version: 1, subscriptions: this.sessions(state) });
-        } else {
-          let initial: QueryEvent | undefined;
-          const sessions = new Map([[session.requestId, accepted]]);
-          const listenerId = yield* this.engine.subscribe<StringKey<Q>>(topic, (e) => {
-            if (!initial) initial = e;
-            else for (const s of sessions.values()) if (s.queue) Queue.offerUnsafe(s.queue, e);
-          });
-          entry = { topic, listenerId, sessions };
-          bucket.push(entry);
-          state.set(topic.name, bucket);
-          if (initial) yield* Queue.offer(queue, initial);
-          yield* attachment(ws, { version: 1, subscriptions: this.sessions(state) });
-        }
+        const entry = yield* this.admitSession(state, session, queue);
+        yield* attachment(ws, { version: 1, subscriptions: this.sessions(state) });
         return Stream.fromQueue(queue).pipe(
           Stream.ensuring(
             Effect.sync(() => {
-              const current = entry?.sessions.get(session.requestId);
+              const current = entry.sessions.get(session.requestId);
               if (current?.queue === queue)
-                entry?.sessions.set(session.requestId, { ...current, queue: undefined });
+                entry.sessions.set(session.requestId, { ...current, queue: undefined });
             }),
           ),
         );
       }),
     );
+  }
+
+  private admitSession(
+    state: SocketState,
+    session: PersistedSubscription,
+    queue?: Queue.Queue<QueryEvent, never>,
+  ): Effect.Effect<Entry, SubscriptionError<Q>> {
+    return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+      const topic = yield* this.engine.createTopic<StringKey<Q>>(
+        session.query as StringKey<Q>,
+        session.params as OperationParams<Q[StringKey<Q>]>,
+      );
+      const bucket = state.get(topic.name) ?? [];
+      let entry = bucket.find((candidate) => Equal.equals(candidate.topic, topic));
+      const accepted: Session = { ...session, topic, queue };
+      if (entry) {
+        const restored = entry.sessions.get(session.requestId);
+        entry.sessions.set(session.requestId, accepted);
+        if (queue && (!restored || restored.queue)) {
+          let snapshot: QueryEvent | undefined;
+          const id = yield* this.engine.subscribe<StringKey<Q>>(topic, (event) => {
+            snapshot = event;
+          });
+          yield* this.engine.unsubscribe(id);
+          if (snapshot) yield* Queue.offer(queue, snapshot);
+        }
+        return entry;
+      }
+
+      let initial: QueryEvent | undefined;
+      const sessions = new Map([[session.requestId, accepted]]);
+      const listenerId = yield* this.engine.subscribe<StringKey<Q>>(topic, (event) => {
+        if (!initial) initial = event;
+        else
+          for (const active of sessions.values())
+            if (active.queue) Queue.offerUnsafe(active.queue, event);
+      });
+      entry = { topic, listenerId, sessions };
+      bucket.push(entry);
+      state.set(topic.name, bucket);
+      if (queue && initial) yield* Queue.offer(queue, initial);
+      return entry;
+    });
   }
   unsubscribe(ws: WebSocket, topic: Topic): Effect.Effect<boolean, Error> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
@@ -157,40 +169,12 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       for (const record of records) {
         if (seen.has(record.requestId)) continue;
         seen.add(record.requestId);
-        const topicExit = yield* Effect.exit(
-          this.engine.createTopic<StringKey<Q>>(
-            record.query as StringKey<Q>,
-            record.params as OperationParams<Q[StringKey<Q>]>,
-          ),
-        );
-        if (Exit.isFailure(topicExit)) {
+        const admission = yield* Effect.exit(this.admitSession(state, record));
+        if (Exit.isFailure(admission)) {
           yield* this.rollback(ws, state);
-          return yield* Effect.failCause(topicExit.cause);
+          return yield* Effect.failCause(admission.cause);
         }
-        const topic = topicExit.value;
-        let entry = state.get(topic.name)?.find((e) => Equal.equals(e.topic, topic));
-        if (!entry) {
-          const sessions = new Map<string | number, Session>();
-          const sub = yield* Effect.exit(
-            this.engine.subscribe<StringKey<Q>>(topic, (e) => {
-              for (const s of sessions.values()) if (s.queue) Queue.offerUnsafe(s.queue, e);
-            }),
-          );
-          if (Exit.isFailure(sub)) {
-            yield* this.rollback(ws, state);
-            return yield* Effect.failCause(sub.cause);
-          }
-          entry = { topic, listenerId: sub.value, sessions };
-          const bucket = state.get(topic.name) ?? [];
-          bucket.push(entry);
-          state.set(topic.name, bucket);
-        }
-        const acceptedRecord: PersistedSubscription = {
-          ...record,
-          headers: record.headers.map(([key, value]) => [key, value]),
-        };
-        entry.sessions.set(record.requestId, { ...acceptedRecord, topic });
-        accepted.push(acceptedRecord);
+        accepted.push(record);
       }
       yield* attachment(ws, { version: 1, subscriptions: accepted });
       return accepted;
