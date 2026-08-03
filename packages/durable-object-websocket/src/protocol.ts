@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { TopicSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import {
+  ListenerIdSchema,
+  TopicSchema,
+  UnknownMutationError,
+  UnknownQueryError,
+} from "@do-sync-engine/core";
 
 const Params = Schema.Array(Schema.Unknown);
 export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError>()(
@@ -9,6 +14,7 @@ export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError
 ) {}
 
 const QueryEvent = Schema.Struct({
+  listenerId: ListenerIdSchema,
   topic: TopicSchema,
   value: Schema.Unknown,
 });
@@ -24,7 +30,7 @@ export const Subscribe = Rpc.make("subscribe", {
 });
 
 export const Unsubscribe = Rpc.make("unsubscribe", {
-  payload: Schema.Struct({ topic: TopicSchema }),
+  payload: Schema.Struct({ listenerId: ListenerIdSchema }),
   success: Schema.Boolean,
   error: RpcOperationError,
 });

@@ -2,8 +2,9 @@ import { Cause, Effect, Exit, Fiber, Option, Queue, Schema, Scope, Stream } from
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { makeWebSocketRpcClient, Topic } from "@do-sync-engine/durable-object-websocket";
+import { makeWebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
 import type { WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
+import type { ListenerId } from "@do-sync-engine/core";
 import {
   todoCountSchema,
   todoSchema,
@@ -23,10 +24,10 @@ const openSocket = async () => {
   socket.accept();
   return socket;
 };
-
 type DecodedSubscription<T> = {
   readonly queue: Queue.Queue<T>;
   readonly fiber: Fiber.Fiber<void, unknown>;
+  readonly listenerId: () => ListenerId | undefined;
 };
 
 const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
@@ -36,15 +37,21 @@ const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
 ): Effect.Effect<DecodedSubscription<S["Type"]>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const queue = yield* Queue.unbounded<S["Type"]>();
-    const decodedStream = client
-      .subscribe({ query, params: [] })
-      .pipe(Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.value)));
+    let id: ListenerId | undefined;
+    const decodedStream = client.subscribe({ query, params: [] }).pipe(
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          id = event.listenerId;
+        }),
+      ),
+      Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.value)),
+    );
     const fiber = yield* Effect.forkScoped(
       Stream.runForEach(decodedStream, (value) => Queue.offer(queue, value)).pipe(
         Effect.catchCauseIf(Cause.hasInterrupts, () => Effect.void),
       ),
     );
-    return { queue, fiber };
+    return { queue, fiber, listenerId: () => id };
   });
 const uniqueTitle = () => `todo-${crypto.randomUUID()}`;
 
@@ -212,12 +219,13 @@ describe("TodoStore WebSocket RPC", () => {
               Schema.Array(todoSchema),
             );
             yield* Queue.take(subscription.queue);
-            const topic = new Topic({ name: "allTodos", params: [] });
-            expect(yield* client.unsubscribe({ topic })).toBe(true);
+            const listenerId = subscription.listenerId();
+            if (!listenerId) throw new Error("Subscription listener ID was not received");
+            expect(yield* client.unsubscribe({ listenerId })).toBe(true);
             yield* Effect.yieldNow;
             const exit = yield* Fiber.await(subscription.fiber);
             expect(Exit.isSuccess(exit)).toBe(true);
-            expect(yield* client.unsubscribe({ topic })).toBe(false);
+            expect(yield* client.unsubscribe({ listenerId })).toBe(false);
           }),
         ),
       );
@@ -239,6 +247,8 @@ describe("TodoStore WebSocket RPC", () => {
               Schema.Array(todoSchema),
             );
             yield* Queue.take(subscription.queue);
+            const listenerId = subscription.listenerId();
+            if (!listenerId) throw new Error("Subscription listener ID was not received");
             const title = uniqueTitle();
 
             yield* client.sync({ mutation: "addTodo", params: [title] });
@@ -263,9 +273,7 @@ describe("TodoStore WebSocket RPC", () => {
             yield* client.sync({ mutation: "deleteTodo", params: [added.id] });
             const afterDelete = yield* Queue.take(subscription.queue);
             expect(afterDelete.some((todo) => todo.id === added.id)).toBe(false);
-            expect(
-              yield* client.unsubscribe({ topic: new Topic({ name: "allTodos", params: [] }) }),
-            ).toBe(true);
+            expect(yield* client.unsubscribe({ listenerId })).toBe(true);
           }),
         ),
       );

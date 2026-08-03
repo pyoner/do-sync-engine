@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, Stream } from "effect";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { ListenerIdSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -82,6 +82,9 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   ): Effect.Effect<void, unknown> {
     if (this.socketTransport) return Effect.void;
     return Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
+      const restoredListenerIds = new Map(
+        restored.map((session) => [session.requestId, session.listenerId]),
+      );
       const scope = yield* Scope.make();
       const transport = yield* makeCloudflareRpcServerTransport(this.socket);
       const handlers = yield* WebSocketRpc.toHandlers({
@@ -89,6 +92,8 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
           this.registry
             .subscribeStream(this.socket, {
               requestId,
+              listenerId:
+                restoredListenerIds.get(requestId) ?? ListenerIdSchema.make(crypto.randomUUID()),
               query: payload.query,
               params: payload.params,
               headers: Object.entries(headers),
@@ -100,7 +105,7 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
             ),
         unsubscribe: (payload) =>
           this.registry
-            .unsubscribe(this.socket, payload.topic)
+            .unsubscribe(this.socket, payload.listenerId)
             .pipe(Effect.mapError(toRpcOperationError)),
         sync: (payload) =>
           this.engine

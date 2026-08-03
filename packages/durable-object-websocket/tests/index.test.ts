@@ -3,10 +3,10 @@ import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { SyncEngine, toTables, UnknownMutationError } from "@do-sync-engine/core";
-import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
+import { ListenerIdSchema, SyncEngine, toTables, UnknownMutationError } from "@do-sync-engine/core";
+import type { ListenerId, Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol.ts";
-import { makeWebSocketRpcClient, Topic } from "../src/client.ts";
+import { makeWebSocketRpcClient } from "../src/client.ts";
 import { makeWebSocketRpcClientFor } from "../src/client-transport.ts";
 import { SubscriptionRegistry } from "../src/subscriptions.ts";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
@@ -54,11 +54,41 @@ it("restores duplicate sessions with one listener and filters invalid IDs", asyn
   let attachment: unknown = {
     version: 1,
     subscriptions: [
-      { requestId: "first", query: "counter", params: ["same"], headers: [] },
-      { requestId: "first", query: "counter", params: ["duplicate"], headers: [] },
-      { requestId: 42, query: "counter", params: ["same"], headers: [["x-test", "yes"]] },
-      { requestId: {}, query: "counter", params: ["invalid"], headers: [] },
-      { requestId: "malformed", query: "counter", params: "invalid", headers: [] },
+      {
+        requestId: "first",
+        listenerId: "00000000-0000-4000-8000-000000000001",
+        query: "counter",
+        params: ["same"],
+        headers: [],
+      },
+      {
+        requestId: "first",
+        listenerId: "00000000-0000-4000-8000-000000000002",
+        query: "counter",
+        params: ["duplicate"],
+        headers: [],
+      },
+      {
+        requestId: 42,
+        listenerId: "00000000-0000-4000-8000-000000000003",
+        query: "counter",
+        params: ["same"],
+        headers: [["x-test", "yes"]],
+      },
+      {
+        requestId: {},
+        listenerId: "00000000-0000-4000-8000-000000000004",
+        query: "counter",
+        params: ["invalid"],
+        headers: [],
+      },
+      {
+        requestId: "malformed",
+        listenerId: "00000000-0000-4000-8000-000000000005",
+        query: "counter",
+        params: "invalid",
+        headers: [],
+      },
     ],
   };
   const socket = {
@@ -79,8 +109,20 @@ it("restores duplicate sessions with one listener and filters invalid IDs", asyn
   expect(attachment).toEqual({
     version: 1,
     subscriptions: [
-      { requestId: "first", query: "counter", params: ["same"], headers: [] },
-      { requestId: 42, query: "counter", params: ["same"], headers: [["x-test", "yes"]] },
+      {
+        requestId: "first",
+        listenerId: "00000000-0000-4000-8000-000000000001",
+        query: "counter",
+        params: ["same"],
+        headers: [],
+      },
+      {
+        requestId: 42,
+        listenerId: "00000000-0000-4000-8000-000000000003",
+        query: "counter",
+        params: ["same"],
+        headers: [["x-test", "yes"]],
+      },
     ],
   });
   const backing = (engine as unknown as { registry: { backing: Map<unknown, unknown> } }).registry;
@@ -105,8 +147,20 @@ it("rolls back every listener when restoring snapshots fails", async () => {
   let attachment: unknown = {
     version: 1,
     subscriptions: [
-      { requestId: "first", query: "first", params: [], headers: [] },
-      { requestId: "second", query: "second", params: [], headers: [] },
+      {
+        requestId: "first",
+        listenerId: "00000000-0000-4000-8000-000000000011",
+        query: "first",
+        params: [],
+        headers: [],
+      },
+      {
+        requestId: "second",
+        listenerId: "00000000-0000-4000-8000-000000000012",
+        query: "second",
+        params: [],
+        headers: [],
+      },
     ],
   };
   const socket = {
@@ -127,6 +181,60 @@ it("rolls back every listener when restoring snapshots fails", async () => {
   const backing = (engine as unknown as { registry: { backing: Map<unknown, unknown> } }).registry;
   expect(backing.backing.size).toBe(0);
   expect(attachment).toEqual({ version: 1, subscriptions: [] });
+});
+it("unsubscribes shared-topic sessions independently", async () => {
+  const engine = registryEngine();
+  const firstListenerId = ListenerIdSchema.make("00000000-0000-4000-8000-000000000021");
+  const secondListenerId = ListenerIdSchema.make("00000000-0000-4000-8000-000000000022");
+  let attachment: unknown;
+  const socket = {
+    deserializeAttachment: () => attachment,
+    serializeAttachment: (value: unknown) => {
+      attachment = value;
+    },
+  } as WebSocket;
+  const registry = new SubscriptionRegistry(
+    engine as unknown as SyncEngineInterface<
+      { counter: Query<[string], { value: number }> },
+      { increment: Mutation<[string, number], void> }
+    >,
+  );
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = registry.subscribeStream(socket, {
+          requestId: "first",
+          listenerId: firstListenerId,
+          query: "counter",
+          params: ["shared"],
+          headers: [],
+        });
+        const second = registry.subscribeStream(socket, {
+          requestId: "second",
+          listenerId: secondListenerId,
+          query: "counter",
+          params: ["shared"],
+          headers: [],
+        });
+        const firstEvents = yield* Queue.unbounded<unknown>();
+        const secondEvents = yield* Queue.unbounded<unknown>();
+        const firstFiber = yield* Effect.forkScoped(
+          Stream.runForEach(first, (event) => Queue.offer(firstEvents, event)),
+        );
+        const secondFiber = yield* Effect.forkScoped(
+          Stream.runForEach(second, (event) => Queue.offer(secondEvents, event)),
+        );
+        yield* Queue.take(firstEvents);
+        yield* Queue.take(secondEvents);
+        expect(yield* registry.unsubscribe(socket, firstListenerId)).toBe(true);
+        yield* engine.sync("increment", []);
+        expect(yield* Queue.take(secondEvents)).toBeDefined();
+        expect(yield* registry.unsubscribe(socket, secondListenerId)).toBe(true);
+        yield* Fiber.interrupt(firstFiber);
+        yield* Fiber.interrupt(secondFiber);
+      }),
+    ),
+  );
 });
 
 it("runs typed RPC requests over the real Durable Object socket", async () => {
@@ -202,12 +310,16 @@ it("correlates malformed payload defects without poisoning other requests", asyn
       Effect.scoped(
         Effect.gen(function* () {
           const client = yield* makeWebSocketRpcClientFor(socket, InvalidRpc);
-          const events = yield* Queue.unbounded<unknown>();
+          const events = yield* Queue.unbounded<{
+            readonly listenerId: ListenerId;
+            readonly value: unknown;
+          }>();
           const stream = client
             .subscribe({ query: "counter", params: ["schema"] })
-            .pipe(Stream.runForEach((event) => Queue.offer(events, event.value)));
+            .pipe(Stream.runForEach((event) => Queue.offer(events, event)));
           const fiber = yield* Effect.forkScoped(stream);
-          expect(yield* Queue.take(events)).toEqual({ key: "schema", value: 0 });
+          const first = yield* Queue.take(events);
+          expect(first.value).toEqual({ key: "schema", value: 0 });
 
           const malformed = yield* Effect.exit(
             client.sync({ mutation: "increment", params: "invalid" }),
@@ -218,8 +330,8 @@ it("correlates malformed payload defects without poisoning other requests", asyn
           if (Result.isSuccess(defect)) expect(String(defect.success)).toMatch(/array/i);
 
           yield* client.sync({ mutation: "increment", params: ["schema", 1] });
-          expect(yield* Queue.take(events)).toEqual({ key: "schema", value: 1 });
-          yield* client.unsubscribe({ topic: new Topic({ name: "counter", params: ["schema"] }) });
+          expect((yield* Queue.take(events)).value).toEqual({ key: "schema", value: 1 });
+          yield* client.unsubscribe({ listenerId: first.listenerId });
           yield* Fiber.await(fiber);
         }),
       ),
@@ -268,17 +380,19 @@ it("ends an active stream after typed unsubscribe", async () => {
       Effect.scoped(
         Effect.gen(function* () {
           const client = yield* makeWebSocketRpcClient(socket);
-          const events = yield* Queue.unbounded<unknown>();
+          const events = yield* Queue.unbounded<{
+            readonly listenerId: ListenerId;
+            readonly value: unknown;
+          }>();
           const fiber = yield* Effect.forkScoped(
             Stream.runForEach(
               client.subscribe({ query: "counter", params: ["unsubscribe"] }),
-              (event) => Queue.offer(events, event.value),
+              (event) => Queue.offer(events, event),
             ),
           );
-          expect(yield* Queue.take(events)).toEqual({ key: "unsubscribe", value: 0 });
-          const removed = yield* client.unsubscribe({
-            topic: new Topic({ name: "counter", params: ["unsubscribe"] }),
-          });
+          const first = yield* Queue.take(events);
+          expect(first.value).toEqual({ key: "unsubscribe", value: 0 });
+          const removed = yield* client.unsubscribe({ listenerId: first.listenerId });
           expect(removed).toBe(true);
           yield* Fiber.await(fiber);
         }),
@@ -297,14 +411,18 @@ it("resumes the original stream across Durable Object hibernation", async () => 
         Effect.gen(function* () {
           const client = yield* makeWebSocketRpcClient(socket);
           yield* client.sync({ mutation: "increment", params: ["hibernation", 2] });
-          const events = yield* Queue.unbounded<unknown>();
+          const events = yield* Queue.unbounded<{
+            readonly listenerId: ListenerId;
+            readonly value: unknown;
+          }>();
           const fiber = yield* Effect.forkScoped(
             Stream.runForEach(
               client.subscribe({ query: "counter", params: ["hibernation"] }),
-              (event) => Queue.offer(events, event.value),
+              (event) => Queue.offer(events, event),
             ),
           );
-          expect(yield* Queue.take(events)).toEqual({ key: "hibernation", value: 2 });
+          const first = yield* Queue.take(events);
+          expect(first.value).toEqual({ key: "hibernation", value: 2 });
 
           yield* Effect.promise(() =>
             evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
@@ -312,14 +430,12 @@ it("resumes the original stream across Durable Object hibernation", async () => 
             }),
           );
           yield* client.sync({ mutation: "increment", params: ["hibernation", 1] });
-          expect(yield* Queue.take(events)).toEqual({ key: "hibernation", value: 3 });
+          expect((yield* Queue.take(events)).value).toEqual({ key: "hibernation", value: 3 });
           yield* Effect.yieldNow;
           yield* Effect.yieldNow;
           expect(yield* Queue.poll(events)).toEqual(Option.none());
 
-          const removed = yield* client.unsubscribe({
-            topic: new Topic({ name: "counter", params: ["hibernation"] }),
-          });
+          const removed = yield* client.unsubscribe({ listenerId: first.listenerId });
           expect(removed).toBe(true);
           yield* Fiber.await(fiber);
         }),
