@@ -17,8 +17,13 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
-    "./package.json": "./package.json"
+    ".": {
+      "browser": "./dist/client-entry.mjs",
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./server": "./dist/index.mjs"
   },
   "publishConfig": {
     "access": "public"

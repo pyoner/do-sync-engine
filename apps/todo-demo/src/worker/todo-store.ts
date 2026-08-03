@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { SyncEngine } from "@do-sync-engine/core";
-import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
+import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket/server";
 import type { Todo, TodoCount, TodoMutations, TodoQueries, TodoSummary } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
 import { createAdapter, SqlAdapterError, type SqlRow } from "@do-sync-engine/sql-regex-adapter";

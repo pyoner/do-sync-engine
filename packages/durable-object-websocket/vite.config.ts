@@ -3,7 +3,8 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 
 export default defineConfig({
   pack: {
-    exports: true,
+    entry: ["src/index.ts", "src/client-entry.ts"],
+    exports: false,
     deps: { neverBundle: ["@do-sync-engine/core", "cloudflare:workers"] },
   },
   lint: { options: { typeAware: true, typeCheck: true } },

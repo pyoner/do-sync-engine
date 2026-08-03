@@ -1,153 +1,304 @@
 <script lang="ts">
-  import { Deferred, Effect } from "effect";
+  import { Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
   import { onMount } from "svelte";
   import {
+    makeWebSocketRpcClient,
+    RpcOperationError,
+    type WebSocketRpcClient,
+  } from "@do-sync-engine/durable-object-websocket";
+  import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+  import {
     TODO_WS_PATH,
-    parseServerMessage,
-    type ClientMessage,
+    todoCountSchema,
+    todoSchema,
     type Todo,
-    type TodoQueryName,
-    type TodoQueryResults,
+    type TodoCount,
+    type TodoMutations,
   } from "./todo-protocol";
 
-  const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
-  let todos = $state<Todo[]>([]);
+  const defaultQueries = ["allTodos", "todoCount"] as const;
   let newTitle = $state("");
-  let queryResults = $state<Partial<TodoQueryResults>>({});
-  let loading = $state(false);
+  let queryResults = $state<{
+    allTodos?: readonly Todo[];
+    todoCount?: readonly TodoCount[];
+  }>({});
+  let todos = $derived(queryResults.allTodos ?? []);
+  let adding = $state(false);
+  let clearing = $state(false);
+  let pendingTodoIds = $state<number[]>([]);
   let socket = $state<WebSocket | null>(null);
+  let rpcClient: WebSocketRpcClient | null = null;
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
-  const pending = new Map<string, Deferred.Deferred<void, Error>>();
+  let connectionGeneration = 0;
+  let connectionFiber: Fiber.Fiber<unknown, unknown> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let removeSocketListeners: (() => void) | null = null;
+  let stopped = false;
+  let hasConnected = $state(false);
 
   function websocketUrl(): string {
     return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`;
   }
 
-  function send(
-    message: Omit<ClientMessage, "requestId">,
-    requestId = crypto.randomUUID(),
-  ): Effect.Effect<string, Error> {
-    return Effect.try({
-      try: () => {
-        if (socket?.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
-        socket.send(JSON.stringify({ ...message, requestId }));
-        return requestId;
-      },
-      catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-    });
+  function messageForError(error: unknown): string {
+    if (error instanceof RpcOperationError && error.message !== "") return error.message;
+    if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
+    if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
+    if (error instanceof Error && error.message !== "") return error.message;
+    return "Todo operation failed";
   }
 
-  function connect(): () => void {
-    const ws = new WebSocket(websocketUrl());
+  function scheduleReconnect(generation: number): void {
+    if (stopped || generation !== connectionGeneration || reconnectTimer !== null) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!stopped && generation === connectionGeneration) connect();
+    }, 1_000);
+  }
+
+  function connect(): void {
+    const generation = ++connectionGeneration;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(websocketUrl());
+    } catch {
+      if (!stopped && generation === connectionGeneration) {
+        errorMessage = "WebSocket error";
+        scheduleReconnect(generation);
+      }
+      return;
+    }
+
     socket = ws;
-    ws.addEventListener("open", () => {
-      void Effect.runPromise(
+    const isCurrent = (): boolean =>
+      !stopped && generation === connectionGeneration && socket === ws;
+    const removeListeners = (): void => {
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("close", onClose);
+      ws.removeEventListener("error", onError);
+    };
+    const onOpen = (): void => {
+      if (!isCurrent()) {
+        removeListeners();
+        ws.close();
+        return;
+      }
+
+      let fiber: Fiber.Fiber<unknown, unknown> | null = null;
+      const connection = Effect.scoped(
         Effect.gen(function* () {
+          const nextClient = yield* makeWebSocketRpcClient(ws);
+          if (!isCurrent()) return;
+          rpcClient = nextClient;
+          const client = nextClient;
           connected = true;
+          hasConnected = true;
           errorMessage = null;
-          for (const query of defaultQueries) {
-            yield* send({ type: "subscribe", query, params: [] });
-          }
-        }).pipe(
-          Effect.match({
-            onFailure: (error) => {
-              errorMessage = error.message;
-            },
-            onSuccess: () => undefined,
-          }),
-        ),
-      );
-    });
-    ws.addEventListener("message", (event) => {
-      void Effect.runPromise(
-        Effect.gen(function* () {
-          const message = yield* parseServerMessage(String(event.data));
-          if (message.type === "queryResult") {
-            queryResults = { ...queryResults, [message.topic.name]: message.value };
-            if (message.topic.name === "allTodos") todos = message.value as Todo[];
-          } else if (message.type === "error") {
-            errorMessage = message.message;
-            if (message.requestId) {
-              const item = pending.get(message.requestId);
-              pending.delete(message.requestId);
-              if (item) yield* Deferred.fail(item, new Error(message.message));
-            }
-          } else if (message.type === "synced") {
-            const item = pending.get(message.requestId);
-            pending.delete(message.requestId);
-            if (item) yield* Deferred.succeed(item, undefined);
-          }
-        }).pipe(
-          Effect.match({
-            onFailure: () => {
-              errorMessage = "Invalid server message";
-            },
-            onSuccess: () => undefined,
-          }),
-        ),
-      );
-    });
-    ws.addEventListener("close", () => {
-      void Effect.runPromise(
-        Effect.gen(function* () {
-          connected = false;
-          socket = null;
-          const waiting = [...pending.values()];
-          pending.clear();
-          for (const item of waiting) {
-            yield* Deferred.fail(item, new Error("WebSocket closed"));
-          }
+
+          const allTodos = client.subscribe({ query: "allTodos", params: [] }).pipe(
+            Stream.runForEach((event) =>
+              Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.value).pipe(
+                Effect.tap((value) =>
+                  Effect.sync(() => {
+                    if (isCurrent()) queryResults = { ...queryResults, allTodos: value };
+                  }),
+                ),
+              ),
+            ),
+          );
+          const todoCount = client.subscribe({ query: "todoCount", params: [] }).pipe(
+            Stream.runForEach((event) =>
+              Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.value).pipe(
+                Effect.tap((value) =>
+                  Effect.sync(() => {
+                    if (isCurrent()) queryResults = { ...queryResults, todoCount: value };
+                  }),
+                ),
+              ),
+            ),
+          );
+          yield* Effect.all([allTodos, todoCount], {
+            concurrency: "unbounded",
+            discard: true,
+          });
         }),
+      ).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (!isCurrent()) return;
+            if (connectionFiber === fiber) connectionFiber = null;
+            if (Exit.isFailure(exit)) {
+              if (!Exit.hasInterrupts(exit)) {
+                const error = Exit.findErrorOption(exit);
+                errorMessage = Option.isSome(error)
+                  ? messageForError(error.value)
+                  : "Todo connection failed";
+              }
+              ws.close();
+            }
+          }),
+        ),
       );
-    });
-    ws.addEventListener("error", () => {
+      fiber = Effect.runFork(connection);
+      if (isCurrent()) connectionFiber = fiber;
+    };
+    const onClose = (): void => {
+      removeListeners();
+      if (!isCurrent()) return;
+      if (removeSocketListeners === removeListeners) removeSocketListeners = null;
+      const interrupted = connectionFiber;
+      connectionFiber = null;
+      rpcClient = null;
+      socket = null;
+      connected = false;
+      if (interrupted) Effect.runFork(Fiber.interrupt(interrupted));
+      scheduleReconnect(generation);
+    };
+    const onError = (): void => {
+      if (!isCurrent()) {
+        removeListeners();
+        ws.close();
+        return;
+      }
       errorMessage = "WebSocket error";
-    });
-    return () => ws.close();
+      ws.close();
+    };
+    removeSocketListeners = removeListeners;
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("close", onClose);
+    ws.addEventListener("error", onError);
   }
 
-  function mutate(message: Extract<ClientMessage, { type: "sync" }>, afterSuccess?: () => void) {
-    loading = true;
+  function runMutation(
+    mutation: keyof TodoMutations,
+    params: readonly unknown[],
+    onSuccess: () => void,
+    onSettled: () => void,
+  ): void {
+    const activeClient = rpcClient;
+    if (activeClient === null) {
+      errorMessage = "WebSocket is not connected";
+      try {
+        onSettled();
+      } catch {
+        errorMessage = "Todo operation failed";
+      }
+      return;
+    }
     errorMessage = null;
-    const requestId = crypto.randomUUID();
-    void Effect.runPromise(
-      Effect.gen(function* () {
-        const deferred = yield* Deferred.make<void, Error>();
-        pending.set(requestId, deferred);
-        yield* send(message, requestId);
-        yield* Deferred.await(deferred);
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => {
-            pending.delete(requestId);
-            errorMessage = error.message;
-            loading = false;
-          },
-          onSuccess: () => {
-            pending.delete(requestId);
-            afterSuccess?.();
-            loading = false;
-          },
-        }),
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      try {
+        onSettled();
+      } catch {
+        errorMessage = "Todo operation failed";
+      }
+    };
+    const invokeSuccess = (): void => {
+      try {
+        onSuccess();
+      } catch {
+        errorMessage = "Todo operation failed";
+      }
+    };
+    Effect.runFork(
+      activeClient.sync({ mutation, params }).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) {
+              invokeSuccess();
+            } else {
+              if (!Exit.hasInterrupts(exit)) {
+                const error = Exit.findErrorOption(exit);
+                errorMessage = Option.isSome(error)
+                  ? messageForError(error.value)
+                  : "Todo operation failed";
+              }
+            }
+            settle();
+          }),
+        ),
       ),
     );
   }
 
-  function addTodo() {
+  function addTodo(): void {
     const title = newTitle.trim();
-    if (title) mutate({ type: "sync", mutation: "addTodo", params: [title] }, () => (newTitle = ""));
+    if (!connected || rpcClient === null || adding || title === "") return;
+    adding = true;
+    runMutation(
+      "addTodo",
+      [title],
+      () => (newTitle = ""),
+      () => (adding = false),
+    );
   }
-  function toggleTodo(id: number) {
-    mutate({ type: "sync", mutation: "toggleTodo", params: [id] });
+
+  function toggleTodo(id: number): void {
+    if (!connected || rpcClient === null || pendingTodoIds.includes(id)) return;
+    pendingTodoIds = [...pendingTodoIds, id];
+    runMutation(
+      "toggleTodo",
+      [id],
+      () => undefined,
+      () => (pendingTodoIds = pendingTodoIds.filter((pendingId) => pendingId !== id)),
+    );
   }
-  function deleteTodo(id: number) {
-    mutate({ type: "sync", mutation: "deleteTodo", params: [id] });
+
+  function deleteTodo(id: number): void {
+    if (!connected || rpcClient === null || pendingTodoIds.includes(id)) return;
+    pendingTodoIds = [...pendingTodoIds, id];
+    runMutation(
+      "deleteTodo",
+      [id],
+      () => undefined,
+      () => (pendingTodoIds = pendingTodoIds.filter((pendingId) => pendingId !== id)),
+    );
   }
-  function clearCompleted() {
-    mutate({ type: "sync", mutation: "clearCompleted", params: [] });
+
+  function clearCompleted(): void {
+    if (
+      !connected ||
+      rpcClient === null ||
+      clearing ||
+      todos.some((todo) => todo.completed && pendingTodoIds.includes(todo.id))
+    )
+      return;
+    clearing = true;
+    runMutation(
+      "clearCompleted",
+      [],
+      () => undefined,
+      () => (clearing = false),
+    );
   }
-  onMount(connect);
+
+  onMount(() => {
+    stopped = false;
+    connect();
+    return () => {
+      stopped = true;
+      connectionGeneration += 1;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const remove = removeSocketListeners;
+      removeSocketListeners = null;
+      if (remove) remove();
+      const interrupted = connectionFiber;
+      connectionFiber = null;
+      if (interrupted) Effect.runFork(Fiber.interrupt(interrupted));
+      const currentSocket = socket;
+      socket = null;
+      rpcClient = null;
+      connected = false;
+      if (currentSocket) currentSocket.close();
+    };
+  });
 </script>
 
 <main>
@@ -155,9 +306,9 @@
   <p class="subtitle">Powered by <code>@do-sync-engine/core</code> + Cloudflare Durable Objects</p>
 
   {#if errorMessage}
-    <p class="status error">{errorMessage}</p>
+    <p class="status error" role="alert">{errorMessage}</p>
   {:else if !connected}
-    <p class="status">Connecting...</p>
+    <p class="status" aria-live="polite">{hasConnected ? "Reconnecting..." : "Connecting..."}</p>
   {/if}
 
   <form onsubmit={(e) => { e.preventDefault(); addTodo(); }}>
@@ -165,12 +316,14 @@
       type="text"
       bind:value={newTitle}
       placeholder="What needs doing?"
-      disabled={loading || !connected}
+      disabled={adding || !connected}
     />
-    <button type="submit" disabled={loading || !connected || !newTitle.trim()}>Add</button>
+    <button type="submit" disabled={adding || !connected || !newTitle.trim()}>Add</button>
   </form>
 
-  {#if todos.length === 0}
+  {#if queryResults.allTodos === undefined}
+    <p class="empty">Loading todos...</p>
+  {:else if todos.length === 0}
     <p class="empty">No todos yet. Add one above!</p>
   {:else}
     <ul class="todo-list">
@@ -181,17 +334,30 @@
               type="checkbox"
               checked={!!todo.completed}
               onchange={() => toggleTodo(todo.id)}
-              disabled={loading || !connected}
+              disabled={!connected || (todo.completed && clearing) || pendingTodoIds.includes(todo.id)}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={loading || !connected}>×</button>
+          <button
+            class="delete"
+            onclick={() => deleteTodo(todo.id)}
+            disabled={!connected || (todo.completed && clearing) || pendingTodoIds.includes(todo.id)}
+            aria-label={`Delete ${todo.title}`}
+          >×</button>
         </li>
       {/each}
     </ul>
 
     {#if todos.some(t => t.completed)}
-      <button class="clear" onclick={clearCompleted} disabled={loading || !connected}>Clear completed</button>
+      <button
+        class="clear"
+        onclick={clearCompleted}
+        disabled={
+          !connected ||
+          clearing ||
+          todos.some((todo) => todo.completed && pendingTodoIds.includes(todo.id))
+        }
+      >Clear completed</button>
     {/if}
   {/if}
 
@@ -201,7 +367,11 @@
       {#each defaultQueries as query}
         <li>
           <code>{query}</code>
-          <span class="row-count">({queryResults[query]?.length ?? 0} rows)</span>
+          {#if query === "allTodos"}
+            <span class="row-count">({todos.length} rows)</span>
+          {:else}
+            <span class="row-count">({queryResults.todoCount?.[0]?.total_count ?? 0} total)</span>
+          {/if}
         </li>
       {/each}
     </ul>
