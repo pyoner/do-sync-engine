@@ -27,7 +27,7 @@ export abstract class DurableObjectWebSocket<
           });
           for (const ws of ctx.getWebSockets())
             yield* Effect.tryPromise({
-              try: () => this.runtime(ws).start(),
+              try: () => this.runtime(ws).start(true),
               catch: (cause) => cause,
             });
         }),

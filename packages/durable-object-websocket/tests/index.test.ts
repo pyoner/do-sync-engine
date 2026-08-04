@@ -6,8 +6,8 @@ import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { SyncEngine, Topic, toTables, UnknownMutationError } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol";
-import { makeWebSocketRpcClient } from "../src/client";
-import { makeWebSocketRpcClientFor } from "../src/client-transport";
+import { makeWebSocketRpcSession } from "../src/client";
+import { makeWebSocketRpcSessionFor } from "../src/client-transport";
 import { SubscriptionRegistry } from "../src/subscriptions";
 import type { FixtureSyncObject } from "./cloudflare-worker";
 
@@ -195,7 +195,7 @@ it("runs typed RPC requests over the real Durable Object socket", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClient(socket);
+          const client = (yield* makeWebSocketRpcSession(socket)).client;
           yield* client.sync({ mutation: "increment", params: ["typed", 2] });
           const result = yield* Stream.runHead(
             client.subscribe(new Topic({ name: "counter", params: ["typed"] })),
@@ -217,7 +217,7 @@ it("returns each declared typed operation failure", async () => {
     const result = await Effect.runPromiseExit(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClient(socket);
+          const client = (yield* makeWebSocketRpcSession(socket)).client;
           const unknownMutation = yield* Effect.exit(
             client.sync({ mutation: "missing", params: [] }),
           );
@@ -261,7 +261,7 @@ it("correlates malformed payload defects without poisoning other requests", asyn
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClientFor(socket, InvalidRpc);
+          const client = (yield* makeWebSocketRpcSessionFor(socket, InvalidRpc)).client;
           const events = yield* Queue.unbounded<{
             readonly topic: Topic;
             readonly value: unknown;
@@ -315,7 +315,7 @@ it("keeps a malformed-frame socket open for typed RPC", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClient(socket);
+          const client = (yield* makeWebSocketRpcSession(socket)).client;
           yield* client.sync({ mutation: "increment", params: ["framing", 1] });
         }),
       ),
@@ -330,7 +330,8 @@ it("resubscribes explicitly after Durable Object hibernation", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClient(socket);
+          const session = yield* makeWebSocketRpcSession(socket);
+          const client = session.client;
           yield* client.sync({ mutation: "increment", params: ["hibernation", 2] });
           const staleEvents = yield* Queue.unbounded<{
             readonly topic: Topic;
@@ -348,7 +349,14 @@ it("resubscribes explicitly after Durable Object hibernation", async () => {
               webSockets: "hibernate",
             }),
           );
+          const wake = yield* Effect.forkScoped(
+            Stream.runHead(
+              client.subscribe(new Topic({ name: "counter", params: ["hibernation"] })),
+            ),
+          );
+          yield* Stream.runHead(session.restored);
           yield* Fiber.interrupt(stale);
+          yield* Fiber.interrupt(wake);
           const replacementEvents = yield* Queue.unbounded<{
             readonly topic: Topic;
             readonly value: unknown;
@@ -381,7 +389,7 @@ it("interrupts a typed RPC when the socket closes", async () => {
   const result = await Effect.runPromiseExit(
     Effect.scoped(
       Effect.gen(function* () {
-        const client = yield* makeWebSocketRpcClient(socket);
+        const client = (yield* makeWebSocketRpcSession(socket)).client;
         socket.close();
         return yield* client.sync({ mutation: "increment", params: ["closed", 1] });
       }),

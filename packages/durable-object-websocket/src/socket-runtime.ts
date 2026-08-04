@@ -8,7 +8,7 @@ import type {
   StringKey,
   SyncEngineInterface,
 } from "@do-sync-engine/core";
-import { RestoredFrame, RpcOperationError, WebSocketRpc } from "./protocol";
+import { SessionReadyFrame, RpcOperationError, WebSocketRpc } from "./protocol";
 import { makeCloudflareRpcServerTransport } from "./server-transport";
 import type { CloudflareRpcServerTransport } from "./server-transport";
 import { SubscriptionRegistry } from "./subscriptions";
@@ -44,13 +44,15 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
     this.registry = new SubscriptionRegistry(socket, engine);
   }
 
-  start(): Promise<void> {
+  start(restored = false): Promise<void> {
     return this.enqueue(
       Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
         yield* this.registry.restore();
         yield* this.initializeRpc();
         if (this.socket.readyState === WebSocket.OPEN)
-          this.socket.send(Schema.encodeSync(RestoredFrame)({ _tag: "DoSyncEngineRestored" }));
+          this.socket.send(
+            Schema.encodeSync(SessionReadyFrame)({ _tag: "DoSyncEngineSessionReady", restored }),
+          );
       }),
     );
   }

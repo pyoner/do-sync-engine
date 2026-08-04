@@ -1,15 +1,20 @@
-import { Effect, Exit, Option, Scope, Schema } from "effect";
+import { Effect, Exit, Option, Queue, Scope, Schema, Stream } from "effect";
 import { RpcClient, RpcGroup, RpcMessage, RpcSerialization } from "effect/unstable/rpc";
 import type { Rpc } from "effect/unstable/rpc";
-import { RestoredFrame } from "./protocol";
+import { SessionReadyFrame } from "./protocol";
 
-export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
+export interface WebSocketRpcSession<Rpcs extends Rpc.Any> {
+  readonly client: RpcClient.RpcClient<Rpcs>;
+  readonly restored: Stream.Stream<void>;
+}
+
+export const makeWebSocketRpcSessionFor = <Rpcs extends Rpc.Any>(
   socket: WebSocket,
   group: RpcGroup.RpcGroup<Rpcs>,
-  onRestored?: () => void,
-): Effect.Effect<RpcClient.RpcClient<Rpcs>, never, Scope.Scope> =>
+): Effect.Effect<WebSocketRpcSession<Rpcs>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
+    const restorations = yield* Queue.unbounded<void>();
     const parser = RpcSerialization.json.makeUnsafe();
     let listener: ((event: MessageEvent) => void) | undefined;
     let close: (() => void) | undefined;
@@ -17,20 +22,16 @@ export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
       try {
         Effect.runFork(Scope.close(scope, Exit.interrupt()));
       } catch {
-        // The callback must not leak parser or listener failures.
+        // The event handler must not leak lifecycle failures.
       }
     };
     const protocol = yield* RpcClient.Protocol.make((write, clientIds) =>
       Effect.sync(() => {
         listener = (event) => {
           try {
-            const restored = Schema.decodeUnknownOption(RestoredFrame)(event.data);
-            if (Option.isSome(restored)) {
-              try {
-                onRestored?.();
-              } catch {
-                // Lifecycle callbacks must not interrupt the RPC transport.
-              }
+            const sessionReady = Schema.decodeUnknownOption(SessionReadyFrame)(event.data);
+            if (Option.isSome(sessionReady)) {
+              if (sessionReady.value.restored) Effect.runFork(Queue.offer(restorations, undefined));
               return;
             }
             for (const message of parser.decode(event.data as string | Uint8Array))
@@ -58,17 +59,19 @@ export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
       }),
     );
     yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (listener) socket.removeEventListener("message", listener);
         if (close) {
           socket.removeEventListener("close", close);
           socket.removeEventListener("error", close);
         }
+        yield* Queue.shutdown(restorations);
         socket.close();
       }),
     );
-    return yield* RpcClient.make(group).pipe(
+    const client = yield* RpcClient.make(group).pipe(
       Effect.provideService(RpcClient.Protocol, protocol),
       Effect.provideService(RpcSerialization.RpcSerialization, RpcSerialization.json),
     );
+    return { client, restored: Stream.fromQueue(restorations) };
   });

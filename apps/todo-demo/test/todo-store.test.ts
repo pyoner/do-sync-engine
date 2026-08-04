@@ -2,7 +2,7 @@ import { Cause, Effect, Exit, Fiber, Option, Queue, Schema, Scope, Stream } from
 import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
-import { makeWebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
+import { makeWebSocketRpcSession } from "@do-sync-engine/durable-object-websocket";
 import type { WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
 import { Topic } from "@do-sync-engine/core";
 import {
@@ -91,7 +91,8 @@ describe("TodoStore WebSocket RPC", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* makeWebSocketRpcClient(socket);
+            const session = yield* makeWebSocketRpcSession(socket);
+            const client = session.client;
             const subscriptions = {
               allTodos: yield* subscribeDecoded(client, "allTodos", Schema.Array(todoSchema)),
               incompleteTodos: yield* subscribeDecoded(
@@ -160,8 +161,10 @@ describe("TodoStore WebSocket RPC", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const writer = yield* makeWebSocketRpcClient(writerSocket);
-            const reader = yield* makeWebSocketRpcClient(readerSocket);
+            const writerSession = yield* makeWebSocketRpcSession(writerSocket);
+            const readerSession = yield* makeWebSocketRpcSession(readerSocket);
+            const writer = writerSession.client;
+            const reader = readerSession.client;
             let writerSubscription = yield* subscribeDecoded(
               writer,
               "allTodos",
@@ -240,7 +243,8 @@ describe("TodoStore WebSocket RPC", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* makeWebSocketRpcClient(socket);
+            const session = yield* makeWebSocketRpcSession(socket);
+            const client = session.client;
             const subscription = yield* subscribeDecoded(
               client,
               "allTodos",
@@ -272,7 +276,8 @@ describe("TodoStore WebSocket RPC", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* makeWebSocketRpcClient(socket);
+            const session = yield* makeWebSocketRpcSession(socket);
+            const client = session.client;
             const subscription = yield* subscribeDecoded(
               client,
               "allTodos",
@@ -329,7 +334,8 @@ describe("TodoStore WebSocket RPC", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const client = yield* makeWebSocketRpcClient(socket);
+            const session = yield* makeWebSocketRpcSession(socket);
+            const client = session.client;
             const unknownMutation = yield* Effect.exit(
               client.sync({ mutation: "missing", params: [] }),
             );
@@ -363,7 +369,8 @@ describe("TodoStore WebSocket RPC", () => {
     const result = await Effect.runPromiseExit(
       Effect.scoped(
         Effect.gen(function* () {
-          const client = yield* makeWebSocketRpcClient(closingSocket);
+          const session = yield* makeWebSocketRpcSession(closingSocket);
+          const client = session.client;
           closingSocket.close();
           return yield* client.sync({ mutation: "toggleTodo", params: [-1] });
         }),

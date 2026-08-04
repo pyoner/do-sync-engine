@@ -2,9 +2,10 @@
   import { Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
   import { onMount } from "svelte";
   import {
-    makeWebSocketRpcClient,
+    makeWebSocketRpcSession,
     RpcOperationError,
     type WebSocketRpcClient,
+    type WebSocketRpcSession,
   } from "@do-sync-engine/durable-object-websocket";
   import { Topic, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
   import {
@@ -33,7 +34,6 @@
   let connectionGeneration = 0;
   let connectionFiber: Fiber.Fiber<unknown, unknown> | null = null;
   let subscriptionsFiber: Fiber.Fiber<unknown, unknown> | null = null;
-  let refreshingSubscriptions = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let removeSocketListeners: (() => void) | null = null;
   let stopped = false;
@@ -98,16 +98,13 @@
     );
   }
 
-  function refreshQueries(client: WebSocketRpcClient, isCurrent: () => boolean): void {
-    if (!isCurrent() || rpcClient !== client || refreshingSubscriptions) return;
-    refreshingSubscriptions = true;
-    Effect.runFork(
-      Effect.gen(function* () {
-        const previous = subscriptionsFiber;
-        if (previous) yield* Fiber.interrupt(previous);
-        if (isCurrent() && rpcClient === client) subscribeQueries(client, isCurrent);
-      }).pipe(Effect.ensuring(Effect.sync(() => (refreshingSubscriptions = false)))),
-    );
+  function refreshQueries(session: WebSocketRpcSession, isCurrent: () => boolean): Effect.Effect<void> {
+    return Effect.gen(function* () {
+      if (!isCurrent() || rpcClient !== session.client) return;
+      const previous = subscriptionsFiber;
+      if (previous) yield* Fiber.interrupt(previous);
+      if (isCurrent() && rpcClient === session.client) subscribeQueries(session.client, isCurrent);
+    });
   }
 
   function connect(): void {
@@ -138,20 +135,20 @@
         return;
       }
 
-      let fiber: Fiber.Fiber<unknown, unknown> | null = null;
       const connection = Effect.scoped(
         Effect.gen(function* () {
-          let client: WebSocketRpcClient | undefined;
-          const nextClient = yield* makeWebSocketRpcClient(ws, () => {
-            if (client) refreshQueries(client, isCurrent);
-          });
-          client = nextClient;
+          const session = yield* makeWebSocketRpcSession(ws);
           if (!isCurrent()) return;
-          rpcClient = nextClient;
+          rpcClient = session.client;
           connected = true;
           hasConnected = true;
           errorMessage = null;
-          subscribeQueries(nextClient, isCurrent);
+          subscribeQueries(session.client, isCurrent);
+          yield* Effect.forkScoped(
+            session.restored.pipe(
+              Stream.runForEach(() => refreshQueries(session, isCurrent)),
+            ),
+          );
           yield* Effect.never;
         }),
       ).pipe(
