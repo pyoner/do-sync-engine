@@ -25,24 +25,26 @@ test("topics retain params and use structural equality", () => {
   const topic = Effect.runSync(engine.createTopic("byOptions", params));
   expect(topic.params).toBe(params);
   const equivalent = Effect.runSync(engine.createTopic("byOptions", [new Map([["page", 1]])]));
-  const events: unknown[] = [];
-  const listener = (event: unknown) => events.push(event);
-  const first = Effect.runSync(engine.subscribe(topic, listener));
-  const second = Effect.runSync(engine.subscribe(equivalent, listener));
-  expect(second).toBe(first);
+  const firstEvents: unknown[] = [];
+  const secondEvents: unknown[] = [];
+  const firstListener = (event: unknown) => firstEvents.push(event);
+  const secondListener = (event: unknown) => secondEvents.push(event);
+  Effect.runSync(engine.subscribe(topic, firstListener));
+  Effect.runSync(engine.subscribe(equivalent, firstListener));
+  Effect.runSync(engine.subscribe(equivalent, secondListener));
+  expect(firstEvents).toHaveLength(1);
+  expect(secondEvents).toHaveLength(1);
   Effect.runSync(engine.sync("noop", []));
-  expect(events).toHaveLength(2);
-  expect(Effect.runSync(engine.unsubscribe(first))).toBe(true);
-  expect(Effect.runSync(engine.unsubscribe(first))).toBe(false);
-  const asyncEvents: Promise<void>[] = [];
-  const asyncId = Effect.runSync(
-    engine.subscribe(topic, () => {
-      asyncEvents.push(Promise.resolve());
-    }),
-  );
+  expect(firstEvents).toHaveLength(2);
+  expect(secondEvents).toHaveLength(2);
+  Effect.runSync(engine.unsubscribe(topic, firstListener));
+  Effect.runSync(engine.unsubscribe(equivalent, firstListener));
   Effect.runSync(engine.sync("noop", []));
-  expect(asyncEvents).toHaveLength(2);
-  expect(Effect.runSync(engine.unsubscribe(asyncId))).toBe(true);
+  expect(firstEvents).toHaveLength(2);
+  expect(secondEvents).toHaveLength(3);
+  Effect.runSync(engine.unsubscribe(topic, secondListener));
+  const registry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } }).registry;
+  expect(registry.backing.size).toBe(0);
 });
 
 test("removes failed initial subscriptions", () => {

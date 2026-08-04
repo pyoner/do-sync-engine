@@ -1,10 +1,9 @@
 import { Effect, MutableHashMap, Option } from "effect";
-import { ListenerIdSchema, Topic } from "./types";
+import { Topic } from "./types";
 import { assertKnownQueryEffect, UnknownMutationError, UnknownQueryError } from "./helpers";
 import type {
   Listener,
   ListenerEvent,
-  ListenerId,
   Mutation,
   MutationMap,
   OperationError,
@@ -26,7 +25,7 @@ export class SyncEngine<
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
   private readonly registry = MutableHashMap.empty<
     Topic<StringKey<Queries>, readonly unknown[]>,
-    Map<ListenerId, Listener>
+    Set<Listener>
   >();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
@@ -52,47 +51,49 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Effect.Effect<ListenerId, UnknownQueryError | OperationError<Queries[Name]>> {
+  ): Effect.Effect<void, UnknownQueryError | OperationError<Queries[Name]>> {
+    const normalizedListener = listener as Listener;
     return Effect.gen(
       function* (this: SyncEngine<Queries, Mutations>) {
         yield* assertKnownQueryEffect(topic.name, this.queries);
-        const subscription = yield* Effect.sync(() => {
+        const added = yield* Effect.sync(() => {
           const listeners = Option.getOrElse(MutableHashMap.get(this.registry, topic), () => {
-            const listenerMap = new Map<ListenerId, Listener>();
-            MutableHashMap.set(this.registry, topic, listenerMap);
-            return listenerMap;
+            const listenerSet = new Set<Listener>();
+            MutableHashMap.set(this.registry, topic, listenerSet);
+            return listenerSet;
           });
-          for (const [id, existing] of listeners)
-            if (existing === listener) return { id, added: false };
-          const id = ListenerIdSchema.make(globalThis.crypto.randomUUID());
-          listeners.set(id, listener as Listener);
-          return { id, added: true };
+          if (listeners.has(normalizedListener)) return false;
+          listeners.add(normalizedListener);
+          return true;
         });
-        if (!subscription.added) return subscription.id;
-        return yield* this.query(topic.name, topic.params).pipe(
+        if (!added) return;
+        yield* this.query(topic.name, topic.params).pipe(
           Effect.flatMap((value) => Effect.sync(() => listener({ topic, value }))),
           Effect.catch((error) =>
             Effect.sync(() => {
               const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, topic));
               if (!listeners) return;
-              listeners.delete(subscription.id);
+              listeners.delete(normalizedListener);
               if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
             }).pipe(Effect.flatMap(() => Effect.fail(error))),
           ),
-          Effect.as(subscription.id),
         );
       }.bind(this),
     );
   }
 
-  unsubscribe(listenerId: ListenerId): Effect.Effect<boolean> {
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+  ): Effect.Effect<void> {
+    const normalizedListener = listener as Listener;
     return Effect.sync(() => {
-      for (const [topic, listeners] of this.registry) {
-        if (!listeners.delete(listenerId)) continue;
-        if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
-        return true;
-      }
-      return false;
+      const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, topic));
+      if (!listeners) return;
+      listeners.delete(normalizedListener);
+      if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
     });
   }
 

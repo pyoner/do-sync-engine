@@ -9,7 +9,12 @@ const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
+  let initial = true;
   const listener: Listener = (event) => {
+    if (initial) {
+      initial = false;
+      return;
+    }
     events.push(event);
   };
   return { events, listener };
@@ -209,15 +214,14 @@ describe("SyncEngine topics and events", () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = await runTopic(engine.subscribe(topic, first.listener));
-    expect(await runTopic(engine.subscribe(topic, first.listener))).toEqual(firstListenerId);
-    const secondListenerId = await runTopic(engine.subscribe(topic, second.listener));
-    expect(secondListenerId).not.toEqual(firstListenerId);
+    await runTopic(engine.subscribe(topic, first.listener));
+    await runTopic(engine.subscribe(topic, first.listener));
+    await runTopic(engine.subscribe(topic, second.listener));
 
     await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
-    expect(await runTopic(engine.unsubscribe(firstListenerId))).toBe(true);
+    await runTopic(engine.unsubscribe(topic, first.listener));
     await runTopic(engine.sync("insertUser", ["dave"]));
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
@@ -227,15 +231,15 @@ describe("SyncEngine topics and events", () => {
     const topic = await runTopic(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = await runTopic(engine.subscribe(topic, first.listener));
-    const secondListenerId = await runTopic(engine.subscribe(topic, second.listener));
+    await runTopic(engine.subscribe(topic, first.listener));
+    await runTopic(engine.subscribe(topic, second.listener));
     // Test-only access verifies the private topic lifecycle.
     const registry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } })
       .registry;
 
-    expect(await runTopic(engine.unsubscribe(firstListenerId))).toBe(true);
+    await runTopic(engine.unsubscribe(topic, first.listener));
     expect(registry.backing.size).toBe(1);
-    expect(await runTopic(engine.unsubscribe(secondListenerId))).toBe(true);
+    await runTopic(engine.unsubscribe(topic, second.listener));
     expect(registry.backing.size).toBe(0);
   });
 

@@ -120,11 +120,6 @@ export interface SyncEngineOptions<
   readonly mutations: Mutations;
 }
 
-export const ListenerIdSchema = Schema.String.check(Schema.isUUID()).pipe(
-  Schema.brand("ListenerId"),
-);
-export type ListenerId = typeof ListenerIdSchema.Type;
-
 export interface SyncEngineInterface<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -138,8 +133,13 @@ export interface SyncEngineInterface<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Effect.Effect<ListenerId, UnknownQueryError | OperationError<Queries[Name]>>;
-  unsubscribe(listenerId: ListenerId): Effect.Effect<boolean>;
+  ): Effect.Effect<void, UnknownQueryError | OperationError<Queries[Name]>>;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+  ): Effect.Effect<void>;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,

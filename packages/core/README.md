@@ -27,11 +27,12 @@ const engine = new SyncEngine({ queries, mutations });
 
 const program = Effect.gen(function* () {
   const topic = yield* engine.createTopic("allTodos", []);
-  const listenerId = yield* engine.subscribe(topic, ({ topic, value }) => {
+  const listener = ({ topic, value }) => {
     console.log(topic.name, topic.params, value);
-  });
+  };
+  yield* engine.subscribe(topic, listener);
   yield* engine.sync("addTodo", ["Buy milk"]);
-  yield* engine.unsubscribe(listenerId);
+  yield* engine.unsubscribe(topic, listener);
 });
 
 Effect.runSync(program);
