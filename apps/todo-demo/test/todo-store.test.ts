@@ -44,7 +44,7 @@ const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
           id = event.listenerId;
         }),
       ),
-      Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.value)),
+      Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.query.value)),
     );
     const fiber = yield* Effect.forkScoped(
       Stream.runForEach(decodedStream, (value) => Queue.offer(queue, value)).pipe(

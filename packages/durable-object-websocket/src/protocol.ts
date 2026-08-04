@@ -14,9 +14,12 @@ export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError
 ) {}
 
 const QueryEvent = Schema.Struct({
-  listenerId: ListenerIdSchema,
   topic: TopicSchema,
   value: Schema.Unknown,
+});
+const SubscribeResult = Schema.Struct({
+  listenerId: ListenerIdSchema,
+  query: QueryEvent,
 });
 
 export const Subscribe = Rpc.make("subscribe", {
@@ -24,7 +27,7 @@ export const Subscribe = Rpc.make("subscribe", {
     query: Schema.String,
     params: Params,
   }),
-  success: QueryEvent,
+  success: SubscribeResult,
   error: Schema.Union([UnknownQueryError, RpcOperationError]),
   stream: true,
 });

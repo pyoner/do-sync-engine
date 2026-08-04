@@ -33,14 +33,11 @@ type SubscriptionError<Q extends QueryMap<Q>> =
   | Error
   | UnknownQueryError
   | OperationError<Q[StringKey<Q>]>;
-type QueryEvent = {
-  readonly listenerId: ListenerId;
-  readonly topic: Topic;
-  readonly value: unknown;
-};
+type QueryEvent = { readonly topic: Topic; readonly value: unknown };
+type SubscribeResult = { readonly listenerId: ListenerId; readonly query: QueryEvent };
 type Session = PersistedSubscription & {
   readonly topic: Topic;
-  queue?: Queue.Queue<QueryEvent, never>;
+  queue?: Queue.Queue<SubscribeResult, never>;
 };
 type Entry = {
   readonly topic: Topic;
@@ -55,12 +52,12 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
   subscribeStream(
     ws: WebSocket,
     session: PersistedSubscription,
-  ): Stream.Stream<QueryEvent, SubscriptionError<Q>> {
+  ): Stream.Stream<SubscribeResult, SubscriptionError<Q>> {
     return Stream.unwrap(
       Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
         const state = this.states.get(ws) ?? new Map<string, Entry[]>();
         this.states.set(ws, state);
-        const queue = yield* Queue.unbounded<QueryEvent>();
+        const queue = yield* Queue.unbounded<SubscribeResult>();
         const entry = yield* this.admitSession(state, session, queue);
         yield* attachment(ws, { version: 1, subscriptions: this.sessions(state) });
         return Stream.fromQueue(queue).pipe(
@@ -79,7 +76,7 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
   private admitSession(
     state: SocketState,
     session: PersistedSubscription,
-    queue?: Queue.Queue<QueryEvent, never>,
+    queue?: Queue.Queue<SubscribeResult, never>,
   ): Effect.Effect<Entry, SubscriptionError<Q>> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
       const topic = yield* this.engine.createTopic<StringKey<Q>>(
@@ -94,34 +91,44 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
         entry.sessions.set(session.requestId, accepted);
         if (queue && (!restored || restored.queue)) {
           let snapshot: unknown;
+          let hasSnapshot = false;
           const id = yield* this.engine.subscribe<StringKey<Q>>(topic, (event) => {
             snapshot = event.value;
+            hasSnapshot = true;
           });
           yield* this.engine.unsubscribe(id);
-          if (snapshot !== undefined)
-            yield* Queue.offer(queue, { listenerId: session.listenerId, topic, value: snapshot });
+          if (hasSnapshot)
+            yield* Queue.offer(queue, {
+              listenerId: session.listenerId,
+              query: { topic, value: snapshot },
+            });
         }
         return entry;
       }
 
       let initial: unknown;
+      let hasInitial = false;
       const sessions = new Map([[session.requestId, accepted]]);
       const engineListenerId = yield* this.engine.subscribe<StringKey<Q>>(topic, (event) => {
-        if (initial === undefined) initial = event.value;
-        else
+        if (!hasInitial) {
+          initial = event.value;
+          hasInitial = true;
+        } else
           for (const active of sessions.values())
             if (active.queue)
               Queue.offerUnsafe(active.queue, {
                 listenerId: active.listenerId,
-                topic,
-                value: event.value,
+                query: { topic, value: event.value },
               });
       });
       entry = { topic, engineListenerId, sessions };
       bucket.push(entry);
       state.set(topic.name, bucket);
-      if (queue && initial !== undefined)
-        yield* Queue.offer(queue, { listenerId: session.listenerId, topic, value: initial });
+      if (queue && hasInitial)
+        yield* Queue.offer(queue, {
+          listenerId: session.listenerId,
+          query: { topic, value: initial },
+        });
       return entry;
     });
   }

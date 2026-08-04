@@ -4,7 +4,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { ListenerIdSchema, SyncEngine, toTables, UnknownMutationError } from "@do-sync-engine/core";
-import type { ListenerId, Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
+import type { ListenerId, Mutation, Query, SyncEngineInterface, Topic } from "@do-sync-engine/core";
 import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol.ts";
 import { makeWebSocketRpcClient } from "../src/client.ts";
 import { makeWebSocketRpcClientFor } from "../src/client-transport.ts";
@@ -250,7 +250,7 @@ it("runs typed RPC requests over the real Durable Object socket", async () => {
           );
           expect(result._tag).toBe("Some");
           if (result._tag === "Some")
-            expect(result.value.value).toEqual({ key: "typed", value: 2 });
+            expect(result.value.query.value).toEqual({ key: "typed", value: 2 });
         }),
       ),
     );
@@ -312,14 +312,14 @@ it("correlates malformed payload defects without poisoning other requests", asyn
           const client = yield* makeWebSocketRpcClientFor(socket, InvalidRpc);
           const events = yield* Queue.unbounded<{
             readonly listenerId: ListenerId;
-            readonly value: unknown;
+            readonly query: { readonly topic: Topic; readonly value: unknown };
           }>();
           const stream = client
             .subscribe({ query: "counter", params: ["schema"] })
             .pipe(Stream.runForEach((event) => Queue.offer(events, event)));
           const fiber = yield* Effect.forkScoped(stream);
           const first = yield* Queue.take(events);
-          expect(first.value).toEqual({ key: "schema", value: 0 });
+          expect(first.query.value).toEqual({ key: "schema", value: 0 });
 
           const malformed = yield* Effect.exit(
             client.sync({ mutation: "increment", params: "invalid" }),
@@ -330,7 +330,7 @@ it("correlates malformed payload defects without poisoning other requests", asyn
           if (Result.isSuccess(defect)) expect(String(defect.success)).toMatch(/array/i);
 
           yield* client.sync({ mutation: "increment", params: ["schema", 1] });
-          expect((yield* Queue.take(events)).value).toEqual({ key: "schema", value: 1 });
+          expect((yield* Queue.take(events)).query.value).toEqual({ key: "schema", value: 1 });
           yield* client.unsubscribe({ listenerId: first.listenerId });
           yield* Fiber.await(fiber);
         }),
@@ -382,7 +382,7 @@ it("ends an active stream after typed unsubscribe", async () => {
           const client = yield* makeWebSocketRpcClient(socket);
           const events = yield* Queue.unbounded<{
             readonly listenerId: ListenerId;
-            readonly value: unknown;
+            readonly query: { readonly topic: Topic; readonly value: unknown };
           }>();
           const fiber = yield* Effect.forkScoped(
             Stream.runForEach(
@@ -391,7 +391,7 @@ it("ends an active stream after typed unsubscribe", async () => {
             ),
           );
           const first = yield* Queue.take(events);
-          expect(first.value).toEqual({ key: "unsubscribe", value: 0 });
+          expect(first.query.value).toEqual({ key: "unsubscribe", value: 0 });
           const removed = yield* client.unsubscribe({ listenerId: first.listenerId });
           expect(removed).toBe(true);
           yield* Fiber.await(fiber);
@@ -413,7 +413,7 @@ it("resumes the original stream across Durable Object hibernation", async () => 
           yield* client.sync({ mutation: "increment", params: ["hibernation", 2] });
           const events = yield* Queue.unbounded<{
             readonly listenerId: ListenerId;
-            readonly value: unknown;
+            readonly query: { readonly topic: Topic; readonly value: unknown };
           }>();
           const fiber = yield* Effect.forkScoped(
             Stream.runForEach(
@@ -422,7 +422,7 @@ it("resumes the original stream across Durable Object hibernation", async () => 
             ),
           );
           const first = yield* Queue.take(events);
-          expect(first.value).toEqual({ key: "hibernation", value: 2 });
+          expect(first.query.value).toEqual({ key: "hibernation", value: 2 });
 
           yield* Effect.promise(() =>
             evictDurableObject(fixtureEnv.FIXTURE_SYNC_OBJECT.getByName("default"), {
@@ -430,7 +430,7 @@ it("resumes the original stream across Durable Object hibernation", async () => 
             }),
           );
           yield* client.sync({ mutation: "increment", params: ["hibernation", 1] });
-          expect((yield* Queue.take(events)).value).toEqual({ key: "hibernation", value: 3 });
+          expect((yield* Queue.take(events)).query.value).toEqual({ key: "hibernation", value: 3 });
           yield* Effect.yieldNow;
           yield* Effect.yieldNow;
           expect(yield* Queue.poll(events)).toEqual(Option.none());
