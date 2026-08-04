@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, Stream } from "effect";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { ListenerIdSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -12,7 +12,6 @@ import { RpcOperationError, WebSocketRpc } from "./protocol.ts";
 import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
 import type { CloudflareRpcServerTransport } from "./server-transport.ts";
 import { SubscriptionRegistry } from "./subscriptions.ts";
-import type { PersistedSubscription } from "./subscriptions.ts";
 
 const toRpcOperationError = (error: unknown): RpcOperationError => {
   let current: unknown = error;
@@ -42,15 +41,15 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
     private readonly socket: WebSocket,
     private readonly engine: SyncEngineInterface<Q, M>,
   ) {
-    this.registry = new SubscriptionRegistry(engine);
+    this.registry = new SubscriptionRegistry(socket, engine);
   }
 
   start(): Promise<void> {
     return this.enqueue(
       Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
         if (this.socketTransport) return;
-        const restored = yield* this.registry.restore(this.socket);
-        yield* this.initializeRpc(restored);
+        yield* this.registry.restore();
+        yield* this.initializeRpc();
       }),
     );
   }
@@ -72,41 +71,30 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
           yield* Scope.close(this.socketTransport.scope, exit);
           this.socketTransport = undefined;
         }
-        yield* this.registry.clear(this.socket);
+        yield* this.registry.clear();
       }),
     );
   }
 
-  private initializeRpc(
-    restored: readonly PersistedSubscription[] = [],
-  ): Effect.Effect<void, unknown> {
+  private initializeRpc(): Effect.Effect<void, unknown> {
     if (this.socketTransport) return Effect.void;
     return Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
-      const restoredListenerIds = new Map(
-        restored.map((session) => [session.requestId, session.listenerId]),
-      );
       const scope = yield* Scope.make();
       const transport = yield* makeCloudflareRpcServerTransport(this.socket);
       const handlers = yield* WebSocketRpc.toHandlers({
-        subscribe: (payload, { requestId, headers }) =>
+        subscribe: (payload) =>
           this.registry
-            .subscribeStream(this.socket, {
-              requestId,
-              listenerId:
-                restoredListenerIds.get(requestId) ?? ListenerIdSchema.make(crypto.randomUUID()),
-              query: payload.query,
-              params: payload.params,
-              headers: Object.entries(headers),
-            })
+            .subscribeStream(
+              payload.query as StringKey<Q>,
+              payload.params as OperationParams<Q[StringKey<Q>]>,
+            )
             .pipe(
               Stream.mapError((error) =>
                 error instanceof UnknownQueryError ? error : toRpcOperationError(error),
               ),
             ),
         unsubscribe: (payload) =>
-          this.registry
-            .unsubscribe(this.socket, payload.listenerId)
-            .pipe(Effect.mapError(toRpcOperationError)),
+          this.registry.unsubscribe(payload.topic).pipe(Effect.mapError(toRpcOperationError)),
         sync: (payload) =>
           this.engine
             .sync(
@@ -127,22 +115,6 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
       );
       yield* Effect.forkIn(server, scope);
       this.socketTransport = { scope, transport };
-
-      const parser = RpcSerialization.json.makeUnsafe();
-      for (const session of restored) {
-        const encoded = parser.encode({
-          _tag: "Request",
-          id: session.requestId,
-          tag: "subscribe",
-          payload: { query: session.query, params: session.params },
-          headers: session.headers,
-        });
-        if (encoded !== undefined) {
-          yield* transport.receive(
-            typeof encoded === "string" ? encoded : new TextDecoder().decode(encoded),
-          );
-        }
-      }
     });
   }
 
