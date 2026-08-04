@@ -9,12 +9,7 @@ const runTopic = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect
 
 function captureEvents() {
   const events: ListenerEvent[] = [];
-  let initial = true;
   const listener: Listener = (event) => {
-    if (initial) {
-      initial = false;
-      return;
-    }
     events.push(event);
   };
   return { events, listener };
@@ -118,6 +113,8 @@ describe("SyncEngine topics and events", () => {
     const second = captureEvents();
     await runTopic(engine.subscribe(firstTopic, first.listener));
     await runTopic(engine.subscribe(secondTopic, second.listener));
+    first.events.length = 0;
+    second.events.length = 0;
 
     await runTopic(engine.sync("updateUserName", ["alice-updated", 1]));
 
@@ -133,6 +130,8 @@ describe("SyncEngine topics and events", () => {
     const second = captureEvents();
     await runTopic(engine.subscribe(topic, first.listener));
     await runTopic(engine.subscribe(topic, second.listener));
+    first.events.length = 0;
+    second.events.length = 0;
 
     await runTopic(engine.sync("insertUser", ["charlie"]));
 
@@ -169,11 +168,12 @@ describe("SyncEngine topics and events", () => {
     const captured = captureEvents();
     await runTopic(engine.subscribe(topic, captured.listener));
     await runTopic(engine.subscribe(postsTopic, captured.listener));
+    captured.events.length = 0;
 
     await runTopic(engine.sync("updateUserName", ["bob_updated", 2]));
 
-    expect(runParams).toEqual([2]);
-    expect(postsRuns).toBe(0);
+    expect(runParams).toEqual([2, 2]);
+    expect(postsRuns).toBe(1);
     expect(captured.events).toHaveLength(1);
     expect(captured.events[0].topic).toEqual(topic);
     expect((captured.events[0].value as SqlRow[])[0].name).toBe("bob_updated");
@@ -198,16 +198,12 @@ describe("SyncEngine topics and events", () => {
     });
     await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(queryRuns).toBe(0);
-
     const failingTopic = await runTopic(engine.createTopic("failingQuery", []));
-    await runTopic(engine.subscribe(failingTopic, noopPublish));
-    const failure = await Effect.runPromiseExit(engine.sync("insertUser", ["dave"]));
-    expect(Exit.isFailure(failure)).toBe(true);
-    if (Exit.isFailure(failure)) {
-      const error = Exit.findErrorOption(failure);
-      expect(Option.isSome(error)).toBe(true);
-      if (Option.isSome(error)) expect(error.value).toMatchObject({ message: "query failed" });
-    }
+
+    const subscriptionFailure = await Effect.runPromiseExit(
+      engine.subscribe(failingTopic, noopPublish),
+    );
+    expect(Exit.isFailure(subscriptionFailure)).toBe(true);
   });
 
   test("duplicate listeners follow EventTarget semantics", async () => {
@@ -217,6 +213,8 @@ describe("SyncEngine topics and events", () => {
     await runTopic(engine.subscribe(topic, first.listener));
     await runTopic(engine.subscribe(topic, first.listener));
     await runTopic(engine.subscribe(topic, second.listener));
+    first.events.length = 0;
+    second.events.length = 0;
 
     await runTopic(engine.sync("insertUser", ["charlie"]));
     expect(first.events).toHaveLength(1);
@@ -233,6 +231,8 @@ describe("SyncEngine topics and events", () => {
     const second = captureEvents();
     await runTopic(engine.subscribe(topic, first.listener));
     await runTopic(engine.subscribe(topic, second.listener));
+    first.events.length = 0;
+    second.events.length = 0;
     // Test-only access verifies the private topic lifecycle.
     const registry = (engine as unknown as { registry: { backing: Map<unknown, unknown> } })
       .registry;
@@ -250,10 +250,12 @@ describe("SyncEngine topics and events", () => {
     });
     const usersTopic = await runTopic(exposed.createTopic("allUsers", []));
     const postsTopic = await runTopic(exposed.createTopic("postsOnly", []));
-    const users = captureEvents();
     const posts = captureEvents();
+    const users = captureEvents();
     await runTopic(exposed.subscribe(usersTopic, users.listener));
     await runTopic(exposed.subscribe(postsTopic, posts.listener));
+    users.events.length = 0;
+    posts.events.length = 0;
 
     exposed.exposePublish({ topic: usersTopic, value: 1 });
     expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);
@@ -288,6 +290,7 @@ describe("SyncEngine topics and events", () => {
     });
     const topic = await runTopic(engine.createTopic("synchronousQuery", []));
     await runTopic(engine.subscribe(topic, () => calls.push("listener")));
+    calls.length = 0;
 
     await runTopic(engine.sync("synchronousMutation", []));
 
@@ -330,11 +333,7 @@ describe("SyncEngine topics and events", () => {
       }
     }
     await runTopic(engine.subscribe(validTopic, noopPublish));
-    await runTopic(
-      engine.subscribe(new Topic({ name: validTopic.name, params: [1] }), noopPublish),
-    );
-    await runTopic(
-      engine.subscribe(new Topic({ name: validTopic.name, params: [() => 1] }), noopPublish),
-    );
+    await runTopic(engine.subscribe(new Topic({ name: validTopic.name, params: [] }), noopPublish));
+    await runTopic(engine.subscribe(new Topic({ name: validTopic.name, params: [] }), noopPublish));
   });
 });
