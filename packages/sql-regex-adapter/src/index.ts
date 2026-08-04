@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect";
 import type { Mutation, Query, Table } from "@do-sync-engine/core";
-import { deleteTables } from "./delete.ts";
-import { insertTables } from "./insert.ts";
-import { selectTables } from "./select.ts";
-import { updateTables } from "./update.ts";
-import { operationOf } from "./rules.ts";
+import { deleteTables } from "./delete";
+import { insertTables } from "./insert";
+import { selectTables } from "./select";
+import { updateTables } from "./update";
+import { operationOf } from "./rules";
 export type { Table } from "@do-sync-engine/core";
 
 export class SqlAdapterError extends Schema.TaggedErrorClass<SqlAdapterError>()("SqlAdapterError", {

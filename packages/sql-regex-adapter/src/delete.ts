@@ -1,4 +1,4 @@
-import { extractTables, identifier } from "./rules.ts";
+import { extractTables, identifier } from "./rules";
 
 const target = new RegExp(
   `\\bdelete\\s+from\\s+((?:${identifier})(?:\\s*\\.\\s*(?:${identifier}))*)`,

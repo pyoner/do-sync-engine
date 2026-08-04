@@ -8,10 +8,10 @@ import type {
   StringKey,
   SyncEngineInterface,
 } from "@do-sync-engine/core";
-import { RestoredFrame, RpcOperationError, WebSocketRpc } from "./protocol.ts";
-import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
-import type { CloudflareRpcServerTransport } from "./server-transport.ts";
-import { SubscriptionRegistry } from "./subscriptions.ts";
+import { RestoredFrame, RpcOperationError, WebSocketRpc } from "./protocol";
+import { makeCloudflareRpcServerTransport } from "./server-transport";
+import type { CloudflareRpcServerTransport } from "./server-transport";
+import { SubscriptionRegistry } from "./subscriptions";
 
 const toRpcOperationError = (error: unknown): RpcOperationError => {
   let current: unknown = error;

@@ -1,4 +1,4 @@
-import { extractTables, identifier } from "./rules.ts";
+import { extractTables, identifier } from "./rules";
 
 const target = new RegExp(
   `\\binsert\\s+into\\s+((?:${identifier})(?:\\s*\\.\\s*(?:${identifier}))*)`,

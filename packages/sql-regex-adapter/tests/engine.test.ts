@@ -1,7 +1,7 @@
 import { Effect, Exit, Option } from "effect";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { createAdapter, type SqlAdapterError, type SqlRow } from "../src/index.ts";
+import { createAdapter, type SqlAdapterError, type SqlRow } from "../src/index";
 import { SyncEngine, Topic, UnknownQueryError, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
 

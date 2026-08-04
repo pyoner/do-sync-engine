@@ -8,7 +8,7 @@ declare global {
 import { Effect } from "effect";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
-import { DurableObjectWebSocket } from "../src/server.ts";
+import { DurableObjectWebSocket } from "../src/server";
 
 type FixtureQueries = { counter: Query<[string], { key: string; value: number }> };
 type FixtureMutations = {

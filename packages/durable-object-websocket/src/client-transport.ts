@@ -1,7 +1,7 @@
 import { Effect, Exit, Option, Scope, Schema } from "effect";
 import { RpcClient, RpcGroup, RpcMessage, RpcSerialization } from "effect/unstable/rpc";
 import type { Rpc } from "effect/unstable/rpc";
-import { RestoredFrame } from "./protocol.ts";
+import { RestoredFrame } from "./protocol";
 
 export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
   socket: WebSocket,

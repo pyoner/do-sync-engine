@@ -1,7 +1,7 @@
 import { Effect, Equal, Exit, Hash, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
-import { SyncEngine, Topic, TopicSchema, toTables } from "../src/index.js";
-import type { Mutation, Query } from "../src/index.js";
+import { SyncEngine, Topic, TopicSchema, toTables } from "../src/index";
+import type { Mutation, Query } from "../src/index";
 
 test("topics retain params and use structural equality", () => {
   const queries = {

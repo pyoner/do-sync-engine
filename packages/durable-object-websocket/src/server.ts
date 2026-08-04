@@ -1,7 +1,7 @@
 import { Effect, Exit } from "effect";
 import { DurableObject } from "cloudflare:workers";
 import type { MutationMap, QueryMap, SyncEngineInterface } from "@do-sync-engine/core";
-import { SocketRuntime } from "./socket-runtime.ts";
+import { SocketRuntime } from "./socket-runtime";
 
 export abstract class DurableObjectWebSocket<
   Env,

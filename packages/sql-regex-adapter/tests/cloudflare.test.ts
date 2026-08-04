@@ -2,9 +2,9 @@ import { Effect } from "effect";
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
 import { describe, expect, test } from "vite-plus/test";
-import { createAdapter } from "../src/index.ts";
-import type { FixtureDatabase } from "./cloudflare-worker.ts";
-import { fixtures, operations } from "./fixture.ts";
+import { createAdapter } from "../src/index";
+import type { FixtureDatabase } from "./cloudflare-worker";
+import { fixtures, operations } from "./fixture";
 
 const { FIXTURE_DATABASE } = env as {
   FIXTURE_DATABASE: DurableObjectNamespace<FixtureDatabase>;

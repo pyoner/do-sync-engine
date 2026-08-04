@@ -5,11 +5,11 @@ import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { SyncEngine, Topic, toTables, UnknownMutationError } from "@do-sync-engine/core";
 import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
-import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol.ts";
-import { makeWebSocketRpcClient } from "../src/client.ts";
-import { makeWebSocketRpcClientFor } from "../src/client-transport.ts";
-import { SubscriptionRegistry } from "../src/subscriptions.ts";
-import type { FixtureSyncObject } from "./cloudflare-worker.ts";
+import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol";
+import { makeWebSocketRpcClient } from "../src/client";
+import { makeWebSocketRpcClientFor } from "../src/client-transport";
+import { SubscriptionRegistry } from "../src/subscriptions";
+import type { FixtureSyncObject } from "./cloudflare-worker";
 
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
 const fixtureEnv = env as typeof env & {

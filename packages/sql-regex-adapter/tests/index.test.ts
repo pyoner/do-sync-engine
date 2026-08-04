@@ -1,8 +1,8 @@
 import { Effect, Exit, Option } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
-import { createAdapter } from "../src/index.ts";
-import { fixtures, operations, type Fixture } from "./fixture.ts";
+import { createAdapter } from "../src/index";
+import { fixtures, operations, type Fixture } from "./fixture";
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 
