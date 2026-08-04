@@ -1,4 +1,14 @@
-import { Cache, Effect, Option, PubSub, Random, Schema, Stream } from "effect";
+import {
+  Effect,
+  Exit,
+  MutableHashMap,
+  Option,
+  PubSub,
+  Random,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import {
   type Listener,
   type ListenerEvent,
@@ -38,76 +48,48 @@ type Entry<Q extends QueryMap<Q>> = {
   readonly events: PubSub.PubSub<QueryEvent>;
 };
 
-const serializeAttachment = (socket: WebSocket, value: Attachment) =>
-  Effect.try({
-    try: () => socket.serializeAttachment(value),
-    catch: webSocketOperationError,
-  });
 export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M>> {
-  private readonly cache: Cache.Cache<QueryTopic<Q>, Entry<Q>, SubscriptionError<Q>>;
-  private id: number;
+  private readonly entries = MutableHashMap.empty<QueryTopic<Q>, Entry<Q>>();
+  private readonly lock = Effect.runSync(Semaphore.make(1));
+  private id = Effect.runSync(Random.nextInt);
 
   constructor(
     private readonly socket: WebSocket,
     private readonly engine: SyncEngineInterface<Q, M>,
-  ) {
-    this.id = Effect.runSync(Random.nextInt);
-    let cache: Cache.Cache<QueryTopic<Q>, Entry<Q>, SubscriptionError<Q>> | undefined;
-    this.cache = Effect.runSync(
-      Cache.make<QueryTopic<Q>, Entry<Q>, SubscriptionError<Q>>({
-        capacity: Number.POSITIVE_INFINITY,
-        lookup: (topic) => {
-          let events: PubSub.PubSub<QueryEvent> | undefined;
-          return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-            events = yield* PubSub.unbounded<QueryEvent>({ replay: 1 });
-            const listener: QueryListener<Q> = (event) => {
-              PubSub.publishUnsafe(events!, { topic: event.topic, value: event.value });
-            };
-            yield* this.engine.subscribe(topic, listener);
-            return { topic, listener, events };
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                if (events) yield* PubSub.shutdown(events);
-                if (cache) yield* Cache.invalidate(cache, topic);
-                return yield* Effect.failCause(cause);
-              }),
-            ),
-          );
-        },
-      }),
-    );
-    cache = this.cache;
-  }
+  ) {}
 
   subscribeStream(topic: QueryTopic<Q>): Stream.Stream<QueryEvent, SubscriptionError<Q>> {
     return Stream.unwrap(
-      Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-        const entry = yield* this.get(topic);
-        yield* this.serializeCurrent();
-        return Stream.fromPubSub(entry.events);
-      }),
+      this.lock
+        .withPermits(1)(this.attach(topic, true))
+        .pipe(Effect.map((entry) => Stream.fromPubSub(entry.events))),
     );
   }
 
   unsubscribe(topic: Topic): Effect.Effect<void, SubscriptionError<Q>> {
+    return this.lock.withPermits(1)(this.unsubscribeUnsafe(topic));
+  }
+
+  private unsubscribeUnsafe(topic: Topic): Effect.Effect<void, SubscriptionError<Q>> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-      const entry = yield* Cache.getOption(this.cache, topic as QueryTopic<Q>);
-      if (Option.isNone(entry)) return;
-      const remaining = yield* this.entries();
-      yield* serializeAttachment(this.socket, {
-        id: this.id,
-        topics: remaining
-          .filter((candidate) => candidate !== entry.value)
-          .map((candidate) => candidate.topic),
-      });
-      yield* this.engine.unsubscribe(entry.value.topic, entry.value.listener);
-      yield* PubSub.shutdown(entry.value.events);
-      yield* Cache.invalidate(this.cache, entry.value.topic);
+      const entry = Option.getOrUndefined(MutableHashMap.get(this.entries, topic as QueryTopic<Q>));
+      if (!entry) return;
+      yield* this.persist(
+        Array.from(this.entries, ([candidate]) => candidate).filter(
+          (candidate) => candidate !== entry.topic,
+        ),
+      );
+      yield* Effect.sync(() => MutableHashMap.remove(this.entries, entry.topic));
+      yield* this.engine.unsubscribe(entry.topic, entry.listener);
+      yield* PubSub.shutdown(entry.events);
     });
   }
 
   restore(): Effect.Effect<void, SubscriptionError<Q>> {
+    return this.lock.withPermits(1)(this.restoreUnsafe());
+  }
+
+  private restoreUnsafe(): Effect.Effect<void, SubscriptionError<Q>> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
       const raw = yield* Effect.try({
         try: () => this.socket.deserializeAttachment(),
@@ -116,59 +98,75 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
       const decoded = Schema.decodeUnknownOption(Attachment)(raw);
       if (Option.isNone(decoded)) {
         this.id = yield* Random.nextInt;
-        yield* serializeAttachment(this.socket, { id: this.id, topics: [] });
+        yield* this.persist([]);
         return;
       }
 
       this.id = decoded.value.id;
-      const restored: Entry<Q>[] = [];
       for (const topic of decoded.value.topics) {
-        const admission = yield* Effect.exit(this.get(topic as QueryTopic<Q>));
-        if (admission._tag === "Success") {
-          if (!restored.some((entry) => entry === admission.value)) restored.push(admission.value);
-          continue;
-        }
-        if (admission._tag === "Failure") {
-          yield* this.clear().pipe(Effect.ignore);
-          yield* serializeAttachment(this.socket, { id: this.id, topics: [] }).pipe(Effect.ignore);
-          return yield* Effect.failCause(admission.cause);
-        }
+        const admission = yield* Effect.exit(this.attach(topic as QueryTopic<Q>, false));
+        if (admission._tag === "Success") continue;
+        yield* this.clearUnsafe().pipe(Effect.ignore);
+        yield* this.persist([]).pipe(Effect.ignore);
+        return yield* Effect.failCause(admission.cause);
       }
-      yield* this.serializeCurrent();
+      yield* this.persist();
     });
   }
 
   clear(): Effect.Effect<void, SubscriptionError<Q>> {
+    return this.lock.withPermits(1)(this.clearUnsafe());
+  }
+
+  private clearUnsafe(): Effect.Effect<void, SubscriptionError<Q>> {
     return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-      const entries = yield* this.entries();
+      const entries = Array.from(this.entries, ([, entry]) => entry);
+      yield* Effect.sync(() => {
+        for (const entry of entries) MutableHashMap.remove(this.entries, entry.topic);
+      });
       for (const entry of entries) {
         yield* this.engine.unsubscribe(entry.topic, entry.listener);
         yield* PubSub.shutdown(entry.events);
       }
-      yield* Cache.invalidateAll(this.cache);
     });
   }
 
-  private get(topic: QueryTopic<Q>): Effect.Effect<Entry<Q>, SubscriptionError<Q>> {
-    return Cache.get(this.cache, topic).pipe(
-      Effect.catchCause((cause) =>
-        Effect.flatMap(Cache.invalidate(this.cache, topic), () => Effect.failCause(cause)),
-      ),
-    );
+  private attach(
+    topic: QueryTopic<Q>,
+    persist: boolean,
+  ): Effect.Effect<Entry<Q>, SubscriptionError<Q>> {
+    return Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+      const existing = Option.getOrUndefined(MutableHashMap.get(this.entries, topic));
+      if (existing) return existing;
+
+      const events = yield* PubSub.unbounded<QueryEvent>({ replay: 1 });
+      const listener: QueryListener<Q> = (event) => {
+        PubSub.publishUnsafe(events, { topic: event.topic, value: event.value });
+      };
+      const entry = { topic, listener, events };
+      yield* Effect.sync(() => MutableHashMap.set(this.entries, topic, entry));
+      return yield* this.engine.subscribe(topic, listener).pipe(
+        Effect.onExit((exit) =>
+          Exit.isFailure(exit)
+            ? Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
+                yield* Effect.sync(() => MutableHashMap.remove(this.entries, topic));
+                yield* this.engine.unsubscribe(topic, listener).pipe(Effect.ignore);
+                yield* PubSub.shutdown(events).pipe(Effect.ignore);
+              })
+            : Effect.void,
+        ),
+        Effect.flatMap(() => (persist ? this.persist() : Effect.succeed(undefined))),
+        Effect.as(entry),
+      );
+    });
   }
 
-  private entries(): Effect.Effect<readonly Entry<Q>[]> {
-    return Effect.map(Cache.entries(this.cache), (entries) =>
-      Array.from(entries, ([, entry]) => entry),
-    );
-  }
-
-  private serializeCurrent(): Effect.Effect<void, Error> {
-    return Effect.flatMap(this.entries(), (entries) =>
-      serializeAttachment(this.socket, {
-        id: this.id,
-        topics: entries.map((entry) => entry.topic),
-      }),
-    );
+  private persist(
+    topics = Array.from(this.entries, ([topic]) => topic),
+  ): Effect.Effect<void, Error> {
+    return Effect.try({
+      try: () => this.socket.serializeAttachment({ id: this.id, topics }),
+      catch: webSocketOperationError,
+    });
   }
 }
