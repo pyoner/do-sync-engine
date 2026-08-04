@@ -80,13 +80,9 @@ export class SubscriptionRegistry<Q extends QueryMap<Q>, M extends MutationMap<M
     cache = this.cache;
   }
 
-  subscribeStream(
-    query: StringKey<Q>,
-    params: OperationParams<Q[StringKey<Q>]>,
-  ): Stream.Stream<QueryEvent, SubscriptionError<Q>> {
+  subscribeStream(topic: QueryTopic<Q>): Stream.Stream<QueryEvent, SubscriptionError<Q>> {
     return Stream.unwrap(
       Effect.gen({ self: this }, function* (this: SubscriptionRegistry<Q, M>) {
-        const topic = yield* this.engine.createTopic(query, params);
         const entry = yield* this.get(topic);
         yield* this.serializeCurrent();
         return Stream.fromPubSub(entry.events);

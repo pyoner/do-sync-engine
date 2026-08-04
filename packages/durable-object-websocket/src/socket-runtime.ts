@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, Stream } from "effect";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { Topic, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -82,19 +82,16 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
       const scope = yield* Scope.make();
       const transport = yield* makeCloudflareRpcServerTransport(this.socket);
       const handlers = yield* WebSocketRpc.toHandlers({
-        subscribe: (payload) =>
+        subscribe: (topic) =>
           this.registry
-            .subscribeStream(
-              payload.query as StringKey<Q>,
-              payload.params as OperationParams<Q[StringKey<Q>]>,
-            )
+            .subscribeStream(topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>)
             .pipe(
               Stream.mapError((error) =>
                 error instanceof UnknownQueryError ? error : toRpcOperationError(error),
               ),
             ),
-        unsubscribe: (payload) =>
-          this.registry.unsubscribe(payload.topic).pipe(Effect.mapError(toRpcOperationError)),
+        unsubscribe: (topic) =>
+          this.registry.unsubscribe(topic).pipe(Effect.mapError(toRpcOperationError)),
         sync: (payload) =>
           this.engine
             .sync(

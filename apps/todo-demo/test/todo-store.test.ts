@@ -3,7 +3,8 @@ import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
 import { makeWebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
-import type { Topic, WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
+import type { WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
+import { Topic } from "@do-sync-engine/core";
 import {
   todoCountSchema,
   todoSchema,
@@ -37,7 +38,7 @@ const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
   Effect.gen(function* () {
     const queue = yield* Queue.unbounded<S["Type"]>();
     let topic: Topic | undefined;
-    const decodedStream = client.subscribe({ query, params: [] }).pipe(
+    const decodedStream = client.subscribe(new Topic({ name: query, params: [] })).pipe(
       Stream.tap((event) =>
         Effect.sync(() => {
           if (topic === undefined) topic = event.topic;
@@ -219,7 +220,7 @@ describe("TodoStore WebSocket RPC", () => {
             yield* Queue.take(subscription.queue);
             const topic = subscription.topic();
             if (!topic) throw new Error("Subscription topic was not received");
-            yield* client.unsubscribe({ topic });
+            yield* client.unsubscribe(topic);
             yield* Effect.yieldNow;
             const exit = yield* Fiber.await(subscription.fiber);
             expect(Exit.isSuccess(exit)).toBe(true);
@@ -227,7 +228,7 @@ describe("TodoStore WebSocket RPC", () => {
             yield* client.sync({ mutation: "addTodo", params: [uniqueTitle()] });
             yield* Effect.yieldNow;
             expect(yield* Queue.poll(subscription.queue)).toEqual(Option.none());
-            yield* client.unsubscribe({ topic });
+            yield* client.unsubscribe(topic);
           }),
         ),
       );
@@ -284,7 +285,7 @@ describe("TodoStore WebSocket RPC", () => {
             expect(afterDelete.some((todo) => todo.id === added.id)).toBe(false);
             const replacementTopic = replacement.topic();
             if (!replacementTopic) throw new Error("Replacement topic was not received");
-            yield* client.unsubscribe({ topic: replacementTopic });
+            yield* client.unsubscribe(replacementTopic);
           }),
         ),
       );
@@ -304,7 +305,7 @@ describe("TodoStore WebSocket RPC", () => {
               client.sync({ mutation: "missing", params: [] }),
             );
             const unknownQuery = yield* Effect.exit(
-              Stream.runDrain(client.subscribe({ query: "missing", params: [] })),
+              Stream.runDrain(client.subscribe(new Topic({ name: "missing", params: [] }))),
             );
             const mutationError = Exit.findErrorOption(unknownMutation);
             const queryError = Exit.findErrorOption(unknownQuery);

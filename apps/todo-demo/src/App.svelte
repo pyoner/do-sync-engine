@@ -6,7 +6,7 @@
     RpcOperationError,
     type WebSocketRpcClient,
   } from "@do-sync-engine/durable-object-websocket";
-  import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+  import { Topic, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
   import {
     TODO_WS_PATH,
     todoCountSchema,
@@ -96,7 +96,7 @@
           hasConnected = true;
           errorMessage = null;
 
-          const allTodos = client.subscribe({ query: "allTodos", params: [] }).pipe(
+          const allTodos = client.subscribe(new Topic({ name: "allTodos", params: [] })).pipe(
             Stream.runForEach((event) =>
               Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.value).pipe(
                 Effect.tap((value) =>
@@ -107,7 +107,7 @@
               ),
             ),
           );
-          const todoCount = client.subscribe({ query: "todoCount", params: [] }).pipe(
+          const todoCount = client.subscribe(new Topic({ name: "todoCount", params: [] })).pipe(
             Stream.runForEach((event) =>
               Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.value).pipe(
                 Effect.tap((value) =>

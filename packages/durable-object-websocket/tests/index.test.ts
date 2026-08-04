@@ -3,8 +3,8 @@ import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { SyncEngine, toTables, UnknownMutationError } from "@do-sync-engine/core";
-import type { Mutation, Query, SyncEngineInterface, Topic } from "@do-sync-engine/core";
+import { SyncEngine, Topic, toTables, UnknownMutationError } from "@do-sync-engine/core";
+import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol.ts";
 import { makeWebSocketRpcClient } from "../src/client.ts";
 import { makeWebSocketRpcClientFor } from "../src/client-transport.ts";
@@ -72,13 +72,15 @@ it("shares equivalent subscriptions and persists one canonical topic", async () 
         const firstEvents = yield* Queue.unbounded<unknown>();
         const secondEvents = yield* Queue.unbounded<unknown>();
         const first = yield* Effect.forkScoped(
-          Stream.runForEach(registry.subscribeStream("counter", ["same"]), (event) =>
-            Queue.offer(firstEvents, event),
+          Stream.runForEach(
+            registry.subscribeStream(new Topic({ name: "counter", params: ["same"] })),
+            (event) => Queue.offer(firstEvents, event),
           ),
         );
         yield* Effect.forkScoped(
-          Stream.runForEach(registry.subscribeStream("counter", ["same"]), (event) =>
-            Queue.offer(secondEvents, event),
+          Stream.runForEach(
+            registry.subscribeStream(new Topic({ name: "counter", params: ["same"] })),
+            (event) => Queue.offer(secondEvents, event),
           ),
         );
         const firstEvent = yield* Queue.take(firstEvents);
@@ -196,7 +198,7 @@ it("runs typed RPC requests over the real Durable Object socket", async () => {
           const client = yield* makeWebSocketRpcClient(socket);
           yield* client.sync({ mutation: "increment", params: ["typed", 2] });
           const result = yield* Stream.runHead(
-            client.subscribe({ query: "counter", params: ["typed"] }),
+            client.subscribe(new Topic({ name: "counter", params: ["typed"] })),
           );
           expect(result._tag).toBe("Some");
           if (result._tag === "Some")
@@ -220,7 +222,7 @@ it("returns each declared typed operation failure", async () => {
             client.sync({ mutation: "missing", params: [] }),
           );
           const unknownQuery = yield* Effect.exit(
-            Stream.runHead(client.subscribe({ query: "missing", params: [] })),
+            Stream.runHead(client.subscribe(new Topic({ name: "missing", params: [] }))),
           );
           const failedMutation = yield* Effect.exit(client.sync({ mutation: "fail", params: [] }));
           return { unknownMutation, unknownQuery, failedMutation };
@@ -265,7 +267,7 @@ it("correlates malformed payload defects without poisoning other requests", asyn
             readonly value: unknown;
           }>();
           const stream = client
-            .subscribe({ query: "counter", params: ["schema"] })
+            .subscribe(new Topic({ name: "counter", params: ["schema"] }))
             .pipe(Stream.runForEach((event) => Queue.offer(events, event)));
           const fiber = yield* Effect.forkScoped(stream);
           const first = yield* Queue.take(events);
@@ -281,7 +283,7 @@ it("correlates malformed payload defects without poisoning other requests", asyn
 
           yield* client.sync({ mutation: "increment", params: ["schema", 1] });
           expect((yield* Queue.take(events)).value).toEqual({ key: "schema", value: 1 });
-          yield* client.unsubscribe({ topic: first.topic });
+          yield* client.unsubscribe(first.topic);
           yield* Fiber.await(fiber);
         }),
       ),
@@ -336,7 +338,7 @@ it("resubscribes explicitly after Durable Object hibernation", async () => {
           }>();
           const stale = yield* Effect.forkScoped(
             Stream.runForEach(
-              client.subscribe({ query: "counter", params: ["hibernation"] }),
+              client.subscribe(new Topic({ name: "counter", params: ["hibernation"] })),
               (event) => Queue.offer(staleEvents, event),
             ),
           );
@@ -353,7 +355,7 @@ it("resubscribes explicitly after Durable Object hibernation", async () => {
           }>();
           const replacement = yield* Effect.forkScoped(
             Stream.runForEach(
-              client.subscribe({ query: "counter", params: ["hibernation"] }),
+              client.subscribe(new Topic({ name: "counter", params: ["hibernation"] })),
               (event) => Queue.offer(replacementEvents, event),
             ),
           );
@@ -364,7 +366,7 @@ it("resubscribes explicitly after Durable Object hibernation", async () => {
             key: "hibernation",
             value: 3,
           });
-          yield* client.unsubscribe({ topic: replay.topic });
+          yield* client.unsubscribe(replay.topic);
           yield* Fiber.await(replacement);
         }),
       ),

@@ -14,17 +14,14 @@ const QueryEvent = Schema.Struct({
 });
 
 export const Subscribe = Rpc.make("subscribe", {
-  payload: Schema.Struct({
-    query: Schema.String,
-    params: Params,
-  }),
+  payload: TopicSchema,
   success: QueryEvent,
   error: Schema.Union([UnknownQueryError, RpcOperationError]),
   stream: true,
 });
 
 export const Unsubscribe = Rpc.make("unsubscribe", {
-  payload: Schema.Struct({ topic: TopicSchema }),
+  payload: TopicSchema,
   success: Schema.Void,
   error: RpcOperationError,
 });
