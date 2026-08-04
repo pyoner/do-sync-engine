@@ -162,12 +162,12 @@ describe("TodoStore WebSocket RPC", () => {
           Effect.gen(function* () {
             const writer = yield* makeWebSocketRpcClient(writerSocket);
             const reader = yield* makeWebSocketRpcClient(readerSocket);
-            const writerSubscription = yield* subscribeDecoded(
+            let writerSubscription = yield* subscribeDecoded(
               writer,
               "allTodos",
               Schema.Array(todoSchema),
             );
-            const readerSubscription = yield* subscribeDecoded(
+            let readerSubscription = yield* subscribeDecoded(
               reader,
               "allTodos",
               Schema.Array(todoSchema),
@@ -178,6 +178,27 @@ describe("TodoStore WebSocket RPC", () => {
             );
 
             const title = uniqueTitle();
+            yield* Effect.promise(() =>
+              evictDurableObject(env.TODO_STORE.getByName("default"), {
+                webSockets: "hibernate",
+              }),
+            );
+            yield* Fiber.interrupt(writerSubscription.fiber);
+            yield* Fiber.interrupt(readerSubscription.fiber);
+            writerSubscription = yield* subscribeDecoded(
+              writer,
+              "allTodos",
+              Schema.Array(todoSchema),
+            );
+            readerSubscription = yield* subscribeDecoded(
+              reader,
+              "allTodos",
+              Schema.Array(todoSchema),
+            );
+            yield* Effect.all(
+              [Queue.take(writerSubscription.queue), Queue.take(readerSubscription.queue)],
+              { concurrency: "unbounded" },
+            );
             yield* writer.sync({ mutation: "addTodo", params: [title] });
             const [writerUpdate, readerUpdate] = yield* Effect.all(
               [Queue.take(writerSubscription.queue), Queue.take(readerSubscription.queue)],
@@ -189,6 +210,14 @@ describe("TodoStore WebSocket RPC", () => {
             expect(readerTodo).toBeDefined();
             if (!writerTodo || !readerTodo) throw new Error("Todo did not converge across sockets");
             expect(readerTodo).toMatchObject({ id: writerTodo.id, completed: 0 });
+
+            yield* reader.sync({ mutation: "toggleTodo", params: [writerTodo.id] });
+            const [writerToggled, readerToggled] = yield* Effect.all(
+              [Queue.take(writerSubscription.queue), Queue.take(readerSubscription.queue)],
+              { concurrency: "unbounded" },
+            );
+            expect(writerToggled.find((todo) => todo.id === writerTodo.id)?.completed).toBe(1);
+            expect(readerToggled.find((todo) => todo.id === writerTodo.id)?.completed).toBe(1);
 
             yield* reader.sync({ mutation: "deleteTodo", params: [writerTodo.id] });
             const [writerCleanup, readerCleanup] = yield* Effect.all(

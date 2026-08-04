@@ -1,4 +1,4 @@
-import { Effect, Exit, Scope, Stream } from "effect";
+import { Effect, Exit, Scope, Schema, Stream } from "effect";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { Topic, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
@@ -8,7 +8,7 @@ import type {
   StringKey,
   SyncEngineInterface,
 } from "@do-sync-engine/core";
-import { RpcOperationError, WebSocketRpc } from "./protocol.ts";
+import { RestoredFrame, RpcOperationError, WebSocketRpc } from "./protocol.ts";
 import { makeCloudflareRpcServerTransport } from "./server-transport.ts";
 import type { CloudflareRpcServerTransport } from "./server-transport.ts";
 import { SubscriptionRegistry } from "./subscriptions.ts";
@@ -47,9 +47,10 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   start(): Promise<void> {
     return this.enqueue(
       Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
-        if (this.socketTransport) return;
         yield* this.registry.restore();
         yield* this.initializeRpc();
+        if (this.socket.readyState === WebSocket.OPEN)
+          this.socket.send(Schema.encodeSync(RestoredFrame)({ _tag: "DoSyncEngineRestored" }));
       }),
     );
   }

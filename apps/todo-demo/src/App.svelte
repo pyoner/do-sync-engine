@@ -32,6 +32,8 @@
   let errorMessage = $state<string | null>(null);
   let connectionGeneration = 0;
   let connectionFiber: Fiber.Fiber<unknown, unknown> | null = null;
+  let subscriptionsFiber: Fiber.Fiber<unknown, unknown> | null = null;
+  let refreshingSubscriptions = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let removeSocketListeners: (() => void) | null = null;
   let stopped = false;
@@ -55,6 +57,57 @@
       reconnectTimer = null;
       if (!stopped && generation === connectionGeneration) connect();
     }, 1_000);
+  }
+
+  function subscribeQueries(client: WebSocketRpcClient, isCurrent: () => boolean): void {
+    const allTodos = client.subscribe(new Topic({ name: "allTodos", params: [] })).pipe(
+      Stream.runForEach((event) =>
+        Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.value).pipe(
+          Effect.tap((value) =>
+            Effect.sync(() => {
+              if (isCurrent()) queryResults = { ...queryResults, allTodos: value };
+            }),
+          ),
+        ),
+      ),
+    );
+    const todoCount = client.subscribe(new Topic({ name: "todoCount", params: [] })).pipe(
+      Stream.runForEach((event) =>
+        Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.value).pipe(
+          Effect.tap((value) =>
+            Effect.sync(() => {
+              if (isCurrent()) queryResults = { ...queryResults, todoCount: value };
+            }),
+          ),
+        ),
+      ),
+    );
+    subscriptionsFiber = Effect.runFork(
+      Effect.scoped(
+        Effect.all([allTodos, todoCount], { concurrency: "unbounded", discard: true }),
+      ).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (isCurrent() && Exit.isFailure(exit) && !Exit.hasInterrupts(exit)) {
+              const error = Exit.findErrorOption(exit);
+              errorMessage = Option.isSome(error) ? messageForError(error.value) : "Todo connection failed";
+            }
+          }),
+        ),
+      ),
+    );
+  }
+
+  function refreshQueries(client: WebSocketRpcClient, isCurrent: () => boolean): void {
+    if (!isCurrent() || rpcClient !== client || refreshingSubscriptions) return;
+    refreshingSubscriptions = true;
+    Effect.runFork(
+      Effect.gen(function* () {
+        const previous = subscriptionsFiber;
+        if (previous) yield* Fiber.interrupt(previous);
+        if (isCurrent() && rpcClient === client) subscribeQueries(client, isCurrent);
+      }).pipe(Effect.ensuring(Effect.sync(() => (refreshingSubscriptions = false)))),
+    );
   }
 
   function connect(): void {
@@ -88,53 +141,29 @@
       let fiber: Fiber.Fiber<unknown, unknown> | null = null;
       const connection = Effect.scoped(
         Effect.gen(function* () {
-          const nextClient = yield* makeWebSocketRpcClient(ws);
+          let client: WebSocketRpcClient | undefined;
+          const nextClient = yield* makeWebSocketRpcClient(ws, () => {
+            if (client) refreshQueries(client, isCurrent);
+          });
+          client = nextClient;
           if (!isCurrent()) return;
           rpcClient = nextClient;
-          const client = nextClient;
           connected = true;
           hasConnected = true;
           errorMessage = null;
-
-          const allTodos = client.subscribe(new Topic({ name: "allTodos", params: [] })).pipe(
-            Stream.runForEach((event) =>
-              Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.value).pipe(
-                Effect.tap((value) =>
-                  Effect.sync(() => {
-                    if (isCurrent()) queryResults = { ...queryResults, allTodos: value };
-                  }),
-                ),
-              ),
-            ),
-          );
-          const todoCount = client.subscribe(new Topic({ name: "todoCount", params: [] })).pipe(
-            Stream.runForEach((event) =>
-              Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.value).pipe(
-                Effect.tap((value) =>
-                  Effect.sync(() => {
-                    if (isCurrent()) queryResults = { ...queryResults, todoCount: value };
-                  }),
-                ),
-              ),
-            ),
-          );
-          yield* Effect.all([allTodos, todoCount], {
-            concurrency: "unbounded",
-            discard: true,
-          });
+          subscribeQueries(nextClient, isCurrent);
+          yield* Effect.never;
         }),
       ).pipe(
         Effect.onExit((exit) =>
           Effect.sync(() => {
             if (!isCurrent()) return;
             if (connectionFiber === fiber) connectionFiber = null;
-            if (Exit.isFailure(exit)) {
-              if (!Exit.hasInterrupts(exit)) {
-                const error = Exit.findErrorOption(exit);
-                errorMessage = Option.isSome(error)
-                  ? messageForError(error.value)
-                  : "Todo connection failed";
-              }
+            if (Exit.isFailure(exit) && !Exit.hasInterrupts(exit)) {
+              const error = Exit.findErrorOption(exit);
+              errorMessage = Option.isSome(error)
+                ? messageForError(error.value)
+                : "Todo connection failed";
               ws.close();
             }
           }),
@@ -148,12 +177,14 @@
       if (!isCurrent()) return;
       if (removeSocketListeners === removeListeners) removeSocketListeners = null;
       const interrupted = connectionFiber;
+      const interruptedSubscriptions = subscriptionsFiber;
       connectionFiber = null;
+      subscriptionsFiber = null;
       rpcClient = null;
       socket = null;
       connected = false;
       if (interrupted) Effect.runFork(Fiber.interrupt(interrupted));
-      scheduleReconnect(generation);
+      if (interruptedSubscriptions) Effect.runFork(Fiber.interrupt(interruptedSubscriptions));
     };
     const onError = (): void => {
       if (!isCurrent()) {
@@ -277,7 +308,6 @@
   }
 
   onMount(() => {
-    stopped = false;
     connect();
     return () => {
       stopped = true;
@@ -290,8 +320,11 @@
       removeSocketListeners = null;
       if (remove) remove();
       const interrupted = connectionFiber;
+      const interruptedSubscriptions = subscriptionsFiber;
       connectionFiber = null;
+      subscriptionsFiber = null;
       if (interrupted) Effect.runFork(Fiber.interrupt(interrupted));
+      if (interruptedSubscriptions) Effect.runFork(Fiber.interrupt(interruptedSubscriptions));
       const currentSocket = socket;
       socket = null;
       rpcClient = null;

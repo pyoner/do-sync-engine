@@ -1,10 +1,12 @@
-import { Effect, Exit, Scope } from "effect";
+import { Effect, Exit, Option, Scope, Schema } from "effect";
 import { RpcClient, RpcGroup, RpcMessage, RpcSerialization } from "effect/unstable/rpc";
 import type { Rpc } from "effect/unstable/rpc";
+import { RestoredFrame } from "./protocol.ts";
 
 export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
   socket: WebSocket,
   group: RpcGroup.RpcGroup<Rpcs>,
+  onRestored?: () => void,
 ): Effect.Effect<RpcClient.RpcClient<Rpcs>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
@@ -22,6 +24,15 @@ export const makeWebSocketRpcClientFor = <Rpcs extends Rpc.Any>(
       Effect.sync(() => {
         listener = (event) => {
           try {
+            const restored = Schema.decodeUnknownOption(RestoredFrame)(event.data);
+            if (Option.isSome(restored)) {
+              try {
+                onRestored?.();
+              } catch {
+                // Lifecycle callbacks must not interrupt the RPC transport.
+              }
+              return;
+            }
             for (const message of parser.decode(event.data as string | Uint8Array))
               for (const clientId of clientIds)
                 Effect.runFork(write(clientId, message as RpcMessage.FromServerEncoded));

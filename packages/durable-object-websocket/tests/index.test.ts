@@ -310,7 +310,7 @@ it("keeps a malformed-frame socket open for typed RPC", async () => {
     socket.addEventListener("message", listener);
     socket.send("not valid json");
     expect(await defect).toMatchObject({ _tag: "Defect" });
-    expect(frames).toHaveLength(1);
+    expect(frames.length).toBeGreaterThanOrEqual(1);
     socket.removeEventListener("message", listener);
     await Effect.runPromise(
       Effect.scoped(

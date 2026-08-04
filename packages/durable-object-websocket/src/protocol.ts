@@ -12,6 +12,8 @@ const QueryEvent = Schema.Struct({
   topic: TopicSchema,
   value: Schema.Unknown,
 });
+export const Restored = Schema.Struct({ _tag: Schema.Literal("DoSyncEngineRestored") });
+export const RestoredFrame = Schema.fromJsonString(Restored);
 
 export const Subscribe = Rpc.make("subscribe", {
   payload: TopicSchema,
