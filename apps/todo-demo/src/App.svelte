@@ -98,7 +98,7 @@
 
           const allTodos = client.subscribe({ query: "allTodos", params: [] }).pipe(
             Stream.runForEach((event) =>
-              Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.query.value).pipe(
+              Schema.decodeUnknownEffect(Schema.Array(todoSchema))(event.value).pipe(
                 Effect.tap((value) =>
                   Effect.sync(() => {
                     if (isCurrent()) queryResults = { ...queryResults, allTodos: value };
@@ -109,7 +109,7 @@
           );
           const todoCount = client.subscribe({ query: "todoCount", params: [] }).pipe(
             Stream.runForEach((event) =>
-              Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.query.value).pipe(
+              Schema.decodeUnknownEffect(Schema.Array(todoCountSchema))(event.value).pipe(
                 Effect.tap((value) =>
                   Effect.sync(() => {
                     if (isCurrent()) queryResults = { ...queryResults, todoCount: value };

@@ -3,8 +3,7 @@ import { exports, env } from "cloudflare:workers";
 import { evictDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vite-plus/test";
 import { makeWebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
-import type { WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
-import type { ListenerId } from "@do-sync-engine/core";
+import type { Topic, WebSocketRpcClient } from "@do-sync-engine/durable-object-websocket";
 import {
   todoCountSchema,
   todoSchema,
@@ -27,7 +26,7 @@ const openSocket = async () => {
 type DecodedSubscription<T> = {
   readonly queue: Queue.Queue<T>;
   readonly fiber: Fiber.Fiber<void, unknown>;
-  readonly listenerId: () => ListenerId | undefined;
+  readonly topic: () => Topic | undefined;
 };
 
 const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
@@ -37,21 +36,21 @@ const subscribeDecoded = <S extends Schema.Decoder<readonly unknown[], never>>(
 ): Effect.Effect<DecodedSubscription<S["Type"]>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const queue = yield* Queue.unbounded<S["Type"]>();
-    let id: ListenerId | undefined;
+    let topic: Topic | undefined;
     const decodedStream = client.subscribe({ query, params: [] }).pipe(
       Stream.tap((event) =>
         Effect.sync(() => {
-          id = event.listenerId;
+          if (topic === undefined) topic = event.topic;
         }),
       ),
-      Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.query.value)),
+      Stream.mapEffect((event) => Schema.decodeUnknownEffect(schema)(event.value)),
     );
     const fiber = yield* Effect.forkScoped(
       Stream.runForEach(decodedStream, (value) => Queue.offer(queue, value)).pipe(
         Effect.catchCauseIf(Cause.hasInterrupts, () => Effect.void),
       ),
     );
-    return { queue, fiber, listenerId: () => id };
+    return { queue, fiber, topic: () => topic };
   });
 const uniqueTitle = () => `todo-${crypto.randomUUID()}`;
 
@@ -205,7 +204,6 @@ describe("TodoStore WebSocket RPC", () => {
       readerSocket.close();
     }
   });
-
   it("finishes an active stream after an explicit unsubscribe", async () => {
     const socket = await openSocket();
     try {
@@ -219,13 +217,17 @@ describe("TodoStore WebSocket RPC", () => {
               Schema.Array(todoSchema),
             );
             yield* Queue.take(subscription.queue);
-            const listenerId = subscription.listenerId();
-            if (!listenerId) throw new Error("Subscription listener ID was not received");
-            expect(yield* client.unsubscribe({ listenerId })).toBe(true);
+            const topic = subscription.topic();
+            if (!topic) throw new Error("Subscription topic was not received");
+            yield* client.unsubscribe({ topic });
             yield* Effect.yieldNow;
             const exit = yield* Fiber.await(subscription.fiber);
             expect(Exit.isSuccess(exit)).toBe(true);
-            expect(yield* client.unsubscribe({ listenerId })).toBe(false);
+
+            yield* client.sync({ mutation: "addTodo", params: [uniqueTitle()] });
+            yield* Effect.yieldNow;
+            expect(yield* Queue.poll(subscription.queue)).toEqual(Option.none());
+            yield* client.unsubscribe({ topic });
           }),
         ),
       );
@@ -234,7 +236,7 @@ describe("TodoStore WebSocket RPC", () => {
     }
   });
 
-  it("keeps the original decoded stream alive across Durable Object hibernation", async () => {
+  it("requires an explicit replacement stream after Durable Object hibernation", async () => {
     const socket = await openSocket();
     try {
       await Effect.runPromise(
@@ -247,8 +249,6 @@ describe("TodoStore WebSocket RPC", () => {
               Schema.Array(todoSchema),
             );
             yield* Queue.take(subscription.queue);
-            const listenerId = subscription.listenerId();
-            if (!listenerId) throw new Error("Subscription listener ID was not received");
             const title = uniqueTitle();
 
             yield* client.sync({ mutation: "addTodo", params: [title] });
@@ -261,19 +261,30 @@ describe("TodoStore WebSocket RPC", () => {
             yield* Effect.promise(() =>
               evictDurableObject(env.TODO_STORE.getByName("default"), { webSockets: "hibernate" }),
             );
+            yield* Fiber.interrupt(subscription.fiber);
+            expect(yield* Queue.poll(subscription.queue)).toEqual(Option.none());
+
+            const replacement = yield* subscribeDecoded(
+              client,
+              "allTodos",
+              Schema.Array(todoSchema),
+            );
+            const replayed = yield* Queue.take(replacement.queue);
+            expect(replayed.some((todo) => todo.id === added.id)).toBe(true);
+
             yield* client.sync({ mutation: "toggleTodo", params: [added.id] });
-            const toggled = (yield* Queue.take(subscription.queue)).find(
+            const toggled = (yield* Queue.take(replacement.queue)).find(
               (todo) => todo.id === added.id,
             );
             expect(toggled?.completed).toBe(1);
-            yield* Effect.yieldNow;
-            yield* Effect.yieldNow;
             expect(yield* Queue.poll(subscription.queue)).toEqual(Option.none());
 
             yield* client.sync({ mutation: "deleteTodo", params: [added.id] });
-            const afterDelete = yield* Queue.take(subscription.queue);
+            const afterDelete = yield* Queue.take(replacement.queue);
             expect(afterDelete.some((todo) => todo.id === added.id)).toBe(false);
-            expect(yield* client.unsubscribe({ listenerId })).toBe(true);
+            const replacementTopic = replacement.topic();
+            if (!replacementTopic) throw new Error("Replacement topic was not received");
+            yield* client.unsubscribe({ topic: replacementTopic });
           }),
         ),
       );
