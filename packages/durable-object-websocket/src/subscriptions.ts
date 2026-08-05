@@ -1,14 +1,4 @@
-import {
-  Effect,
-  Equal,
-  MutableHashMap,
-  Option,
-  PubSub,
-  Random,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Effect, Equal, MutableHashMap, Option, PubSub, Schema, Semaphore, Stream } from "effect";
 import {
   type Listener,
   type ListenerEvent,
@@ -70,7 +60,6 @@ const openSubscription = <Q extends QueryMap<Q>>(
 export class SocketSubscriptions<Q extends QueryMap<Q>> {
   private readonly entries = MutableHashMap.empty<Topic, Entry>();
   private readonly lock = Semaphore.makeUnsafe(1);
-  private id = Effect.runSync(Random.nextInt);
 
   constructor(
     private readonly socket: Pick<WebSocket, "deserializeAttachment" | "serializeAttachment">,
@@ -109,11 +98,9 @@ export class SocketSubscriptions<Q extends QueryMap<Q>> {
         });
         const decoded = Schema.decodeUnknownOption(Attachment)(raw);
         if (Option.isNone(decoded)) {
-          this.id = yield* Random.nextInt;
           yield* this.persist([]);
           return;
         }
-        this.id = decoded.value.id;
         const result = yield* Effect.exit(
           Effect.gen({ self: this }, function* (this: SocketSubscriptions<Q>) {
             for (const topic of decoded.value.topics) yield* this.attach(topic, false);
@@ -174,7 +161,7 @@ export class SocketSubscriptions<Q extends QueryMap<Q>> {
     topics = Array.from(MutableHashMap.keys(this.entries)),
   ): Effect.Effect<void, Error> {
     return Effect.try({
-      try: () => this.socket.serializeAttachment({ id: this.id, topics }),
+      try: () => this.socket.serializeAttachment({ topics }),
       catch: webSocketOperationError,
     });
   }
