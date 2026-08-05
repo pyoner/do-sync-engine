@@ -4,11 +4,10 @@ import { evictDurableObject } from "cloudflare:test";
 import { expect, it } from "vite-plus/test";
 import { Rpc, RpcGroup } from "effect/unstable/rpc";
 import { SyncEngine, Topic, toTables, UnknownMutationError } from "@do-sync-engine/core";
-import type { Mutation, Query, SyncEngineInterface } from "@do-sync-engine/core";
 import { RpcOperationError, Subscribe, Unsubscribe } from "../src/protocol";
 import { makeWebSocketRpcSession } from "../src/client";
 import { makeWebSocketRpcSessionFor } from "../src/client-transport";
-import { SubscriptionRegistry } from "../src/subscriptions";
+import { SocketSubscriptions } from "../src/subscriptions";
 import type { FixtureSyncObject } from "./cloudflare-worker";
 
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
@@ -58,13 +57,7 @@ it("shares equivalent subscriptions and persists one canonical topic", async () 
       attachment = value;
     },
   } as WebSocket;
-  const registry = new SubscriptionRegistry(
-    socket,
-    engine as unknown as SyncEngineInterface<
-      { counter: Query<[string], { value: number }> },
-      { increment: Mutation<[string, number], void> }
-    >,
-  );
+  const subscriptions = new SocketSubscriptions(socket, engine);
 
   await Effect.runPromise(
     Effect.scoped(
@@ -73,13 +66,13 @@ it("shares equivalent subscriptions and persists one canonical topic", async () 
         const secondEvents = yield* Queue.unbounded<unknown>();
         const first = yield* Effect.forkScoped(
           Stream.runForEach(
-            registry.subscribeStream(new Topic({ name: "counter", params: ["same"] })),
+            subscriptions.subscribe(new Topic({ name: "counter", params: ["same"] })),
             (event) => Queue.offer(firstEvents, event),
           ),
         );
         yield* Effect.forkScoped(
           Stream.runForEach(
-            registry.subscribeStream(new Topic({ name: "counter", params: ["same"] })),
+            subscriptions.subscribe(new Topic({ name: "counter", params: ["same"] })),
             (event) => Queue.offer(secondEvents, event),
           ),
         );
@@ -108,7 +101,7 @@ it("shares equivalent subscriptions and persists one canonical topic", async () 
         expect(yield* Queue.take(secondEvents)).toEqual(secondEvent);
 
         const topic = firstEvent as { readonly topic: Topic };
-        yield* registry.unsubscribe(topic.topic);
+        yield* subscriptions.unsubscribe(topic.topic);
         if (
           typeof attachment === "object" &&
           attachment !== null &&
@@ -139,14 +132,8 @@ it("resets malformed and old attachments with a fresh numeric ID", async () => {
         attachment = value;
       },
     } as WebSocket;
-    const registry = new SubscriptionRegistry(
-      socket,
-      engine as unknown as SyncEngineInterface<
-        { counter: Query<[string], { value: number }> },
-        { increment: Mutation<[string, number], void> }
-      >,
-    );
-    await Effect.runPromise(registry.restore());
+    const subscriptions = new SocketSubscriptions(socket, engine);
+    await Effect.runPromise(subscriptions.restore());
     expect(attachment).toMatchObject({ topics: [] });
     if (typeof attachment === "object" && attachment !== null && "id" in attachment)
       expect(typeof attachment.id).toBe("number");
@@ -176,15 +163,9 @@ it("cleans up every listener when restoring a topic fails", async () => {
       attachment = value;
     },
   } as WebSocket;
-  const registry = new SubscriptionRegistry(
-    socket,
-    engine as unknown as SyncEngineInterface<
-      { first: Query<[], { value: number }>; second: Query<[], { value: number }> },
-      Record<string, never>
-    >,
-  );
+  const subscriptions = new SocketSubscriptions(socket, engine);
 
-  const result = Effect.runSyncExit(registry.restore());
+  const result = Effect.runSyncExit(subscriptions.restore());
   expect(Exit.isFailure(result)).toBe(true);
   expect(attachment).toEqual({ id: 11, topics: [] });
 });

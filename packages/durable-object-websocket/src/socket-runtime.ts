@@ -1,6 +1,6 @@
 import { Effect, Exit, Scope, Schema, Stream } from "effect";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
-import { Topic, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
 import type {
   MutationMap,
   OperationParams,
@@ -11,7 +11,7 @@ import type {
 import { SessionReadyFrame, RpcOperationError, WebSocketRpc } from "./protocol";
 import { makeCloudflareRpcServerTransport } from "./server-transport";
 import type { CloudflareRpcServerTransport } from "./server-transport";
-import { SubscriptionRegistry } from "./subscriptions";
+import { SocketSubscriptions } from "./subscriptions";
 
 const toRpcOperationError = (error: unknown): RpcOperationError => {
   let current: unknown = error;
@@ -33,7 +33,7 @@ type SocketTransport = {
 };
 
 export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
-  private readonly registry: SubscriptionRegistry<Q, M>;
+  private readonly subscriptions: SocketSubscriptions<Q>;
   private pending: Promise<void> = Promise.resolve();
   private socketTransport: SocketTransport | undefined;
 
@@ -41,13 +41,13 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
     private readonly socket: WebSocket,
     private readonly engine: SyncEngineInterface<Q, M>,
   ) {
-    this.registry = new SubscriptionRegistry(socket, engine);
+    this.subscriptions = new SocketSubscriptions<Q>(socket, engine);
   }
 
   start(restored = false): Promise<void> {
     return this.enqueue(
       Effect.gen({ self: this }, function* (this: SocketRuntime<Q, M>) {
-        yield* this.registry.restore();
+        yield* this.subscriptions.restore();
         yield* this.initializeRpc();
         if (this.socket.readyState === WebSocket.OPEN)
           this.socket.send(
@@ -74,7 +74,7 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
           yield* Scope.close(this.socketTransport.scope, exit);
           this.socketTransport = undefined;
         }
-        yield* this.registry.clear();
+        yield* this.subscriptions.close();
       }),
     );
   }
@@ -86,15 +86,15 @@ export class SocketRuntime<Q extends QueryMap<Q>, M extends MutationMap<M>> {
       const transport = yield* makeCloudflareRpcServerTransport(this.socket);
       const handlers = yield* WebSocketRpc.toHandlers({
         subscribe: (topic) =>
-          this.registry
-            .subscribeStream(topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>)
+          this.subscriptions
+            .subscribe(topic)
             .pipe(
               Stream.mapError((error) =>
                 error instanceof UnknownQueryError ? error : toRpcOperationError(error),
               ),
             ),
         unsubscribe: (topic) =>
-          this.registry.unsubscribe(topic).pipe(Effect.mapError(toRpcOperationError)),
+          this.subscriptions.unsubscribe(topic).pipe(Effect.mapError(toRpcOperationError)),
         sync: (payload) =>
           this.engine
             .sync(
