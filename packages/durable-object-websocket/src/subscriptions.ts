@@ -16,7 +16,6 @@ const webSocketOperationError = (cause: unknown) =>
   new Error("WebSocket operation failed", { cause });
 
 const Attachment = Schema.Struct({
-  id: Schema.Number,
   topics: Schema.Array(TopicSchema),
 });
 
