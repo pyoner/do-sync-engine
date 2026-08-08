@@ -12,6 +12,11 @@ import type {
   TopicHash,
 } from "../src/index.js";
 
+function expectOk<T>(value: T): Exclude<T, Error> {
+  if (value instanceof Error) throw value;
+  return value as Exclude<T, Error>;
+}
+
 test("exports canonical topic and listener APIs", async () => {
   const queries = {
     numbers: {
@@ -55,7 +60,7 @@ test("exports canonical topic and listener APIs", async () => {
     void otherListenerId;
   }
 
-  const topic = await engine.createTopic("numbers", []);
+  const topic = expectOk(await engine.createTopic("numbers", []));
   const topicHash: TopicHash = topic.hash;
   expect(topicHash).toBeTypeOf("string");
 
@@ -66,7 +71,7 @@ test("exports canonical topic and listener APIs", async () => {
   });
 
   const listener: Listener = () => {};
-  const listenerId: ListenerId = engine.subscribe(topic, listener);
+  const listenerId: ListenerId = expectOk(engine.subscribe(topic, listener));
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
@@ -99,13 +104,15 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     queries,
     mutations,
   });
-  const topic: Topic<"numbers", []> = await engine.createTopic("numbers", []);
+  const topic: Topic<"numbers", []> = expectOk(await engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
-  const listenerId = engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
-    events.push({ topic: publishedTopic, value });
-  });
-  engine.sync("noop", []);
+  const listenerId = expectOk(
+    engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
+      events.push({ topic: publishedTopic, value });
+    }),
+  );
+  expectOk(engine.sync("noop", []));
 
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
@@ -150,7 +157,7 @@ test("typed createTopic params and listener handle", async () => {
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations });
-  const topic = await engine.createTopic("numbers", [42]);
+  const topic = expectOk(await engine.createTopic("numbers", [42]));
   const listener: Listener = () => {};
 
   if (false as boolean) {
@@ -162,7 +169,7 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const listenerId = engine.subscribe(topic, listener);
+  const listenerId = expectOk(engine.subscribe(topic, listener));
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(engine.unsubscribe(listenerId)).toBe(true);
 });

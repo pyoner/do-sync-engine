@@ -52,26 +52,35 @@ export abstract class DurableObjectWebSocket<
     if ("error" in decoded) return this.send(ws, decoded.error);
     const { command } = decoded;
     const requestId = command.requestId;
-    try {
-      if (command.type === "subscribe") {
-        await this.registry.subscribe(ws, command.query as StringKey<Q>, command.params, requestId);
-      } else if (command.type === "unsubscribe") {
-        this.send(ws, {
-          type: "unsubscribed",
-          requestId,
-          topicHash: command.topicHash,
-          removed: this.registry.unsubscribe(ws, command.topicHash),
-        });
-      } else {
-        this.engine.sync(
-          command.mutation as StringKey<M>,
-          command.params as OperationParams<M[StringKey<M>]>,
-        );
-        this.send(ws, { type: "synced", requestId });
-      }
-    } catch (error) {
-      this.send(ws, { type: "error", requestId, message: String(error) });
+    if (command.type === "subscribe") {
+      const result = await this.registry.subscribe(
+        ws,
+        command.query as StringKey<Q>,
+        command.params,
+        requestId,
+      );
+      if (result instanceof Error)
+        this.send(ws, { type: "error", requestId, message: result.message });
+      return;
     }
+    if (command.type === "unsubscribe") {
+      this.send(ws, {
+        type: "unsubscribed",
+        requestId,
+        topicHash: command.topicHash,
+        removed: this.registry.unsubscribe(ws, command.topicHash),
+      });
+      return;
+    }
+    const result = this.engine.sync(
+      command.mutation as StringKey<M>,
+      command.params as OperationParams<M[StringKey<M>]>,
+    );
+    if (result instanceof Error) {
+      this.send(ws, { type: "error", requestId, message: result.message });
+      return;
+    }
+    this.send(ws, { type: "synced", requestId });
   }
   async webSocketClose(
     ws: WebSocket,

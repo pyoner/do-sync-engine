@@ -87,19 +87,19 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<Topic<Name, OperationParams<Queries[Name]>>>;
+  ): Promise<Topic<Name, OperationParams<Queries[Name]>> | Error>;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]>;
+  ): OperationResult<Queries[Name]> | Error;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): ListenerId;
+  ): ListenerId | Error;
   unsubscribe(listenerId: ListenerId): boolean;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void;
+  ): void | Error;
 }

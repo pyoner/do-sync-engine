@@ -31,7 +31,8 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "@do-sync-engine/core": "workspace:*"
+    "@do-sync-engine/core": "workspace:*",
+    "errore": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "latest",

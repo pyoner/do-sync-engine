@@ -21,6 +21,9 @@
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },
+  "dependencies": {
+    "errore": "catalog:"
+  },
   "devDependencies": {
     "@do-sync-engine/core": "workspace:*",
     "@types/node": "^26.1.1",

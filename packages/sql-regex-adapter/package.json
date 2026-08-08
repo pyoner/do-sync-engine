@@ -21,6 +21,9 @@
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },
+  "dependencies": {
+    "errore": "catalog:"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "latest",
     "@cloudflare/workers-types": "latest",

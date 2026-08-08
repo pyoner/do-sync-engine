@@ -1,24 +1,23 @@
+import * as errore from "errore";
+import { CloneError, InvalidTopicError, UnknownQueryError } from "./errors";
 import type { Table, Topic, TopicHash } from "./types";
 
 export function toTables(names: readonly string[]): Set<Table> {
   return new Set(names as readonly Table[]);
 }
 
-export function cloneOrThrow<T>(value: T, label: string): T {
-  try {
-    return structuredClone(value);
-  } catch (cause) {
-    throw new TypeError(`${label} must support structuredClone`, { cause });
-  }
+export function cloneOrThrow<T>(value: T, label: string): T | CloneError {
+  return errore.try({
+    try: () => structuredClone(value),
+    catch: (cause) => new CloneError({ label, cause }),
+  });
 }
 
 export function assertKnownQuery(
   query: string,
   knownQueries: { has(query: string): boolean },
-): void {
-  if (!knownQueries.has(query)) {
-    throw new ReferenceError(`Unknown query: ${query}`);
-  }
+): undefined | UnknownQueryError {
+  if (!knownQueries.has(query)) return new UnknownQueryError({ query });
 }
 
 export async function buildTopic<Name extends string, Params extends readonly unknown[]>(
@@ -38,22 +37,21 @@ export async function buildTopic<Name extends string, Params extends readonly un
 export function validateTopic(
   topic: unknown,
   knownQueryNames: { has(query: string): boolean },
-): Topic<string, readonly unknown[]> {
-  if (typeof topic !== "object" || topic === null) {
-    throw new TypeError("Topic must be an object");
-  }
+): Topic<string, readonly unknown[]> | InvalidTopicError | UnknownQueryError {
+  if (typeof topic !== "object" || topic === null)
+    return new InvalidTopicError({ reason: "Topic must be an object" });
 
   const candidate = topic as { name?: unknown; params?: unknown; hash?: unknown };
-  if (typeof candidate.name !== "string") {
-    throw new TypeError("Topic name must be a string");
-  }
-  assertKnownQuery(candidate.name, knownQueryNames);
-  if (!Array.isArray(candidate.params)) {
-    throw new TypeError("Topic params must be an array");
-  }
-  if (typeof candidate.hash !== "string" || !/^[0-9a-f]{64}$/.test(candidate.hash)) {
-    throw new TypeError("Topic hash must be 64 lowercase hexadecimal characters");
-  }
+  if (typeof candidate.name !== "string")
+    return new InvalidTopicError({ reason: "Topic name must be a string" });
+  const knownQuery = assertKnownQuery(candidate.name, knownQueryNames);
+  if (knownQuery instanceof Error) return knownQuery;
+  if (!Array.isArray(candidate.params))
+    return new InvalidTopicError({ reason: "Topic params must be an array" });
+  if (typeof candidate.hash !== "string" || !/^[0-9a-f]{64}$/.test(candidate.hash))
+    return new InvalidTopicError({
+      reason: "Topic hash must be 64 lowercase hexadecimal characters",
+    });
 
   return candidate as Topic<string, readonly unknown[]>;
 }

@@ -15,7 +15,12 @@ export class DurableObjectSqlStorage implements SqlDatabase {
   }
 
   tables(statement: string) {
-    return toTables([...createAdapter(this.sql)(statement).tables]);
+    const adapter = createAdapter(this.sql);
+    if (adapter instanceof Error)
+      throw new Error("Invalid SQL storage configuration", { cause: adapter });
+    const operation = adapter(statement);
+    if (operation instanceof Error) throw new Error("Invalid static SQL", { cause: operation });
+    return toTables([...operation.tables]);
   }
   query(sql: string, ...params: SqlValue[]): SqlRow[] {
     return this.sql.exec(sql, ...params).toArray() as SqlRow[];

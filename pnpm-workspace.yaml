@@ -17,6 +17,7 @@ catalog:
   drizzle-orm: 1.0.0-rc.4
   better-sqlite3: 13.0.1
   "@types/better-sqlite3": 7.6.13
+  errore: ^0.14.1
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
