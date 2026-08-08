@@ -3,7 +3,6 @@
   import { onMount } from "svelte";
   import {
     makeWebSocketRpcSession,
-    RpcOperationError,
     type WebSocketRpcClient,
     type WebSocketRpcSession,
   } from "@do-sync-engine/durable-object-websocket";
@@ -44,7 +43,6 @@
   }
 
   function messageForError(error: unknown): string {
-    if (error instanceof RpcOperationError && error.message !== "") return error.message;
     if (error instanceof UnknownMutationError) return `Unknown mutation: ${error.mutation}`;
     if (error instanceof UnknownQueryError) return `Unknown query: ${error.query}`;
     if (error instanceof Error && error.message !== "") return error.message;
@@ -135,6 +133,7 @@
         return;
       }
 
+      let fiber: Fiber.Fiber<unknown, unknown> | null = null;
       const connection = Effect.scoped(
         Effect.gen(function* () {
           const session = yield* makeWebSocketRpcSession(ws);
@@ -155,7 +154,7 @@
         Effect.onExit((exit) =>
           Effect.sync(() => {
             if (!isCurrent()) return;
-            if (connectionFiber === fiber) connectionFiber = null;
+            if (fiber !== null && connectionFiber === fiber) connectionFiber = null;
             if (Exit.isFailure(exit) && !Exit.hasInterrupts(exit)) {
               const error = Exit.findErrorOption(exit);
               errorMessage = Option.isSome(error)

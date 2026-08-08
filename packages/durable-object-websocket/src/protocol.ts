@@ -1,43 +1,22 @@
-import { Schema } from "effect";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
-import { TopicSchema, UnknownMutationError, UnknownQueryError } from "@do-sync-engine/core";
+import { RpcTarget } from "capnweb";
 
-const Params = Schema.Array(Schema.Unknown);
-export class RpcOperationError extends Schema.TaggedErrorClass<RpcOperationError>()(
-  "RpcOperationError",
-  { message: Schema.String },
-) {}
+export type Topic = {
+  readonly name: string;
+  readonly params: readonly unknown[];
+};
 
-const QueryEvent = Schema.Struct({
-  topic: TopicSchema,
-  value: Schema.Unknown,
-});
-export const SessionReady = Schema.Struct({
-  _tag: Schema.Literal("DoSyncEngineSessionReady"),
-  restored: Schema.Boolean,
-});
-export const SessionReadyFrame = Schema.fromJsonString(SessionReady);
+export type QueryEvent = {
+  readonly topic: Topic;
+  readonly value: unknown;
+};
 
-export const Subscribe = Rpc.make("subscribe", {
-  payload: TopicSchema,
-  success: QueryEvent,
-  error: Schema.Union([UnknownQueryError, RpcOperationError]),
-  stream: true,
-});
+export abstract class Subscription extends RpcTarget {
+  abstract next(): Promise<QueryEvent | null>;
+  abstract close(): Promise<void>;
+}
 
-export const Unsubscribe = Rpc.make("unsubscribe", {
-  payload: TopicSchema,
-  success: Schema.Void,
-  error: RpcOperationError,
-});
-
-export const Sync = Rpc.make("sync", {
-  payload: Schema.Struct({
-    mutation: Schema.String,
-    params: Params,
-  }),
-  success: Schema.Void,
-  error: Schema.Union([UnknownMutationError, RpcOperationError]),
-});
-
-export const WebSocketRpc = RpcGroup.make(Subscribe, Unsubscribe, Sync);
+export interface WebSocketRpcApi {
+  subscribe(topic: Topic): Promise<Subscription>;
+  unsubscribe(subscription: Subscription): Promise<void>;
+  sync(request: { readonly mutation: string; readonly params: readonly unknown[] }): Promise<void>;
+}
