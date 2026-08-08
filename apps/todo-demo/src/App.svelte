@@ -1,55 +1,85 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { TODO_WS_PATH, parseServerMessage, type ClientMessage, type Todo, type TodoQueryName, type TodoQueryResults } from "./todo-protocol";
+  import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+  import {
+    TODO_WS_PATH,
+    type Todo,
+    type TodoMutations,
+    type TodoQueries,
+    type TodoQueryName,
+    type TodoQueryResults,
+  } from "./todo-protocol";
+  import type { OperationParams } from "@do-sync-engine/core";
+  type Event = { topic: { name: TodoQueryName }; value: unknown };
+  type Api = {
+    subscribe<N extends TodoQueryName>(
+      query: N,
+      params: OperationParams<TodoQueries[N]>,
+      listener: (event: Event) => void,
+    ): Promise<{ unsubscribe(): boolean }>;
+    sync<N extends keyof TodoMutations & string>(
+      mutation: N,
+      params: OperationParams<TodoMutations[N]>,
+    ): Promise<void>;
+  };
   const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
   let queryResults = $state<Partial<TodoQueryResults>>({});
   let loading = $state(false);
-  let socket = $state<WebSocket | null>(null);
+  let api = $state<RpcStub<Api> | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
-  const pending = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
-  function websocketUrl(): string { return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`; }
-  function send(message: Omit<ClientMessage, "requestId">, requestId = crypto.randomUUID()): string {
-    if (socket?.readyState !== WebSocket.OPEN) throw new Error("WebSocket is not connected");
-    socket.send(JSON.stringify({ ...message, requestId }));
-    return requestId;
+  let subscriptions: Array<{ unsubscribe(): boolean }> = [];
+
+  function websocketUrl(): string {
+    return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`;
   }
   function connect(): () => void {
-    const ws = new WebSocket(websocketUrl());
-    socket = ws;
-    ws.addEventListener("open", () => { connected = true; errorMessage = null; for (const query of defaultQueries) send({ type: "subscribe", query, params: [] }); });
-    ws.addEventListener("message", (event) => {
-      try {
-        const message = parseServerMessage(String(event.data));
-        if (message.type === "queryResult") { queryResults = { ...queryResults, [message.topic.name]: message.value }; if (message.topic.name === "allTodos") todos = message.value as Todo[]; }
-        else if (message.type === "error") {
-          errorMessage = message.message;
-          if (message.requestId) {
-            const item = pending.get(message.requestId);
-            pending.delete(message.requestId);
-            item?.reject(new Error(message.message));
-          }
-        }
-        else if (message.type === "synced") { pending.get(message.requestId)?.resolve(); pending.delete(message.requestId); }
-      } catch { errorMessage = "Invalid server message"; }
+    const root = newWebSocketRpcSession<Api>(websocketUrl());
+    api = root;
+    connected = true;
+    errorMessage = null;
+    for (const query of defaultQueries) {
+      void root.subscribe(query, [], (event) => {
+        queryResults = { ...queryResults, [event.topic.name]: event.value };
+        if (event.topic.name === "allTodos") todos = event.value as Todo[];
+      }).then((subscription) => subscriptions.push(subscription)).catch((error) => {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      });
+    }
+    root.onRpcBroken((error) => {
+      connected = false;
+      api = null;
+      errorMessage = error instanceof Error ? error.message : String(error);
     });
-    ws.addEventListener("close", () => { connected = false; socket = null; for (const item of pending.values()) item.reject(new Error("WebSocket closed")); pending.clear(); });
-    ws.addEventListener("error", () => { errorMessage = "WebSocket error"; });
-    return () => ws.close();
+    return () => {
+      for (const subscription of subscriptions) subscription.unsubscribe();
+      subscriptions = [];
+      root[Symbol.dispose]();
+      api = null;
+      connected = false;
+    };
   }
-  function mutate(message: Extract<ClientMessage, { type: "sync" }>, afterSuccess?: () => void) {
-    loading = true; errorMessage = null;
-    const requestId = crypto.randomUUID();
-    const promise = new Promise<void>((resolve, reject) => pending.set(requestId, { resolve, reject }));
-    try { send(message, requestId); promise.then(() => afterSuccess?.()).catch((e) => errorMessage = e.message).finally(() => loading = false); }
-    catch (e) { pending.delete(requestId); errorMessage = String(e); loading = false; }
+  function mutate<N extends keyof TodoMutations & string>(
+    mutation: N,
+    params: TodoMutations[N] extends { params: infer P } ? P : never,
+    afterSuccess?: () => void,
+  ) {
+    if (!api) return;
+    loading = true;
+    errorMessage = null;
+    void api.sync(mutation, params).then(afterSuccess).catch((error) => {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }).finally(() => loading = false);
   }
-  function addTodo() { const title = newTitle.trim(); if (title) mutate({ type: "sync", mutation: "addTodo", params: [title] }, () => newTitle = ""); }
-  function toggleTodo(id: number) { mutate({ type: "sync", mutation: "toggleTodo", params: [id] }); }
-  function deleteTodo(id: number) { mutate({ type: "sync", mutation: "deleteTodo", params: [id] }); }
-  function clearCompleted() { mutate({ type: "sync", mutation: "clearCompleted", params: [] }); }
+  function addTodo() {
+    const title = newTitle.trim();
+    if (title) mutate("addTodo", [title], () => newTitle = "");
+  }
+  function toggleTodo(id: number) { mutate("toggleTodo", [id]); }
+  function deleteTodo(id: number) { mutate("deleteTodo", [id]); }
+  function clearCompleted() { mutate("clearCompleted", []); }
   onMount(connect);
 </script>
 

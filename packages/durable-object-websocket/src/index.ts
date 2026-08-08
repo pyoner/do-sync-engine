@@ -1,14 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
+import { type RpcStub, RpcTarget, newWorkersWebSocketRpcResponse } from "capnweb";
 import type {
+  ListenerId,
   MutationMap,
   OperationParams,
   QueryMap,
   StringKey,
   SyncEngineInterface,
+  Topic,
 } from "@do-sync-engine/core";
-import { SubscriptionRegistry } from "./subscriptions.ts";
-import { decodeClientCommand } from "./protocol.ts";
-export type * from "./protocol.ts";
+
 export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
   readonly engine: SyncEngineInterface<Q, M>;
 };
@@ -16,6 +17,102 @@ export type DurableObjectWebSocketInitializer<
   Q extends QueryMap<Q>,
   M extends MutationMap<M>,
 > = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
+export type DurableObjectWebSocketEvent = { readonly topic: Topic; readonly value: unknown };
+export type DurableObjectWebSocketListener = (event: DurableObjectWebSocketEvent) => void;
+export type DurableObjectWebSocketSubscription = {
+  unsubscribe(): boolean;
+};
+export type DurableObjectWebSocketApi<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
+  subscribe<N extends StringKey<Q>>(
+    query: N,
+    params: OperationParams<Q[N]>,
+    listener: DurableObjectWebSocketListener,
+  ): Promise<DurableObjectWebSocketSubscription | Error>;
+  sync<N extends StringKey<M>>(mutation: N, params: OperationParams<M[N]>): Promise<void | Error>;
+};
+
+class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTarget {
+  #listenerId: ListenerId | null = null;
+  #active = true;
+  private constructor(
+    private readonly engine: SyncEngineInterface<Q, M>,
+    private readonly listener: RpcStub<DurableObjectWebSocketListener>,
+  ) {
+    super();
+  }
+
+  static create<Q extends QueryMap<Q>, M extends MutationMap<M>>({
+    engine,
+    listener,
+    topic,
+  }: {
+    engine: SyncEngineInterface<Q, M>;
+    listener: RpcStub<DurableObjectWebSocketListener>;
+    topic: Topic;
+  }): Error | Subscription<Q, M> {
+    const subscription = new Subscription(engine, listener.dup());
+    const listenerId = engine.subscribe(topic as never, (event) => void subscription.notify(event));
+    if (listenerId instanceof Error) {
+      subscription[Symbol.dispose]();
+      return listenerId;
+    }
+    subscription.#listenerId = listenerId;
+    return subscription;
+  }
+
+  async notify(event: DurableObjectWebSocketEvent): Promise<Error | void> {
+    const notified = await this.listener(event).catch(
+      (cause) => new Error("Failed to deliver subscription update", { cause }),
+    );
+    if (!(notified instanceof Error)) return;
+    console.warn(notified.message, notified);
+    this.unsubscribe();
+    return notified;
+  }
+
+  unsubscribe(): boolean {
+    if (!this.#active) return false;
+    this.#active = false;
+    this.listener[Symbol.dispose]();
+    if (this.#listenerId === null) return false;
+    return this.engine.unsubscribe(this.#listenerId);
+  }
+
+  [Symbol.dispose](): void {
+    this.unsubscribe();
+  }
+}
+
+class SyncSession<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTarget {
+  constructor(private readonly engine: SyncEngineInterface<Q, M>) {
+    super();
+  }
+
+  async subscribe(
+    query: StringKey<Q>,
+    params: unknown[],
+    listener: RpcStub<DurableObjectWebSocketListener>,
+  ): Promise<DurableObjectWebSocketSubscription | Error> {
+    const topic = await this.engine.createTopic<StringKey<Q>>(
+      query,
+      params as OperationParams<Q[StringKey<Q>]>,
+    );
+    if (topic instanceof Error) return topic;
+    const value = this.engine.query<StringKey<Q>>(topic);
+    if (value instanceof Error) return value;
+
+    const subscription = Subscription.create({ engine: this.engine, listener, topic });
+    if (subscription instanceof Error) return subscription;
+    const notified = await subscription.notify({ topic, value });
+    if (notified instanceof Error) return notified;
+    return subscription;
+  }
+
+  async sync(mutation: StringKey<M>, params: unknown[]): Promise<void | Error> {
+    return this.engine.sync(mutation, params as OperationParams<M[StringKey<M>]>);
+  }
+}
+
 export abstract class DurableObjectWebSocket<
   Env,
   Q extends QueryMap<Q>,
@@ -23,7 +120,7 @@ export abstract class DurableObjectWebSocket<
 > extends DurableObject<Env> {
   private readonly initialization: Promise<void>;
   private engine!: SyncEngineInterface<Q, M>;
-  private registry!: SubscriptionRegistry<Q, M>;
+
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
@@ -33,69 +130,11 @@ export abstract class DurableObjectWebSocket<
     this.initialization = ctx.blockConcurrencyWhile(async () => {
       const { engine } = await initialize();
       this.engine = engine;
-      this.registry = new SubscriptionRegistry(engine, (ws, message) => this.send(ws, message));
-      for (const ws of ctx.getWebSockets()) await this.registry.restore(ws, false);
     });
   }
+
   async fetch(request: Request): Promise<Response> {
     await this.initialization;
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
-      return new Response("Expected WebSocket", { status: 426 });
-    const pair = new WebSocketPair();
-    this.ctx.acceptWebSocket(pair[1]);
-    await this.registry.restore(pair[1]);
-    return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await this.initialization;
-    const decoded = decodeClientCommand(message);
-    if ("error" in decoded) return this.send(ws, decoded.error);
-    const { command } = decoded;
-    const requestId = command.requestId;
-    if (command.type === "subscribe") {
-      const result = await this.registry.subscribe(
-        ws,
-        command.query as StringKey<Q>,
-        command.params,
-        requestId,
-      );
-      if (result instanceof Error)
-        this.send(ws, { type: "error", requestId, message: result.message });
-      return;
-    }
-    if (command.type === "unsubscribe") {
-      this.send(ws, {
-        type: "unsubscribed",
-        requestId,
-        topicHash: command.topicHash,
-        removed: this.registry.unsubscribe(ws, command.topicHash),
-      });
-      return;
-    }
-    const result = this.engine.sync(
-      command.mutation as StringKey<M>,
-      command.params as OperationParams<M[StringKey<M>]>,
-    );
-    if (result instanceof Error) {
-      this.send(ws, { type: "error", requestId, message: result.message });
-      return;
-    }
-    this.send(ws, { type: "synced", requestId });
-  }
-  async webSocketClose(
-    ws: WebSocket,
-    _code: number,
-    _reason: string,
-    _wasClean: boolean,
-  ): Promise<void> {
-    await this.initialization;
-    this.registry.clear(ws);
-  }
-  async webSocketError(ws: WebSocket, _error: unknown): Promise<void> {
-    await this.initialization;
-    this.registry.clear(ws);
-  }
-  private send(ws: WebSocket, message: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    return newWorkersWebSocketRpcResponse(request, new SyncSession(this.engine));
   }
 }

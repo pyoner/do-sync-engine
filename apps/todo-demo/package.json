@@ -14,6 +14,7 @@
     "@do-sync-engine/core": "workspace:*",
     "@do-sync-engine/durable-object-websocket": "workspace:*",
     "@do-sync-engine/sql-regex-adapter": "workspace:*",
+    "capnweb": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

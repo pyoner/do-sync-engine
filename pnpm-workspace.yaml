@@ -18,6 +18,7 @@ catalog:
   better-sqlite3: 13.0.1
   "@types/better-sqlite3": 7.6.13
   errore: ^0.14.1
+  capnweb: 0.10.0
 overrides:
   vite: "catalog:"
   vitest: "catalog:"

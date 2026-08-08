@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
+    "capnweb": "catalog:",
     "errore": "catalog:"
   },
   "devDependencies": {
