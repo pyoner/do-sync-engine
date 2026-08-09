@@ -47,7 +47,9 @@ export class SyncEngine<
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Topic<Name, OperationParams<Queries[Name]>> | Error {
-    return createTopic(name, params, this.queries);
+    const knownQuery = assertKnownQuery(name, this.queries);
+    if (knownQuery instanceof Error) return knownQuery;
+    return createTopic(name, params);
   }
 
   subscribe<Name extends StringKey<Queries>>(

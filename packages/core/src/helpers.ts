@@ -23,10 +23,7 @@ export function assertKnownQuery(
 export function createTopic<Name extends string, Params extends BaseParams>(
   name: Name,
   params: Params,
-  knownQueryNames: { has(query: string): boolean },
-): Topic<Name, Params> | CloneError | InvalidTopicError | UnknownQueryError {
-  const knownQuery = assertKnownQuery(name, knownQueryNames);
-  if (knownQuery instanceof Error) return knownQuery;
+): Topic<Name, Params> | CloneError | InvalidTopicError {
   const topicParams = cloneOrThrow(params, "Topic params");
   if (topicParams instanceof Error) return topicParams;
   const topic = { name, params: topicParams };
