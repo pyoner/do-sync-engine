@@ -1,6 +1,6 @@
 import * as errore from "errore";
 import { CloneError, InvalidTopicError, UnknownQueryError } from "./errors";
-import type { Table, Topic } from "./types";
+import type { BaseParams, Table, Topic } from "./types";
 
 export function toTables(names: readonly string[]): Set<Table> {
   return new Set(names as readonly Table[]);
@@ -23,7 +23,7 @@ export function assertKnownQuery(
 export function validateTopic(
   topic: unknown,
   knownQueryNames: { has(query: string): boolean },
-): Topic<string, readonly unknown[]> | InvalidTopicError | UnknownQueryError {
+): Topic<string, BaseParams> | InvalidTopicError | UnknownQueryError {
   if (typeof topic !== "object" || topic === null)
     return new InvalidTopicError({ reason: "Topic must be an object" });
 
@@ -35,5 +35,5 @@ export function validateTopic(
   if (!Array.isArray(candidate.params))
     return new InvalidTopicError({ reason: "Topic params must be an array" });
 
-  return candidate as Topic<string, readonly unknown[]>;
+  return candidate as Topic<string, BaseParams>;
 }

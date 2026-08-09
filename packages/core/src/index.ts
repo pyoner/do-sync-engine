@@ -10,6 +10,7 @@ export {
   UnknownQueryError,
 } from "./errors";
 export type {
+  BaseParams,
   Branded,
   Mutation,
   MutationMap,

@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 import { SyncEngine, toTables } from "../src/index.js";
 import type {
+  BaseParams,
   Branded,
   Mutation,
   Listener,
@@ -47,6 +48,11 @@ test("exports canonical topic and listener APIs", async () => {
     const otherId = undefined as unknown as Branded<number, "OtherId">;
     // @ts-expect-error — differently tagged numbers are not ListenerId values
     const otherListenerId: ListenerId = otherId;
+    const validParams: BaseParams = [{ nested: ["value"] }];
+    // @ts-expect-error — BaseParams must be an array
+    const invalidParams: BaseParams = "value";
+    void validParams;
+    void invalidParams;
     void stringValue;
     void numberValue;
     void booleanValue;

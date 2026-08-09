@@ -19,7 +19,7 @@ function captureEvents() {
 
 const noopPublish: Listener = () => {};
 
-class ExposedEngine extends SyncEngine<any, any> {
+class ExposedEngine extends SyncEngine {
   exposePublish(event: ListenerEvent) {
     return this.publish(event);
   }
@@ -40,7 +40,7 @@ describe("SyncEngine topics and events", () => {
   let postsOnly: Query<[], SqlRow[]>;
   let insertUser: Mutation<[string], unknown>;
   let updateUserName: Mutation<[string, number], unknown>;
-  let engine: SyncEngine<any, any>;
+  let engine: SyncEngine;
 
   beforeEach(() => {
     storage = new DatabaseSync(":memory:");

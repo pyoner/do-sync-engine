@@ -8,6 +8,7 @@ import {
 } from "./errors";
 import { assertKnownQuery, cloneOrThrow, validateTopic } from "./helpers";
 import type {
+  BaseParams,
   Listener,
   ListenerEvent,
   ListenerId,
@@ -29,16 +30,16 @@ export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
 > implements SyncEngineInterface<Queries, Mutations> {
-  private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
-  private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private readonly registry = new Map<Topic<StringKey<Queries>, readonly unknown[]>, Listeners>();
+  private readonly queries: ReadonlyMap<string, Query<BaseParams, unknown>>;
+  private readonly mutations: ReadonlyMap<string, Mutation<BaseParams, unknown>>;
+  private readonly registry = new Map<Topic<StringKey<Queries>, BaseParams>, Listeners>();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
     this.queries = new Map(
-      Object.entries(options.queries) as [string, Query<unknown[], unknown>][],
+      Object.entries(options.queries) as [string, Query<BaseParams, unknown>][],
     );
     this.mutations = new Map(
-      Object.entries(options.mutations) as [string, Mutation<unknown[], unknown>][],
+      Object.entries(options.mutations) as [string, Mutation<BaseParams, unknown>][],
     );
   }
 
@@ -74,7 +75,7 @@ export class SyncEngine<
     }
     if (listeners === undefined) {
       listeners = new Map();
-      this.registry.set(validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>, listeners);
+      this.registry.set(validatedTopic as Topic<StringKey<Queries>, BaseParams>, listeners);
     }
 
     for (const [listenerId, existingListener] of listeners) {
@@ -101,7 +102,7 @@ export class SyncEngine<
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) return new UnknownMutationError({ mutation });
     const result = errore.try({
-      try: () => mutationDefinition.run(...params),
+      try: () => mutationDefinition.run(...(params as BaseParams)),
       catch: (cause) => new MutationExecutionError({ cause }),
     });
     if (result instanceof Error) return result;
