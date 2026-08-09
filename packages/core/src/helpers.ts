@@ -19,6 +19,7 @@ export function assertKnownQuery(
 ): undefined | UnknownQueryError {
   if (!knownQueries.has(query)) return new UnknownQueryError({ query });
 }
+
 export function createTopic<Name extends string, Params extends BaseParams>(
   name: Name,
   params: Params,
@@ -29,25 +30,20 @@ export function createTopic<Name extends string, Params extends BaseParams>(
   const topicParams = cloneOrThrow(params, "Topic params");
   if (topicParams instanceof Error) return topicParams;
   const topic = { name, params: topicParams };
-  const validatedTopic = validateTopic(topic, knownQueryNames);
-  if (validatedTopic instanceof Error) return validatedTopic;
-  return topic;
+  return validateTopic<Name, Params>(topic);
 }
 
-export function validateTopic(
+export function validateTopic<Name extends string, Params extends BaseParams>(
   topic: unknown,
-  knownQueryNames: { has(query: string): boolean },
-): Topic<string, BaseParams> | InvalidTopicError | UnknownQueryError {
+): Topic<Name, Params> | InvalidTopicError {
   if (typeof topic !== "object" || topic === null)
     return new InvalidTopicError({ reason: "Topic must be an object" });
 
   const candidate = topic as { name?: unknown; params?: unknown };
   if (typeof candidate.name !== "string")
     return new InvalidTopicError({ reason: "Topic name must be a string" });
-  const knownQuery = assertKnownQuery(candidate.name, knownQueryNames);
-  if (knownQuery instanceof Error) return knownQuery;
   if (!Array.isArray(candidate.params))
     return new InvalidTopicError({ reason: "Topic params must be an array" });
 
-  return candidate as Topic<string, BaseParams>;
+  return candidate as Topic<Name, Params>;
 }

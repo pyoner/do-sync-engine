@@ -6,7 +6,7 @@ import {
   QueryExecutionError,
   UnknownMutationError,
 } from "./errors";
-import { createTopic, validateTopic } from "./helpers";
+import { assertKnownQuery, createTopic, validateTopic } from "./helpers";
 import type {
   BaseParams,
   Listener,
@@ -104,8 +104,10 @@ export class SyncEngine<
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
   ): OperationResult<Queries[Name]> | Error {
-    const validated = validateTopic(topic, this.queries);
+    const validated = validateTopic(topic);
     if (validated instanceof Error) return validated;
+    const knownQuery = assertKnownQuery(validated.name, this.queries);
+    if (knownQuery instanceof Error) return knownQuery;
     const queryDefinition = this.queries.get(validated.name);
     if (queryDefinition === undefined) return new QueryExecutionError();
     return errore.try({
