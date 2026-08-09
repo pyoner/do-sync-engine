@@ -11,6 +11,7 @@ export {
 } from "./errors";
 export type {
   BaseParams,
+  OperationError,
   Branded,
   Mutation,
   MutationMap,

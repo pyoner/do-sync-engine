@@ -1,10 +1,13 @@
 import { dequal } from "dequal";
 import * as errore from "errore";
 import {
+  CloneError,
   InvalidListenerError,
+  InvalidTopicError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
+  UnknownQueryError,
 } from "./errors";
 import { assertKnownQuery, createTopic, validateTopic } from "./helpers";
 import type {
@@ -13,6 +16,7 @@ import type {
   ListenerEvent,
   Mutation,
   MutationMap,
+  OperationError,
   OperationParams,
   OperationResult,
   Query,
@@ -45,7 +49,11 @@ export class SyncEngine<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Topic<Name, OperationParams<Queries[Name]>> | Error {
+  ):
+    | Topic<Name, OperationParams<Queries[Name]>>
+    | CloneError
+    | InvalidTopicError
+    | UnknownQueryError {
     const knownQuery = assertKnownQuery(name, this.queries);
     if (knownQuery instanceof Error) return knownQuery;
     return createTopic(name, params);
@@ -56,7 +64,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | Error {
+  ): void | InvalidListenerError {
     if (typeof listener !== "function") return new InvalidListenerError();
 
     let listeners: Listeners | undefined;
@@ -78,7 +86,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | Error {
+  ): void | InvalidListenerError {
     if (typeof listener !== "function") return new InvalidListenerError();
     for (const [registeredTopic, listeners] of this.registry) {
       if (!dequal(registeredTopic, topic)) continue;
@@ -91,20 +99,21 @@ export class SyncEngine<
   protected mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Set<Table> | Error {
+  ): Set<Table> | OperationError<Mutations[Name]> | UnknownMutationError | MutationExecutionError {
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) return new UnknownMutationError({ mutation });
     const result = errore.try({
       try: () => mutationDefinition.run(...(params as BaseParams)),
       catch: (cause) => new MutationExecutionError({ cause }),
     });
-    if (result instanceof Error) return result;
+    if (result instanceof Error)
+      return result as OperationError<Mutations[Name]> | MutationExecutionError;
     return mutationDefinition.tables;
   }
 
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | Error {
+  ): OperationResult<Queries[Name]> | InvalidTopicError | UnknownQueryError | QueryExecutionError {
     const validated = validateTopic(topic);
     if (validated instanceof Error) return validated;
     const knownQuery = assertKnownQuery(validated.name, this.queries);
@@ -128,7 +137,15 @@ export class SyncEngine<
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void | Error {
+  ):
+    | OperationError<Mutations[Name]>
+    | OperationError<Queries[StringKey<Queries>]>
+    | void
+    | InvalidTopicError
+    | UnknownQueryError
+    | UnknownMutationError
+    | MutationExecutionError
+    | QueryExecutionError {
     const changedTables = this.mutate(mutation, params);
     if (changedTables instanceof Error) return changedTables;
     for (const topic of this.registry.keys()) {
@@ -136,7 +153,8 @@ export class SyncEngine<
       if (queryDefinition === undefined) continue;
       if (![...queryDefinition.tables].some((table) => changedTables.has(table))) continue;
       const value = this.query(topic as never);
-      if (value instanceof Error) return value;
+      if (value instanceof Error)
+        return value as OperationError<Queries[StringKey<Queries>]> | QueryExecutionError;
       this.publish({ topic, value });
     }
   }

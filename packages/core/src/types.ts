@@ -1,3 +1,13 @@
+import type {
+  CloneError,
+  InvalidListenerError,
+  InvalidTopicError,
+  MutationExecutionError,
+  QueryExecutionError,
+  UnknownMutationError,
+  UnknownQueryError,
+} from "./errors";
+
 declare const brand: unique symbol;
 
 export type Branded<
@@ -45,6 +55,7 @@ export type OperationResult<OperationDef> = OperationDef extends {
 }
   ? Result
   : never;
+export type OperationError<OperationDef> = Extract<OperationResult<OperationDef>, Error>;
 
 export type Topic<Name extends string = string, Params extends BaseParams = BaseParams> = {
   readonly name: Name;
@@ -95,24 +106,36 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Topic<Name, OperationParams<Queries[Name]>> | Error;
+  ):
+    | Topic<Name, OperationParams<Queries[Name]>>
+    | CloneError
+    | InvalidTopicError
+    | UnknownQueryError;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | Error;
+  ): OperationResult<Queries[Name]> | InvalidTopicError | UnknownQueryError | QueryExecutionError;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | Error;
+  ): void | InvalidListenerError;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | Error;
+  ): void | InvalidListenerError;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void | Error;
+  ):
+    | OperationError<Mutations[Name]>
+    | OperationError<Queries[StringKey<Queries>]>
+    | void
+    | InvalidTopicError
+    | UnknownQueryError
+    | UnknownMutationError
+    | MutationExecutionError
+    | QueryExecutionError;
 }
