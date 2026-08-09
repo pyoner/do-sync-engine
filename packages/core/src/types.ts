@@ -80,8 +80,6 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<BaseP
       : never;
   };
 
-export type ListenerId = Branded<string, "ListenerId">;
-
 export interface SyncEngineOptions<
   Queries extends QueryMap<Queries> = QueryMap,
   Mutations extends MutationMap<Mutations> = MutationMap,
@@ -106,8 +104,13 @@ export interface SyncEngineInterface<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): ListenerId | Error;
-  unsubscribe(listenerId: ListenerId): boolean;
+  ): void | Error;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+  ): void | Error;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,

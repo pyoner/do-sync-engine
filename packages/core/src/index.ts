@@ -22,7 +22,6 @@ export type {
   QueryMap,
   StringKey,
   Table,
-  ListenerId,
   SyncEngineInterface,
   SyncEngineOptions,
   Topic,

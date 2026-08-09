@@ -11,7 +11,6 @@ import type {
   BaseParams,
   Listener,
   ListenerEvent,
-  ListenerId,
   Mutation,
   MutationMap,
   OperationParams,
@@ -24,7 +23,7 @@ import type {
   Table,
   Topic,
 } from "./types";
-type Listeners = Map<ListenerId, Listener>;
+type Listeners = Set<Listener>;
 
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -57,10 +56,10 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): ListenerId | Error {
+  ): void | Error {
     if (typeof listener !== "function") return new InvalidListenerError();
 
-    let listeners: Map<ListenerId, Listener> | undefined;
+    let listeners: Listeners | undefined;
     for (const [registeredTopic, registeredListeners] of this.registry) {
       if (dequal(registeredTopic, topic)) {
         listeners = registeredListeners;
@@ -68,25 +67,25 @@ export class SyncEngine<
       }
     }
     if (listeners === undefined) {
-      listeners = new Map();
+      listeners = new Set();
       this.registry.set(topic as Topic<StringKey<Queries>, BaseParams>, listeners);
     }
-
-    for (const [listenerId, existingListener] of listeners) {
-      if (existingListener === listener) return listenerId;
-    }
-    const listenerId = globalThis.crypto.randomUUID() as ListenerId;
-    listeners.set(listenerId, listener as Listener);
-    return listenerId;
+    listeners.add(listener as Listener);
   }
 
-  unsubscribe(listenerId: ListenerId): boolean {
-    for (const [topic, listeners] of this.registry) {
-      if (!listeners.delete(listenerId)) continue;
-      if (listeners.size === 0) this.registry.delete(topic);
-      return true;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+  ): void | Error {
+    if (typeof listener !== "function") return new InvalidListenerError();
+    for (const [registeredTopic, listeners] of this.registry) {
+      if (!dequal(registeredTopic, topic)) continue;
+      listeners.delete(listener as Listener);
+      if (listeners.size === 0) this.registry.delete(registeredTopic);
+      return;
     }
-    return false;
   }
 
   protected mutate<Name extends StringKey<Mutations>>(
@@ -121,7 +120,7 @@ export class SyncEngine<
   protected publish(event: ListenerEvent): void {
     for (const [topic, listeners] of this.registry) {
       if (!dequal(topic, event.topic)) continue;
-      for (const listener of listeners.values()) void listener(event);
+      for (const listener of listeners) void listener(event);
       return;
     }
   }

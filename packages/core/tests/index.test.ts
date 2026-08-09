@@ -7,7 +7,6 @@ import type {
   Listener,
   ListenerEvent,
   Query,
-  ListenerId,
   SyncEngineInterface,
   Topic,
 } from "../src/index.js";
@@ -43,11 +42,6 @@ test("exports canonical topic and listener APIs", async () => {
     const bigIntValue: bigint = brandedBigInt;
     const brandedSymbol = undefined as unknown as Branded<symbol, "TestSymbol">;
     const symbolValue: symbol = brandedSymbol;
-    // @ts-expect-error — raw strings are not ListenerId values
-    const rawListenerId: ListenerId = "listener-id";
-    const otherId = undefined as unknown as Branded<number, "OtherId">;
-    // @ts-expect-error — differently tagged numbers are not ListenerId values
-    const otherListenerId: ListenerId = otherId;
     const validParams: BaseParams = [{ nested: ["value"] }];
     // @ts-expect-error — BaseParams must be an array
     const invalidParams: BaseParams = "value";
@@ -58,8 +52,6 @@ test("exports canonical topic and listener APIs", async () => {
     void booleanValue;
     void bigIntValue;
     void symbolValue;
-    void otherListenerId;
-    void rawListenerId;
   }
 
   const topic = expectOk(engine.createTopic("numbers", []));
@@ -70,8 +62,7 @@ test("exports canonical topic and listener APIs", async () => {
   });
 
   const listener: Listener = () => {};
-  const listenerId: ListenerId = expectOk(engine.subscribe(topic, listener));
-  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  expectOk(engine.subscribe(topic, listener));
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
@@ -82,8 +73,8 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
-  expect(engine.unsubscribe(listenerId)).toBe(true);
-  expect(engine.unsubscribe(listenerId)).toBe(false);
+  expectOk(engine.unsubscribe(topic, listener));
+  expectOk(engine.unsubscribe(topic, listener));
 });
 
 test("typed topic params, listener values, mutations, and sync", async () => {
@@ -106,14 +97,14 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const topic: Topic<"numbers", []> = expectOk(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
-  const listenerId = expectOk(
-    engine.subscribe(topic, ({ topic: publishedTopic, value }) => {
-      events.push({ topic: publishedTopic, value });
-    }),
-  );
+  const listener: Listener<ListenerEvent<"numbers", [], number[]>> = ({
+    topic: publishedTopic,
+    value,
+  }) => {
+    events.push({ topic: publishedTopic, value });
+  };
+  expectOk(engine.subscribe(topic, listener));
   expectOk(engine.sync("noop", []));
-
-  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -164,9 +155,8 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  const listenerId = expectOk(engine.subscribe(topic, listener));
-  expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
-  expect(engine.unsubscribe(listenerId)).toBe(true);
+  expectOk(engine.subscribe(topic, listener));
+  expectOk(engine.unsubscribe(topic, listener));
 });
 
 test("compares structurally equal topics", async () => {
@@ -187,8 +177,7 @@ test("compares structurally equal topics", async () => {
   const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
   const listener: Listener = () => {};
 
-  const listenerId = expectOk(engine.subscribe(firstTopic, listener));
-
-  expect(engine.subscribe(secondTopic, listener)).toBe(listenerId);
-  expect(engine.unsubscribe(listenerId)).toBe(true);
+  expectOk(engine.subscribe(firstTopic, listener));
+  expect(engine.subscribe(secondTopic, listener)).toBeUndefined();
+  expectOk(engine.unsubscribe(firstTopic, listener));
 });

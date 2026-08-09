@@ -173,15 +173,14 @@ describe("SyncEngine topics and events", () => {
     const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = expectOk(engine.subscribe(topic, first.listener));
-    expect(expectOk(engine.subscribe(topic, first.listener))).toEqual(firstListenerId);
-    const secondListenerId = expectOk(engine.subscribe(topic, second.listener));
-    expect(secondListenerId).not.toEqual(firstListenerId);
+    expectOk(engine.subscribe(topic, first.listener));
+    expect(engine.subscribe(topic, first.listener)).toBeUndefined();
+    expectOk(engine.subscribe(topic, second.listener));
 
     engine.sync("insertUser", ["charlie"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(1);
-    expect(engine.unsubscribe(firstListenerId)).toBe(true);
+    expectOk(engine.unsubscribe(topic, first.listener));
     engine.sync("insertUser", ["dave"]);
     expect(first.events).toHaveLength(1);
     expect(second.events).toHaveLength(2);
@@ -191,14 +190,14 @@ describe("SyncEngine topics and events", () => {
     const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    const firstListenerId = expectOk(engine.subscribe(topic, first.listener));
-    const secondListenerId = expectOk(engine.subscribe(topic, second.listener));
+    expectOk(engine.subscribe(topic, first.listener));
+    expectOk(engine.subscribe(topic, second.listener));
     // Test-only access verifies the private topic lifecycle.
     const registry = (engine as unknown as { registry: Map<unknown, unknown> }).registry;
 
-    expect(engine.unsubscribe(firstListenerId)).toBe(true);
+    expectOk(engine.unsubscribe(topic, first.listener));
     expect(registry.size).toBe(1);
-    expect(engine.unsubscribe(secondListenerId)).toBe(true);
+    expectOk(engine.unsubscribe(topic, second.listener));
     expect(registry.size).toBe(0);
   });
 

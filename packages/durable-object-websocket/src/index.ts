@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { type RpcStub, RpcTarget, newWorkersWebSocketRpcResponse } from "capnweb";
 import type {
-  ListenerId,
   MutationMap,
   OperationParams,
   QueryMap,
@@ -32,7 +31,8 @@ export type DurableObjectWebSocketApi<Q extends QueryMap<Q>, M extends MutationM
 };
 
 class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTarget {
-  #listenerId: ListenerId | null = null;
+  #listener: ((event: DurableObjectWebSocketEvent) => void) | null = null;
+  #topic: Topic | null = null;
   #active = true;
   private constructor(
     private readonly engine: SyncEngineInterface<Q, M>,
@@ -51,12 +51,14 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     topic: Topic;
   }): Error | Subscription<Q, M> {
     const subscription = new Subscription(engine, listener.dup());
-    const listenerId = engine.subscribe(topic as never, (event) => void subscription.notify(event));
-    if (listenerId instanceof Error) {
+    const callback = (event: DurableObjectWebSocketEvent) => void subscription.notify(event);
+    const subscribed = engine.subscribe(topic as never, callback as never);
+    if (subscribed instanceof Error) {
       subscription[Symbol.dispose]();
-      return listenerId;
+      return subscribed;
     }
-    subscription.#listenerId = listenerId;
+    subscription.#topic = topic;
+    subscription.#listener = callback;
     return subscription;
   }
 
@@ -74,8 +76,9 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     if (!this.#active) return false;
     this.#active = false;
     this.listener[Symbol.dispose]();
-    if (this.#listenerId === null) return false;
-    return this.engine.unsubscribe(this.#listenerId);
+    if (this.#topic === null || this.#listener === null) return false;
+    this.engine.unsubscribe(this.#topic as never, this.#listener as never);
+    return true;
   }
 
   [Symbol.dispose](): void {
