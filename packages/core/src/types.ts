@@ -31,15 +31,12 @@ export type OperationResult<OperationDef> = OperationDef extends {
   ? Result
   : never;
 
-export type TopicHash = Branded<string, "TopicHash">;
-
 export type Topic<
   Name extends string = string,
   Params extends readonly unknown[] = readonly unknown[],
 > = {
   readonly name: Name;
   readonly params: Params;
-  readonly hash: TopicHash;
 };
 
 export type ListenerEvent<
@@ -87,7 +84,7 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<Topic<Name, OperationParams<Queries[Name]>> | Error>;
+  ): Topic<Name, OperationParams<Queries[Name]>> | Error;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
   ): OperationResult<Queries[Name]> | Error;

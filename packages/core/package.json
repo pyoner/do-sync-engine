@@ -39,6 +39,7 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
+    "dequal": "catalog:",
     "errore": "catalog:"
   },
   "devDependencies": {

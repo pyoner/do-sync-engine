@@ -9,7 +9,6 @@ import type {
   ListenerId,
   SyncEngineInterface,
   Topic,
-  TopicHash,
 } from "../src/index.js";
 
 function expectOk<T>(value: T): Exclude<T, Error> {
@@ -45,8 +44,6 @@ test("exports canonical topic and listener APIs", async () => {
     const symbolValue: symbol = brandedSymbol;
     // @ts-expect-error — raw strings are not ListenerId values
     const rawListenerId: ListenerId = "listener-id";
-    // @ts-expect-error — raw strings are not TopicHash values
-    const rawTopicHash: TopicHash = "hash";
     const otherId = undefined as unknown as Branded<number, "OtherId">;
     // @ts-expect-error — differently tagged numbers are not ListenerId values
     const otherListenerId: ListenerId = otherId;
@@ -55,19 +52,15 @@ test("exports canonical topic and listener APIs", async () => {
     void booleanValue;
     void bigIntValue;
     void symbolValue;
-    void rawListenerId;
-    void rawTopicHash;
     void otherListenerId;
+    void rawListenerId;
   }
 
-  const topic = expectOk(await engine.createTopic("numbers", []));
-  const topicHash: TopicHash = topic.hash;
-  expect(topicHash).toBeTypeOf("string");
+  const topic = expectOk(engine.createTopic("numbers", []));
 
   expect(topic).toEqual({
     name: "numbers",
     params: [],
-    hash: "7847f04c5bf09defec728bc6476dd97e2ff6f42f192ee38632308a5713d2f43f",
   });
 
   const listener: Listener = () => {};
@@ -104,7 +97,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     queries,
     mutations,
   });
-  const topic: Topic<"numbers", []> = expectOk(await engine.createTopic("numbers", []));
+  const topic: Topic<"numbers", []> = expectOk(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
   const listenerId = expectOk(
@@ -132,9 +125,6 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     const params = topic.params;
     // @ts-expect-error — Topic properties are readonly
     topic.params = params;
-    const hash = topic.hash;
-    // @ts-expect-error — Topic properties are readonly
-    topic.hash = hash;
     const event: ListenerEvent = { topic, value: [] };
     // @ts-expect-error — ListenerEvent properties are readonly
     event.topic = topic;
@@ -142,7 +132,6 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     event.value = [];
   }
 });
-
 test("typed createTopic params and listener handle", async () => {
   const queries = {
     numbers: {
@@ -157,7 +146,7 @@ test("typed createTopic params and listener handle", async () => {
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations });
-  const topic = expectOk(await engine.createTopic("numbers", [42]));
+  const topic = expectOk(engine.createTopic("numbers", [42]));
   const listener: Listener = () => {};
 
   if (false as boolean) {
@@ -171,5 +160,29 @@ test("typed createTopic params and listener handle", async () => {
 
   const listenerId = expectOk(engine.subscribe(topic, listener));
   expect(listenerId).toMatch(/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/);
+  expect(engine.unsubscribe(listenerId)).toBe(true);
+});
+
+test("compares structurally equal topics", async () => {
+  const queries = {
+    numbers: {
+      tables: toTables(["numbers"]),
+      run: (filter: { page: number; search: string }) => filter.page,
+    } satisfies Query<[{ page: number; search: string }], number>,
+  };
+  const mutations = {
+    noop: {
+      tables: toTables([]),
+      run: () => ({}),
+    } satisfies Mutation<[], Record<string, never>>,
+  };
+  const engine = new SyncEngine({ queries, mutations });
+  const firstTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
+  const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
+  const listener: Listener = () => {};
+
+  const listenerId = expectOk(engine.subscribe(firstTopic, listener));
+
+  expect(engine.subscribe(secondTopic, listener)).toBe(listenerId);
   expect(engine.unsubscribe(listenerId)).toBe(true);
 });

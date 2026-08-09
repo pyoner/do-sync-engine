@@ -6,7 +6,6 @@ export {
   InvalidTopicError,
   MutationExecutionError,
   QueryExecutionError,
-  TopicCollisionError,
   UnknownMutationError,
   UnknownQueryError,
 } from "./errors";
@@ -26,5 +25,4 @@ export type {
   SyncEngineInterface,
   SyncEngineOptions,
   Topic,
-  TopicHash,
 } from "./types";

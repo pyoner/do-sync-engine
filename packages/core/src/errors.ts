@@ -25,11 +25,6 @@ export class InvalidListenerError extends errore.createTaggedError({
   message: "Listener must be a function",
 }) {}
 
-export class TopicCollisionError extends errore.createTaggedError({
-  name: "TopicCollisionError",
-  message: "Topic hash collision: $hash",
-}) {}
-
 export class QueryExecutionError extends errore.createTaggedError({
   name: "QueryExecutionError",
   message: "Query execution failed",

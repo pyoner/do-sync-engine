@@ -1,12 +1,12 @@
+import { dequal } from "dequal";
 import * as errore from "errore";
 import {
   InvalidListenerError,
   MutationExecutionError,
   QueryExecutionError,
-  TopicCollisionError,
   UnknownMutationError,
 } from "./errors";
-import { assertKnownQuery, buildTopic, cloneOrThrow, validateTopic } from "./helpers";
+import { assertKnownQuery, cloneOrThrow, validateTopic } from "./helpers";
 import type {
   Listener,
   ListenerEvent,
@@ -22,8 +22,8 @@ import type {
   SyncEngineOptions,
   Table,
   Topic,
-  TopicHash,
 } from "./types";
+type Listeners = Map<ListenerId, Listener>;
 
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -31,10 +31,7 @@ export class SyncEngine<
 > implements SyncEngineInterface<Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<unknown[], unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<unknown[], unknown>>;
-  private readonly registry = new Map<
-    TopicHash,
-    { topic: Topic<StringKey<Queries>, readonly unknown[]>; listeners: Map<ListenerId, Listener> }
-  >();
+  private readonly registry = new Map<Topic<StringKey<Queries>, readonly unknown[]>, Listeners>();
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
     this.queries = new Map(
@@ -45,15 +42,15 @@ export class SyncEngine<
     );
   }
 
-  async createTopic<Name extends StringKey<Queries>>(
+  createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Promise<Topic<Name, OperationParams<Queries[Name]>> | Error> {
+  ): Topic<Name, OperationParams<Queries[Name]>> | Error {
     const knownQuery = assertKnownQuery(name, this.queries);
     if (knownQuery instanceof Error) return knownQuery;
     const topicParams = cloneOrThrow(params, "Topic params");
     if (topicParams instanceof Error) return topicParams;
-    return buildTopic(name, topicParams);
+    return { name, params: topicParams };
   }
 
   subscribe<Name extends StringKey<Queries>>(
@@ -68,32 +65,30 @@ export class SyncEngine<
     if (validatedTopic instanceof Error) return validatedTopic;
     if (typeof listener !== "function") return new InvalidListenerError();
 
-    let entry = this.registry.get(validatedTopic.hash);
-    if (entry === undefined) {
-      entry = {
-        topic: validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>,
-        listeners: new Map(),
-      };
-      this.registry.set(validatedTopic.hash, entry);
-    } else {
-      const existingParams = JSON.stringify(entry.topic.params);
-      const nextParams = JSON.stringify(validatedTopic.params);
-      if (entry.topic.name !== validatedTopic.name || existingParams !== nextParams)
-        return new TopicCollisionError({ hash: validatedTopic.hash });
+    let listeners: Map<ListenerId, Listener> | undefined;
+    for (const [registeredTopic, registeredListeners] of this.registry) {
+      if (dequal(registeredTopic, validatedTopic)) {
+        listeners = registeredListeners;
+        break;
+      }
+    }
+    if (listeners === undefined) {
+      listeners = new Map();
+      this.registry.set(validatedTopic as Topic<StringKey<Queries>, readonly unknown[]>, listeners);
     }
 
-    for (const [listenerId, existingListener] of entry.listeners) {
+    for (const [listenerId, existingListener] of listeners) {
       if (existingListener === listener) return listenerId;
     }
     const listenerId = globalThis.crypto.randomUUID() as ListenerId;
-    entry.listeners.set(listenerId, listener as Listener);
+    listeners.set(listenerId, listener as Listener);
     return listenerId;
   }
 
   unsubscribe(listenerId: ListenerId): boolean {
-    for (const [topicHash, entry] of this.registry) {
-      if (!entry.listeners.delete(listenerId)) continue;
-      if (entry.listeners.size === 0) this.registry.delete(topicHash);
+    for (const [topic, listeners] of this.registry) {
+      if (!listeners.delete(listenerId)) continue;
+      if (listeners.size === 0) this.registry.delete(topic);
       return true;
     }
     return false;
@@ -127,9 +122,11 @@ export class SyncEngine<
   }
 
   protected publish(event: ListenerEvent): void {
-    const entry = this.registry.get(event.topic.hash);
-    if (!entry) return;
-    for (const listener of entry.listeners.values()) void listener(event);
+    for (const [topic, listeners] of this.registry) {
+      if (!dequal(topic, event.topic)) continue;
+      for (const listener of listeners.values()) void listener(event);
+      return;
+    }
   }
 
   sync<Name extends StringKey<Mutations>>(
@@ -138,7 +135,7 @@ export class SyncEngine<
   ): void | Error {
     const changedTables = this.mutate(mutation, params);
     if (changedTables instanceof Error) return changedTables;
-    for (const { topic } of this.registry.values()) {
+    for (const topic of this.registry.keys()) {
       const queryDefinition = this.queries.get(topic.name);
       if (queryDefinition === undefined) continue;
       if (![...queryDefinition.tables].some((table) => changedTables.has(table))) continue;

@@ -1,6 +1,6 @@
 import * as errore from "errore";
 import { CloneError, InvalidTopicError, UnknownQueryError } from "./errors";
-import type { Table, Topic, TopicHash } from "./types";
+import type { Table, Topic } from "./types";
 
 export function toTables(names: readonly string[]): Set<Table> {
   return new Set(names as readonly Table[]);
@@ -20,20 +20,6 @@ export function assertKnownQuery(
   if (!knownQueries.has(query)) return new UnknownQueryError({ query });
 }
 
-export async function buildTopic<Name extends string, Params extends readonly unknown[]>(
-  name: Name,
-  params: Params,
-): Promise<Topic<Name, Params>> {
-  const input = { name, params };
-  const serialized = JSON.stringify(input);
-  const bytes = new TextEncoder().encode(serialized);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-  const hash = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("") as TopicHash;
-  return { name, params, hash };
-}
-
 export function validateTopic(
   topic: unknown,
   knownQueryNames: { has(query: string): boolean },
@@ -41,17 +27,13 @@ export function validateTopic(
   if (typeof topic !== "object" || topic === null)
     return new InvalidTopicError({ reason: "Topic must be an object" });
 
-  const candidate = topic as { name?: unknown; params?: unknown; hash?: unknown };
+  const candidate = topic as { name?: unknown; params?: unknown };
   if (typeof candidate.name !== "string")
     return new InvalidTopicError({ reason: "Topic name must be a string" });
   const knownQuery = assertKnownQuery(candidate.name, knownQueryNames);
   if (knownQuery instanceof Error) return knownQuery;
   if (!Array.isArray(candidate.params))
     return new InvalidTopicError({ reason: "Topic params must be an array" });
-  if (typeof candidate.hash !== "string" || !/^[0-9a-f]{64}$/.test(candidate.hash))
-    return new InvalidTopicError({
-      reason: "Topic hash must be 64 lowercase hexadecimal characters",
-    });
 
   return candidate as Topic<string, readonly unknown[]>;
 }

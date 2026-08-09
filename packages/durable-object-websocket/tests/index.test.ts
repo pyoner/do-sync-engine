@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { FixtureSyncObject } from "./cloudflare-worker.ts";
 
-type Event = { topic: { hash: string; name: string; params: unknown[] }; value: unknown };
+type Event = { topic: { name: string; params: unknown[] }; value: unknown };
 type Subscription = { unsubscribe(): boolean };
 type Api = {
   subscribe(query: "counter", params: [string], listener: (event: Event) => void): Subscription;

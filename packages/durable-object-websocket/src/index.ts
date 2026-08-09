@@ -93,7 +93,7 @@ class SyncSession<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTa
     params: unknown[],
     listener: RpcStub<DurableObjectWebSocketListener>,
   ): Promise<DurableObjectWebSocketSubscription | Error> {
-    const topic = await this.engine.createTopic<StringKey<Q>>(
+    const topic = this.engine.createTopic<StringKey<Q>>(
       query,
       params as OperationParams<Q[StringKey<Q>]>,
     );

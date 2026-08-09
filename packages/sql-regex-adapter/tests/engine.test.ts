@@ -68,34 +68,30 @@ describe("SyncEngine topics and events", () => {
     storage.close();
   });
 
-  test("creates canonical SHA-256 topics", async () => {
-    const first = expectOk(await engine.createTopic("allUsers", []));
-    const equivalent = expectOk(await engine.createTopic("allUsers", []));
-    const changedParams = expectOk(await engine.createTopic("userById", [1]));
-    const changedName = expectOk(await engine.createTopic("postsOnly", []));
+  test("creates cloned topics", async () => {
+    const first = expectOk(engine.createTopic("allUsers", []));
+    const equivalent = expectOk(engine.createTopic("allUsers", []));
+    const changedParams = expectOk(engine.createTopic("userById", [1]));
+    const changedName = expectOk(engine.createTopic("postsOnly", []));
     const params = [1];
-    const clonedTopic = expectOk(await engine.createTopic("userById", params));
+    const clonedTopic = expectOk(engine.createTopic("userById", params));
     params[0] = 2;
     expect(clonedTopic.params).toEqual([1]);
 
-    expect(first).toEqual({
-      name: "allUsers",
-      params: [],
-      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
-    });
+    expect(first).toEqual({ name: "allUsers", params: [] });
     expect(equivalent).toEqual(first);
-    expect(changedParams.hash).not.toBe(first.hash);
-    expect(changedName.hash).not.toBe(first.hash);
+    expect(changedParams).not.toEqual(first);
+    expect(changedName).not.toEqual(first);
   });
 
   test("runs queries through the public engine interface", async () => {
-    const topic = expectOk(await engine.createTopic("userById", [2]));
+    const topic = expectOk(engine.createTopic("userById", [2]));
     expect(engine.query({ ...topic, name: "missing" } as never)).toBeInstanceOf(Error);
     expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("sync runs matching topics once and fans out the same event", async () => {
-    const topic = expectOk(await engine.createTopic("allUsers", []));
+    const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     engine.subscribe(topic, first.listener);
@@ -131,8 +127,8 @@ describe("SyncEngine topics and events", () => {
       queries: { trackedUserById, trackedPosts },
       mutations: { updateUserName },
     });
-    const topic = expectOk(await engine.createTopic("trackedUserById", [2]));
-    const postsTopic = expectOk(await engine.createTopic("trackedPosts", []));
+    const topic = expectOk(engine.createTopic("trackedUserById", [2]));
+    const postsTopic = expectOk(engine.createTopic("trackedPosts", []));
     const captured = captureEvents();
     engine.subscribe(topic, captured.listener);
     engine.subscribe(postsTopic, captured.listener);
@@ -168,13 +164,13 @@ describe("SyncEngine topics and events", () => {
     engine.sync("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
 
-    const failingTopic = expectOk(await engine.createTopic("failingQuery", []));
+    const failingTopic = expectOk(engine.createTopic("failingQuery", []));
     engine.subscribe(failingTopic, noopPublish);
     const result = engine.sync("insertUser", ["dave"]);
     expect(result).toBeInstanceOf(Error);
   });
   test("duplicate listeners follow EventTarget semantics", async () => {
-    const topic = expectOk(await engine.createTopic("allUsers", []));
+    const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     const firstListenerId = expectOk(engine.subscribe(topic, first.listener));
@@ -192,7 +188,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("removes topics after their final listener unsubscribes", async () => {
-    const topic = expectOk(await engine.createTopic("allUsers", []));
+    const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
     const firstListenerId = expectOk(engine.subscribe(topic, first.listener));
@@ -206,13 +202,13 @@ describe("SyncEngine topics and events", () => {
     expect(registry.size).toBe(0);
   });
 
-  test("listener dispatch is scoped by topic hash", async () => {
+  test("listener dispatch is scoped by topic", async () => {
     const exposed = new ExposedEngine({
       queries: { allUsers, postsOnly },
       mutations: {},
     });
-    const usersTopic = expectOk(await exposed.createTopic("allUsers", []));
-    const postsTopic = expectOk(await exposed.createTopic("postsOnly", []));
+    const usersTopic = expectOk(exposed.createTopic("allUsers", []));
+    const postsTopic = expectOk(exposed.createTopic("postsOnly", []));
     const users = captureEvents();
     const posts = captureEvents();
     exposed.subscribe(usersTopic, users.listener);
@@ -246,7 +242,7 @@ describe("SyncEngine topics and events", () => {
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
     });
-    const topic = expectOk(await engine.createTopic("synchronousQuery", []));
+    const topic = expectOk(engine.createTopic("synchronousQuery", []));
     engine.subscribe(topic, () => calls.push("listener"));
 
     engine.sync("synchronousMutation", []);
@@ -255,7 +251,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("allows asynchronous listeners without delaying sync", async () => {
-    const topic = expectOk(await engine.createTopic("allUsers", []));
+    const topic = expectOk(engine.createTopic("allUsers", []));
     let completed = false;
     engine.subscribe(topic, async () => {
       await Promise.resolve();
@@ -269,17 +265,14 @@ describe("SyncEngine topics and events", () => {
     expect(completed).toBe(true);
   });
 
-  test("validates manually supplied topics and hash collisions", async () => {
-    const validTopic = expectOk(await engine.createTopic("allUsers", []));
+  test("validates manually supplied topics", async () => {
+    const validTopic = expectOk(engine.createTopic("allUsers", []));
     expect(
       engine.subscribe({ ...validTopic, name: "missing" } as never, noopPublish),
     ).toBeInstanceOf(Error);
-    expect(engine.subscribe({ ...validTopic, hash: "0" } as never, noopPublish)).toBeInstanceOf(
-      Error,
+    expect(engine.subscribe({ ...validTopic, params: [1] } as never, noopPublish)).toMatch(
+      /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/,
     );
     engine.subscribe(validTopic, noopPublish);
-    expect(engine.subscribe({ ...validTopic, params: [1] } as never, noopPublish)).toBeInstanceOf(
-      Error,
-    );
   });
 });
