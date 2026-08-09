@@ -55,7 +55,6 @@ export type OperationResult<OperationDef> = OperationDef extends {
 }
   ? Result
   : never;
-export type OperationError<OperationDef> = Extract<OperationResult<OperationDef>, Error>;
 
 export type Topic<Name extends string = string, Params extends BaseParams = BaseParams> = {
   readonly name: Name;
@@ -130,8 +129,6 @@ export interface SyncEngineInterface<
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ):
-    | OperationError<Mutations[Name]>
-    | OperationError<Queries[StringKey<Queries>]>
     | void
     | InvalidTopicError
     | UnknownQueryError

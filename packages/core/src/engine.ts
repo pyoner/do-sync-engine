@@ -16,7 +16,6 @@ import type {
   ListenerEvent,
   Mutation,
   MutationMap,
-  OperationError,
   OperationParams,
   OperationResult,
   Query,
@@ -99,15 +98,14 @@ export class SyncEngine<
   protected mutate<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): Set<Table> | OperationError<Mutations[Name]> | UnknownMutationError | MutationExecutionError {
+  ): Set<Table> | UnknownMutationError | MutationExecutionError {
     const mutationDefinition = this.mutations.get(mutation);
     if (mutationDefinition === undefined) return new UnknownMutationError({ mutation });
     const result = errore.try({
       try: () => mutationDefinition.run(...(params as BaseParams)),
       catch: (cause) => new MutationExecutionError({ cause }),
     });
-    if (result instanceof Error)
-      return result as OperationError<Mutations[Name]> | MutationExecutionError;
+    if (result instanceof MutationExecutionError) return result;
     return mutationDefinition.tables;
   }
 
@@ -138,8 +136,6 @@ export class SyncEngine<
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ):
-    | OperationError<Mutations[Name]>
-    | OperationError<Queries[StringKey<Queries>]>
     | void
     | InvalidTopicError
     | UnknownQueryError
@@ -153,8 +149,7 @@ export class SyncEngine<
       if (queryDefinition === undefined) continue;
       if (![...queryDefinition.tables].some((table) => changedTables.has(table))) continue;
       const value = this.query(topic as never);
-      if (value instanceof Error)
-        return value as OperationError<Queries[StringKey<Queries>]> | QueryExecutionError;
+      if (value instanceof Error) return value;
       this.publish({ topic, value });
     }
   }
