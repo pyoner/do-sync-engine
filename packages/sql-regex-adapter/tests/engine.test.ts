@@ -265,14 +265,10 @@ describe("SyncEngine topics and events", () => {
     expect(completed).toBe(true);
   });
 
-  test("validates manually supplied topics", async () => {
+  test("validates topics when creating and querying", async () => {
+    expect(engine.createTopic("missing", [])).toBeInstanceOf(Error);
     const validTopic = expectOk(engine.createTopic("allUsers", []));
-    expect(
-      engine.subscribe({ ...validTopic, name: "missing" } as never, noopPublish),
-    ).toBeInstanceOf(Error);
-    expect(engine.subscribe({ ...validTopic, params: [1] } as never, noopPublish)).toMatch(
-      /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/,
-    );
+    expect(engine.query({ ...validTopic, name: "missing" } as never)).toBeInstanceOf(Error);
     engine.subscribe(validTopic, noopPublish);
   });
 });

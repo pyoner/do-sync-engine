@@ -19,6 +19,20 @@ export function assertKnownQuery(
 ): undefined | UnknownQueryError {
   if (!knownQueries.has(query)) return new UnknownQueryError({ query });
 }
+export function createTopic<Name extends string, Params extends BaseParams>(
+  name: Name,
+  params: Params,
+  knownQueryNames: { has(query: string): boolean },
+): Topic<Name, Params> | CloneError | InvalidTopicError | UnknownQueryError {
+  const knownQuery = assertKnownQuery(name, knownQueryNames);
+  if (knownQuery instanceof Error) return knownQuery;
+  const topicParams = cloneOrThrow(params, "Topic params");
+  if (topicParams instanceof Error) return topicParams;
+  const topic = { name, params: topicParams };
+  const validatedTopic = validateTopic(topic, knownQueryNames);
+  if (validatedTopic instanceof Error) return validatedTopic;
+  return topic;
+}
 
 export function validateTopic(
   topic: unknown,

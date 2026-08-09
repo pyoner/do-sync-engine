@@ -6,7 +6,7 @@ import {
   QueryExecutionError,
   UnknownMutationError,
 } from "./errors";
-import { assertKnownQuery, cloneOrThrow, validateTopic } from "./helpers";
+import { createTopic, validateTopic } from "./helpers";
 import type {
   BaseParams,
   Listener,
@@ -47,11 +47,7 @@ export class SyncEngine<
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Topic<Name, OperationParams<Queries[Name]>> | Error {
-    const knownQuery = assertKnownQuery(name, this.queries);
-    if (knownQuery instanceof Error) return knownQuery;
-    const topicParams = cloneOrThrow(params, "Topic params");
-    if (topicParams instanceof Error) return topicParams;
-    return { name, params: topicParams };
+    return createTopic(name, params, this.queries);
   }
 
   subscribe<Name extends StringKey<Queries>>(
@@ -60,22 +56,18 @@ export class SyncEngine<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
   ): ListenerId | Error {
-    const clonedTopic = cloneOrThrow(topic, "Topic");
-    if (clonedTopic instanceof Error) return clonedTopic;
-    const validatedTopic = validateTopic(clonedTopic, this.queries);
-    if (validatedTopic instanceof Error) return validatedTopic;
     if (typeof listener !== "function") return new InvalidListenerError();
 
     let listeners: Map<ListenerId, Listener> | undefined;
     for (const [registeredTopic, registeredListeners] of this.registry) {
-      if (dequal(registeredTopic, validatedTopic)) {
+      if (dequal(registeredTopic, topic)) {
         listeners = registeredListeners;
         break;
       }
     }
     if (listeners === undefined) {
       listeners = new Map();
-      this.registry.set(validatedTopic as Topic<StringKey<Queries>, BaseParams>, listeners);
+      this.registry.set(topic as Topic<StringKey<Queries>, BaseParams>, listeners);
     }
 
     for (const [listenerId, existingListener] of listeners) {
