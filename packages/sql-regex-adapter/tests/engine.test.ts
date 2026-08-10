@@ -68,15 +68,11 @@ describe("SyncEngine topics and events", () => {
     storage.close();
   });
 
-  test("creates cloned topics", async () => {
+  test("creates topics", async () => {
     const first = expectOk(engine.createTopic("allUsers", []));
     const equivalent = expectOk(engine.createTopic("allUsers", []));
     const changedParams = expectOk(engine.createTopic("userById", [1]));
     const changedName = expectOk(engine.createTopic("postsOnly", []));
-    const params = [1];
-    const clonedTopic = expectOk(engine.createTopic("userById", params));
-    params[0] = 2;
-    expect(clonedTopic.params).toEqual([1]);
 
     expect(first).toEqual({ name: "allUsers", params: [] });
     expect(equivalent).toEqual(first);

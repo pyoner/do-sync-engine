@@ -1,15 +1,13 @@
 import { dequal } from "dequal";
 import * as errore from "errore";
 import {
-  CloneError,
   InvalidListenerError,
-  InvalidTopicError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
   UnknownQueryError,
 } from "./errors";
-import { assertKnownQuery, createTopic, validateTopic } from "./helpers";
+import { assertKnownQuery, createTopic } from "./helpers";
 import type {
   BaseParams,
   Listener,
@@ -48,11 +46,7 @@ export class SyncEngine<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ):
-    | Topic<Name, OperationParams<Queries[Name]>>
-    | CloneError
-    | InvalidTopicError
-    | UnknownQueryError {
+  ): Topic<Name, OperationParams<Queries[Name]>> | UnknownQueryError {
     const knownQuery = assertKnownQuery(name, this.queries);
     if (knownQuery instanceof Error) return knownQuery;
     return createTopic(name, params);
@@ -111,15 +105,13 @@ export class SyncEngine<
 
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | InvalidTopicError | UnknownQueryError | QueryExecutionError {
-    const validated = validateTopic(topic);
-    if (validated instanceof Error) return validated;
-    const knownQuery = assertKnownQuery(validated.name, this.queries);
+  ): OperationResult<Queries[Name]> | UnknownQueryError | QueryExecutionError {
+    const knownQuery = assertKnownQuery(topic.name, this.queries);
     if (knownQuery instanceof Error) return knownQuery;
-    const queryDefinition = this.queries.get(validated.name);
+    const queryDefinition = this.queries.get(topic.name);
     if (queryDefinition === undefined) return new QueryExecutionError();
     return errore.try({
-      try: () => queryDefinition.run(...validated.params) as OperationResult<Queries[Name]>,
+      try: () => queryDefinition.run(...topic.params) as OperationResult<Queries[Name]>,
       catch: (cause) => new QueryExecutionError({ cause }),
     });
   }
@@ -137,7 +129,6 @@ export class SyncEngine<
     params: OperationParams<Mutations[Name]>,
   ):
     | void
-    | InvalidTopicError
     | UnknownQueryError
     | UnknownMutationError
     | MutationExecutionError

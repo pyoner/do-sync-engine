@@ -1,9 +1,7 @@
 export { toTables } from "./helpers";
 export { SyncEngine } from "./engine";
 export {
-  CloneError,
   InvalidListenerError,
-  InvalidTopicError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,

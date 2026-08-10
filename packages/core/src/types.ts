@@ -1,13 +1,10 @@
 import type {
-  CloneError,
   InvalidListenerError,
-  InvalidTopicError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
   UnknownQueryError,
 } from "./errors";
-
 declare const brand: unique symbol;
 
 export type Branded<
@@ -105,14 +102,10 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ):
-    | Topic<Name, OperationParams<Queries[Name]>>
-    | CloneError
-    | InvalidTopicError
-    | UnknownQueryError;
+  ): Topic<Name, OperationParams<Queries[Name]>> | UnknownQueryError;
   query<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | InvalidTopicError | UnknownQueryError | QueryExecutionError;
+  ): OperationResult<Queries[Name]> | UnknownQueryError | QueryExecutionError;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
@@ -128,11 +121,5 @@ export interface SyncEngineInterface<
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ):
-    | void
-    | InvalidTopicError
-    | UnknownQueryError
-    | UnknownMutationError
-    | MutationExecutionError
-    | QueryExecutionError;
+  ): void | UnknownQueryError | UnknownMutationError | MutationExecutionError | QueryExecutionError;
 }

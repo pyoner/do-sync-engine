@@ -1,15 +1,5 @@
 import * as errore from "errore";
 
-export class CloneError extends errore.createTaggedError({
-  name: "CloneError",
-  message: "$label must support structuredClone",
-}) {}
-
-export class InvalidTopicError extends errore.createTaggedError({
-  name: "InvalidTopicError",
-  message: "$reason",
-}) {}
-
 export class UnknownQueryError extends errore.createTaggedError({
   name: "UnknownQueryError",
   message: "Unknown query: $query",
