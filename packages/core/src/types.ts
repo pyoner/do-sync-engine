@@ -1,9 +1,3 @@
-import type {
-  MutationExecutionError,
-  QueryExecutionError,
-  UnknownMutationError,
-  UnknownQueryError,
-} from "./errors";
 declare const brand: unique symbol;
 
 export type Branded<
@@ -101,13 +95,13 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
-  ): Topic<Name, OperationParams<Queries[Name]>> | UnknownQueryError;
+  ): Topic<Name, OperationParams<Queries[Name]>> | Error;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | UnknownQueryError | QueryExecutionError;
+  ): void | Error;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
@@ -117,5 +111,5 @@ export interface SyncEngineInterface<
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void | UnknownQueryError | UnknownMutationError | MutationExecutionError | QueryExecutionError;
+  ): void | Error;
 }
