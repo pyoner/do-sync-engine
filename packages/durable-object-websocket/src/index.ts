@@ -1,8 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { type RpcStub, RpcTarget, newWorkersWebSocketRpcResponse } from "capnweb";
 import type {
+  Listener,
+  ListenerEvent,
   MutationMap,
   OperationParams,
+  OperationResult,
   QueryMap,
   StringKey,
   SyncEngineInterface,
@@ -30,9 +33,17 @@ export type DurableObjectWebSocketApi<Q extends QueryMap<Q>, M extends MutationM
   sync<N extends StringKey<M>>(mutation: N, params: OperationParams<M[N]>): Promise<void | Error>;
 };
 
+type SubscriptionTopic<Q extends QueryMap<Q>> = Topic<
+  StringKey<Q>,
+  OperationParams<Q[StringKey<Q>]>
+>;
+type SubscriptionListener<Q extends QueryMap<Q>> = Listener<
+  ListenerEvent<StringKey<Q>, OperationParams<Q[StringKey<Q>]>, OperationResult<Q[StringKey<Q>]>>
+>;
+
 class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTarget {
-  #listener: ((event: DurableObjectWebSocketEvent) => void) | null = null;
-  #topic: Topic | null = null;
+  #listener: SubscriptionListener<Q> | null = null;
+  #topic: SubscriptionTopic<Q> | null = null;
   #active = true;
   private constructor(
     private readonly engine: SyncEngineInterface<Q, M>,
@@ -48,16 +59,13 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
   }: {
     engine: SyncEngineInterface<Q, M>;
     listener: RpcStub<DurableObjectWebSocketListener>;
-    topic: Topic;
+    topic: SubscriptionTopic<Q>;
   }): Error | Subscription<Q, M> {
     const subscription = new Subscription(engine, listener.dup());
-    const callback = (event: DurableObjectWebSocketEvent) => void subscription.notify(event);
+    const callback: SubscriptionListener<Q> = (event) => void subscription.notify(event);
     subscription.#topic = topic;
     subscription.#listener = callback;
-    const subscribed = engine.subscribe(
-      topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>,
-      callback,
-    );
+    const subscribed = engine.subscribe(topic, callback);
     if (subscribed instanceof Error) {
       subscription[Symbol.dispose]();
       return subscribed;
@@ -80,10 +88,7 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     this.#active = false;
     this.listener[Symbol.dispose]();
     if (this.#topic === null || this.#listener === null) return false;
-    this.engine.unsubscribe(
-      this.#topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>,
-      this.#listener,
-    );
+    this.engine.unsubscribe(this.#topic, this.#listener);
     return true;
   }
 

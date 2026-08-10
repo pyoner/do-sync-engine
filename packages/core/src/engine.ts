@@ -24,7 +24,7 @@ import type {
   Table,
   Topic,
 } from "./types";
-type Listeners = Set<Listener>;
+type Listeners = Set<unknown>;
 
 export class SyncEngine<
   Queries extends QueryMap<Queries> = QueryMap,
@@ -70,9 +70,9 @@ export class SyncEngine<
     }
     if (listeners === undefined) {
       listeners = new Set();
-      this.registry.set(topic as Topic<StringKey<Queries>, BaseParams>, listeners);
+      this.registry.set(topic, listeners);
     }
-    listeners.add(listener as Listener);
+    listeners.add(listener);
     listener({ topic, value });
   }
 
@@ -85,7 +85,7 @@ export class SyncEngine<
     if (typeof listener !== "function") return new InvalidListenerError();
     for (const [registeredTopic, listeners] of this.registry) {
       if (!dequal(registeredTopic, topic)) continue;
-      listeners.delete(listener as Listener);
+      listeners.delete(listener);
       if (listeners.size === 0) this.registry.delete(registeredTopic);
       return;
     }
@@ -121,7 +121,7 @@ export class SyncEngine<
   protected publish(event: ListenerEvent): void {
     for (const [topic, listeners] of this.registry) {
       if (!dequal(topic, event.topic)) continue;
-      for (const listener of listeners) void listener(event);
+      for (const listener of listeners) if (typeof listener === "function") void listener(event);
       return;
     }
   }
