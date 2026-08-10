@@ -79,16 +79,15 @@ function createMutations(storage: SqlDatabase): TodoMutations {
 }
 export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, async () => {
+    super(ctx, env, () => {
       ctx.storage.sql.exec(SCHEMA);
       const storage = new DurableObjectSqlStorage(ctx.storage.sql);
       const queries = createQueries(storage);
       const mutations = createMutations(storage);
-      const engine = new SyncEngine<TodoQueries, TodoMutations>({
+      return new SyncEngine<TodoQueries, TodoMutations>({
         queries,
         mutations,
       });
-      return { engine };
     });
   }
 }

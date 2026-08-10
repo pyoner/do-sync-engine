@@ -1,24 +1,23 @@
-import { exports, env } from "cloudflare:workers";
+import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { FixtureSyncObject } from "./cloudflare-worker.ts";
+import type { DurableObjectWebSocketApi } from "../src/index.ts";
+import type { FixtureMutations, FixtureQueries } from "./cloudflare-worker.ts";
 
 type Event = { topic: { name: string; params: unknown[] }; value: unknown };
-type Subscription = { unsubscribe(): boolean };
-type Api = {
-  subscribe(query: "counter", params: [string], listener: (event: Event) => void): Subscription;
-  sync(mutation: "increment", params: [string, number]): void;
-};
 const worker = exports as unknown as { default: { fetch(request: Request): Promise<Response> } };
-void (env as typeof env & { FIXTURE_SYNC_OBJECT: DurableObjectNamespace<FixtureSyncObject> });
 
-async function connect(): Promise<RpcStub<Api>> {
+async function connect(): Promise<
+  RpcStub<DurableObjectWebSocketApi<FixtureQueries, FixtureMutations>>
+> {
   const response = await worker.default.fetch(
     new Request("https://example.com", { headers: { Upgrade: "websocket" } }),
   );
   const socket = response.webSocket!;
   socket.accept();
-  return newWebSocketRpcSession<Api>(socket);
+  return newWebSocketRpcSession<DurableObjectWebSocketApi<FixtureQueries, FixtureMutations>>(
+    socket,
+  );
 }
 
 describe("Durable Object Cap’n Web transport", () => {
@@ -38,10 +37,12 @@ describe("Durable Object Cap’n Web transport", () => {
       ["alpha"],
       (event) => void events.push(event),
     );
+    if (subscription instanceof Error) throw subscription;
     expect(events[0]?.value).toEqual({ key: "alpha", value: 0 });
     await api.sync("increment", ["alpha", 2]);
     expect(events.at(-1)?.value).toEqual({ key: "alpha", value: 2 });
     expect(await subscription.unsubscribe()).toBe(true);
+    expect(await subscription.unsubscribe()).toBe(false);
     await api.sync("increment", ["alpha", 1]);
     expect(events.at(-1)?.value).toEqual({ key: "alpha", value: 2 });
     api[Symbol.dispose]();

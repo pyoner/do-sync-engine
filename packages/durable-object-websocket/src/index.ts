@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { type RpcStub, RpcTarget, newWorkersWebSocketRpcResponse } from "capnweb";
 import type {
-  Listener,
   ListenerEvent,
   MutationMap,
   OperationParams,
@@ -12,15 +11,6 @@ import type {
   Topic,
 } from "@do-sync-engine/core";
 
-export type DurableObjectWebSocketBinding<Q extends QueryMap<Q>, M extends MutationMap<M>> = {
-  readonly engine: SyncEngineInterface<Q, M>;
-};
-export type DurableObjectWebSocketInitializer<
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
-> = () => DurableObjectWebSocketBinding<Q, M> | Promise<DurableObjectWebSocketBinding<Q, M>>;
-export type DurableObjectWebSocketEvent = { readonly topic: Topic; readonly value: unknown };
-export type DurableObjectWebSocketListener = (event: DurableObjectWebSocketEvent) => void;
 export type DurableObjectWebSocketSubscription = {
   unsubscribe(): boolean;
 };
@@ -28,28 +18,35 @@ export type DurableObjectWebSocketApi<Q extends QueryMap<Q>, M extends MutationM
   subscribe<N extends StringKey<Q>>(
     query: N,
     params: OperationParams<Q[N]>,
-    listener: DurableObjectWebSocketListener,
-  ): Promise<DurableObjectWebSocketSubscription | Error>;
-  sync<N extends StringKey<M>>(mutation: N, params: OperationParams<M[N]>): Promise<void | Error>;
+    listener: (event: ListenerEvent<N, OperationParams<Q[N]>, OperationResult<Q[N]>>) => void,
+  ): DurableObjectWebSocketSubscription | Error;
+  sync<N extends StringKey<M>>(mutation: N, params: OperationParams<M[N]>): void | Error;
 };
 
 type SubscriptionTopic<Q extends QueryMap<Q>> = Topic<
   StringKey<Q>,
   OperationParams<Q[StringKey<Q>]>
 >;
-type SubscriptionListener<Q extends QueryMap<Q>> = Listener<
-  ListenerEvent<StringKey<Q>, OperationParams<Q[StringKey<Q>]>, OperationResult<Q[StringKey<Q>]>>
->;
+type SubscriptionListener<Q extends QueryMap<Q>> = (
+  event: ListenerEvent<
+    StringKey<Q>,
+    OperationParams<Q[StringKey<Q>]>,
+    OperationResult<Q[StringKey<Q>]>
+  >,
+) => void;
 
 class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTarget {
-  #listener: SubscriptionListener<Q> | null = null;
-  #topic: SubscriptionTopic<Q> | null = null;
   #active = true;
+  readonly #listener: SubscriptionListener<Q>;
+  readonly #topic: SubscriptionTopic<Q>;
   private constructor(
     private readonly engine: SyncEngineInterface<Q, M>,
-    private readonly listener: RpcStub<DurableObjectWebSocketListener>,
+    private readonly listener: RpcStub<SubscriptionListener<Q>>,
+    topic: SubscriptionTopic<Q>,
   ) {
     super();
+    this.#topic = topic;
+    this.#listener = (event) => void this.#notify(event);
   }
 
   static create<Q extends QueryMap<Q>, M extends MutationMap<M>>({
@@ -58,14 +55,11 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     topic,
   }: {
     engine: SyncEngineInterface<Q, M>;
-    listener: RpcStub<DurableObjectWebSocketListener>;
+    listener: RpcStub<SubscriptionListener<Q>>;
     topic: SubscriptionTopic<Q>;
   }): Error | Subscription<Q, M> {
-    const subscription = new Subscription(engine, listener.dup());
-    const callback: SubscriptionListener<Q> = (event) => void subscription.notify(event);
-    subscription.#topic = topic;
-    subscription.#listener = callback;
-    const subscribed = engine.subscribe(topic, callback);
+    const subscription = new Subscription(engine, listener.dup(), topic);
+    const subscribed = engine.subscribe(topic, subscription.#listener);
     if (subscribed instanceof Error) {
       subscription[Symbol.dispose]();
       return subscribed;
@@ -73,21 +67,19 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     return subscription;
   }
 
-  async notify(event: DurableObjectWebSocketEvent): Promise<Error | void> {
+  async #notify(event: Parameters<SubscriptionListener<Q>>[0]): Promise<void> {
     const notified = await this.listener(event).catch(
       (cause) => new Error("Failed to deliver subscription update", { cause }),
     );
     if (!(notified instanceof Error)) return;
     console.warn(notified.message, notified);
     this.unsubscribe();
-    return notified;
   }
 
   unsubscribe(): boolean {
     if (!this.#active) return false;
     this.#active = false;
     this.listener[Symbol.dispose]();
-    if (this.#topic === null || this.#listener === null) return false;
     this.engine.unsubscribe(this.#topic, this.#listener);
     return true;
   }
@@ -102,11 +94,11 @@ class SyncSession<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTa
     super();
   }
 
-  async subscribe(
+  subscribe(
     query: StringKey<Q>,
     params: unknown[],
-    listener: RpcStub<DurableObjectWebSocketListener>,
-  ): Promise<DurableObjectWebSocketSubscription | Error> {
+    listener: RpcStub<SubscriptionListener<Q>>,
+  ): DurableObjectWebSocketSubscription | Error {
     const topic = this.engine.createTopic<StringKey<Q>>(
       query,
       params as OperationParams<Q[StringKey<Q>]>,
@@ -118,7 +110,7 @@ class SyncSession<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTa
     return subscription;
   }
 
-  async sync(mutation: StringKey<M>, params: unknown[]): Promise<void | Error> {
+  sync(mutation: StringKey<M>, params: unknown[]): void | Error {
     return this.engine.sync(mutation, params as OperationParams<M[StringKey<M>]>);
   }
 }
@@ -128,23 +120,20 @@ export abstract class DurableObjectWebSocket<
   Q extends QueryMap<Q>,
   M extends MutationMap<M>,
 > extends DurableObject<Env> {
-  private readonly initialization: Promise<void>;
   private engine!: SyncEngineInterface<Q, M>;
 
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
-    initialize: DurableObjectWebSocketInitializer<Q, M>,
+    initialize: () => SyncEngineInterface<Q, M> | Promise<SyncEngineInterface<Q, M>>,
   ) {
     super(ctx, env);
-    this.initialization = ctx.blockConcurrencyWhile(async () => {
-      const { engine } = await initialize();
-      this.engine = engine;
+    void ctx.blockConcurrencyWhile(async () => {
+      this.engine = await initialize();
     });
   }
 
-  async fetch(request: Request): Promise<Response> {
-    await this.initialization;
+  fetch(request: Request): Response {
     return newWorkersWebSocketRpcResponse(request, new SyncSession(this.engine));
   }
 }
