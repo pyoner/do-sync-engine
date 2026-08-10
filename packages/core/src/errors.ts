@@ -10,11 +10,6 @@ export class UnknownMutationError extends errore.createTaggedError({
   message: "Unknown mutation: $mutation",
 }) {}
 
-export class InvalidListenerError extends errore.createTaggedError({
-  name: "InvalidListenerError",
-  message: "Listener must be a function",
-}) {}
-
 export class QueryExecutionError extends errore.createTaggedError({
   name: "QueryExecutionError",
   message: "Query execution failed",

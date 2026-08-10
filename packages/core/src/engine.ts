@@ -1,7 +1,6 @@
 import { dequal } from "dequal";
 import * as errore from "errore";
 import {
-  InvalidListenerError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
@@ -57,9 +56,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError | UnknownQueryError | QueryExecutionError {
-    if (typeof listener !== "function") return new InvalidListenerError();
-
+  ): void | UnknownQueryError | QueryExecutionError {
     const value = this.query(topic);
     if (value instanceof Error) return value;
     let listeners: Listeners | undefined;
@@ -81,8 +78,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError {
-    if (typeof listener !== "function") return new InvalidListenerError();
+  ): void {
     for (const [registeredTopic, listeners] of this.registry) {
       if (!dequal(registeredTopic, topic)) continue;
       listeners.delete(listener);

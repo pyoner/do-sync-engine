@@ -1,5 +1,4 @@
 import type {
-  InvalidListenerError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
@@ -108,13 +107,13 @@ export interface SyncEngineInterface<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError | UnknownQueryError | QueryExecutionError;
+  ): void | UnknownQueryError | QueryExecutionError;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError;
+  ): void;
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,

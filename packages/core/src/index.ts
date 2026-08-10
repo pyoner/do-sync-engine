@@ -1,7 +1,6 @@
 export { toTables } from "./helpers";
 export { SyncEngine } from "./engine";
 export {
-  InvalidListenerError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
