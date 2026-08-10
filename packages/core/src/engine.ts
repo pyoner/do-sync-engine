@@ -57,21 +57,23 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError {
+  ): void | InvalidListenerError | UnknownQueryError | QueryExecutionError {
     if (typeof listener !== "function") return new InvalidListenerError();
 
+    const value = this.query(topic);
+    if (value instanceof Error) return value;
     let listeners: Listeners | undefined;
     for (const [registeredTopic, registeredListeners] of this.registry) {
-      if (dequal(registeredTopic, topic)) {
-        listeners = registeredListeners;
-        break;
-      }
+      if (!dequal(registeredTopic, topic)) continue;
+      listeners = registeredListeners;
+      break;
     }
     if (listeners === undefined) {
       listeners = new Set();
       this.registry.set(topic as Topic<StringKey<Queries>, BaseParams>, listeners);
     }
     listeners.add(listener as Listener);
+    listener({ topic, value });
   }
 
   unsubscribe<Name extends StringKey<Queries>>(
@@ -102,16 +104,16 @@ export class SyncEngine<
     if (result instanceof MutationExecutionError) return result;
     return mutationDefinition.tables;
   }
-
-  query<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | UnknownQueryError | QueryExecutionError {
+  protected query(
+    topic: Topic<StringKey<Queries>, BaseParams>,
+  ): OperationResult<Queries[StringKey<Queries>]> | UnknownQueryError | QueryExecutionError {
     const knownQuery = assertKnownQuery(topic.name, this.queries);
     if (knownQuery instanceof Error) return knownQuery;
     const queryDefinition = this.queries.get(topic.name);
     if (queryDefinition === undefined) return new QueryExecutionError();
     return errore.try({
-      try: () => queryDefinition.run(...topic.params) as OperationResult<Queries[Name]>,
+      try: () =>
+        queryDefinition.run(...topic.params) as OperationResult<Queries[StringKey<Queries>]>,
       catch: (cause) => new QueryExecutionError({ cause }),
     });
   }
@@ -139,7 +141,7 @@ export class SyncEngine<
       const queryDefinition = this.queries.get(topic.name);
       if (queryDefinition === undefined) continue;
       if (![...queryDefinition.tables].some((table) => changedTables.has(table))) continue;
-      const value = this.query(topic as never);
+      const value = this.query(topic);
       if (value instanceof Error) return value;
       this.publish({ topic, value });
     }

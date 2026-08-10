@@ -52,13 +52,16 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
   }): Error | Subscription<Q, M> {
     const subscription = new Subscription(engine, listener.dup());
     const callback = (event: DurableObjectWebSocketEvent) => void subscription.notify(event);
-    const subscribed = engine.subscribe(topic as never, callback as never);
+    subscription.#topic = topic;
+    subscription.#listener = callback;
+    const subscribed = engine.subscribe(
+      topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>,
+      callback,
+    );
     if (subscribed instanceof Error) {
       subscription[Symbol.dispose]();
       return subscribed;
     }
-    subscription.#topic = topic;
-    subscription.#listener = callback;
     return subscription;
   }
 
@@ -77,7 +80,10 @@ class Subscription<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcT
     this.#active = false;
     this.listener[Symbol.dispose]();
     if (this.#topic === null || this.#listener === null) return false;
-    this.engine.unsubscribe(this.#topic as never, this.#listener as never);
+    this.engine.unsubscribe(
+      this.#topic as Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>,
+      this.#listener,
+    );
     return true;
   }
 
@@ -101,13 +107,9 @@ class SyncSession<Q extends QueryMap<Q>, M extends MutationMap<M>> extends RpcTa
       params as OperationParams<Q[StringKey<Q>]>,
     );
     if (topic instanceof Error) return topic;
-    const value = this.engine.query<StringKey<Q>>(topic);
-    if (value instanceof Error) return value;
 
     const subscription = Subscription.create({ engine: this.engine, listener, topic });
     if (subscription instanceof Error) return subscription;
-    const notified = await subscription.notify({ topic, value });
-    if (notified instanceof Error) return notified;
     return subscription;
   }
 

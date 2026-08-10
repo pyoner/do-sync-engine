@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type { Listener, ListenerEvent, Mutation, Query } from "@do-sync-engine/core";
+import type { Listener, ListenerEvent, Mutation, Query, Topic } from "@do-sync-engine/core";
 
 function expectOk<T>(value: T): Exclude<T, Error> {
   if (value instanceof Error) throw value;
@@ -19,9 +19,10 @@ function captureEvents() {
 
 const noopPublish: Listener = () => {};
 
-class ExposedEngine extends SyncEngine {
-  exposePublish(event: ListenerEvent) {
-    return this.publish(event);
+class TestEngine extends SyncEngine {
+  tests(input: Topic | ListenerEvent) {
+    if ("value" in input) return this.publish(input);
+    return this.query(input);
   }
 }
 
@@ -79,11 +80,14 @@ describe("SyncEngine topics and events", () => {
     expect(changedParams).not.toEqual(first);
     expect(changedName).not.toEqual(first);
   });
-
-  test("runs queries through the public engine interface", async () => {
-    const topic = expectOk(engine.createTopic("userById", [2]));
-    expect(engine.query({ ...topic, name: "missing" } as never)).toBeInstanceOf(Error);
-    expect(engine.query(topic)).toEqual([{ id: 2, name: "bob" }]);
+  test("runs protected queries through the tests seam", async () => {
+    const testEngine = new TestEngine({
+      queries: { userById },
+      mutations: {},
+    });
+    const topic = expectOk(testEngine.createTopic("userById", [2]));
+    expect(testEngine.tests({ ...topic, name: "missing" })).toBeInstanceOf(Error);
+    expect(testEngine.tests(topic)).toEqual([{ id: 2, name: "bob" }]);
   });
 
   test("sync runs matching topics once and fans out the same event", async () => {
@@ -95,8 +99,8 @@ describe("SyncEngine topics and events", () => {
 
     engine.sync("insertUser", ["charlie"]);
 
-    expect(first.events).toHaveLength(1);
-    expect(second.events).toHaveLength(1);
+    expect(first.events).toHaveLength(2);
+    expect(second.events).toHaveLength(2);
     expect(first.events[0].topic).toEqual(topic);
     expect(second.events[0].topic).toEqual(topic);
     expect(first.events[0].value).toEqual(second.events[0].value);
@@ -131,11 +135,11 @@ describe("SyncEngine topics and events", () => {
 
     engine.sync("updateUserName", ["bob_updated", 2]);
 
-    expect(runParams).toEqual([2]);
-    expect(postsRuns).toBe(0);
-    expect(captured.events).toHaveLength(1);
+    expect(runParams).toEqual([2, 2]);
+    expect(postsRuns).toBe(1);
+    expect(captured.events).toHaveLength(3);
     expect(captured.events[0].topic).toEqual(topic);
-    expect((captured.events[0].value as SqlRow[])[0].name).toBe("bob_updated");
+    expect((captured.events[2].value as SqlRow[])[0].name).toBe("bob_updated");
   });
 
   test("does not run unsubscribed topics and rejects query errors", async () => {
@@ -159,11 +163,9 @@ describe("SyncEngine topics and events", () => {
     });
     engine.sync("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
-
     const failingTopic = expectOk(engine.createTopic("failingQuery", []));
-    engine.subscribe(failingTopic, noopPublish);
-    const result = engine.sync("insertUser", ["dave"]);
-    expect(result).toBeInstanceOf(Error);
+
+    expect(engine.subscribe(failingTopic, noopPublish)).toBeInstanceOf(Error);
   });
   test("duplicate listeners follow EventTarget semantics", async () => {
     const topic = expectOk(engine.createTopic("allUsers", []));
@@ -174,12 +176,12 @@ describe("SyncEngine topics and events", () => {
     expectOk(engine.subscribe(topic, second.listener));
 
     engine.sync("insertUser", ["charlie"]);
-    expect(first.events).toHaveLength(1);
-    expect(second.events).toHaveLength(1);
+    expect(first.events).toHaveLength(3);
+    expect(second.events).toHaveLength(2);
     expectOk(engine.unsubscribe(topic, first.listener));
     engine.sync("insertUser", ["dave"]);
-    expect(first.events).toHaveLength(1);
-    expect(second.events).toHaveLength(2);
+    expect(first.events).toHaveLength(3);
+    expect(second.events).toHaveLength(3);
   });
 
   test("removes topics after their final listener unsubscribes", async () => {
@@ -198,7 +200,7 @@ describe("SyncEngine topics and events", () => {
   });
 
   test("listener dispatch is scoped by topic", async () => {
-    const exposed = new ExposedEngine({
+    const exposed = new TestEngine({
       queries: { allUsers, postsOnly },
       mutations: {},
     });
@@ -209,9 +211,23 @@ describe("SyncEngine topics and events", () => {
     exposed.subscribe(usersTopic, users.listener);
     exposed.subscribe(postsTopic, posts.listener);
 
-    exposed.exposePublish({ topic: usersTopic, value: 1 });
-    expect(users.events).toEqual([{ topic: usersTopic, value: 1 }]);
-    expect(posts.events).toEqual([]);
+    exposed.tests({ topic: usersTopic, value: 1 });
+    expect(users.events).toEqual([
+      {
+        topic: usersTopic,
+        value: [
+          { id: 1, name: "alice" },
+          { id: 2, name: "bob" },
+        ],
+      },
+      { topic: usersTopic, value: 1 },
+    ]);
+    expect(posts.events).toEqual([
+      {
+        topic: postsTopic,
+        value: [{ id: 1, title: "hello", user_id: 1 }],
+      },
+    ]);
   });
 
   test("runs mutation, query, and listener synchronously", async () => {
@@ -242,7 +258,7 @@ describe("SyncEngine topics and events", () => {
 
     engine.sync("synchronousMutation", []);
 
-    expect(calls).toEqual(["mutation", "query", "listener"]);
+    expect(calls).toEqual(["query", "listener", "mutation", "query", "listener"]);
   });
 
   test("allows asynchronous listeners without delaying sync", async () => {
@@ -258,12 +274,5 @@ describe("SyncEngine topics and events", () => {
 
     await Promise.resolve();
     expect(completed).toBe(true);
-  });
-
-  test("validates topics when creating and querying", async () => {
-    expect(engine.createTopic("missing", [])).toBeInstanceOf(Error);
-    const validTopic = expectOk(engine.createTopic("allUsers", []));
-    expect(engine.query({ ...validTopic, name: "missing" } as never)).toBeInstanceOf(Error);
-    engine.subscribe(validTopic, noopPublish);
   });
 });

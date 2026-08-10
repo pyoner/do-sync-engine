@@ -105,7 +105,10 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   };
   expectOk(engine.subscribe(topic, listener));
   expectOk(engine.sync("noop", []));
-  expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
+  expect(events).toEqual([
+    { topic, value: [1, 2, 3] },
+    { topic, value: [1, 2, 3] },
+  ]);
 
   if (false as boolean) {
     // @ts-expect-error — unknown topic names are rejected

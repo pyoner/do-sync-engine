@@ -103,15 +103,12 @@ export interface SyncEngineInterface<
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Topic<Name, OperationParams<Queries[Name]>> | UnknownQueryError;
-  query<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-  ): OperationResult<Queries[Name]> | UnknownQueryError | QueryExecutionError;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | InvalidListenerError;
+  ): void | InvalidListenerError | UnknownQueryError | QueryExecutionError;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
