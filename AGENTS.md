@@ -20,3 +20,4 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Use the Caveman skill by default for terse, filler-free communication. Default mode: full.
 - Use the Ponytail skill by default for minimal, YAGNI implementation. Default mode: full.
 - Use the errore skill by default for TypeScript errors-as-values conventions.
+- Use the typescript-advanced-types skill for advanced TypeScript type work.
