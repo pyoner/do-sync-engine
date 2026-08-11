@@ -315,10 +315,6 @@
     color: var(--accent);
   }
 
-  .meta {
-    margin: 0.25rem 0;
-    font-size: 0.9rem;
-  }
   .query-list {
     list-style: none;
     padding: 0;
