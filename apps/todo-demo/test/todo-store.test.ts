@@ -1,20 +1,10 @@
 import { exports } from "cloudflare:workers";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
-import type { TodoQueryName } from "../src/todo-protocol";
+import type { ServerAPI } from "@do-sync-engine/durable-object-websocket";
+import type { TodoMutations, TodoQueries, TodoQueryName } from "../src/todo-protocol";
 
 type Event = { topic: { name: TodoQueryName }; value: unknown };
-type Api = {
-  subscribe(
-    query: TodoQueryName,
-    params: [],
-    listener: (event: Event) => void,
-  ): Promise<{ unsubscribe(): boolean }>;
-  sync(
-    mutation: "addTodo" | "toggleTodo" | "deleteTodo" | "clearCompleted",
-    params: unknown[],
-  ): Promise<void>;
-};
 
 describe("TodoStore Cap’n Web transport", () => {
   it("uses RPC subscriptions and mutations", async () => {
@@ -24,13 +14,28 @@ describe("TodoStore Cap’n Web transport", () => {
     expect(response.status).toBe(101);
     const socket = response.webSocket!;
     socket.accept();
-    const api = newWebSocketRpcSession<Api>(socket) as RpcStub<Api>;
-    const events: Event[] = [];
-    const subscription = await api.subscribe("allTodos", [], (event) => void events.push(event));
-    expect(events[0]?.topic.name).toBe("allTodos");
-    await api.sync("addTodo", ["shared"]);
-    expect(events.at(-1)?.value).toMatchObject([{ title: "shared", completed: 0 }]);
-    expect(await subscription.unsubscribe()).toBe(true);
-    socket.close();
+    const api = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(socket);
+
+    try {
+      const topic = await api.createTopic("allTodos", []);
+      if (topic instanceof Error) throw topic;
+      const events: Event[] = [];
+      const listener = (event: Event) => {
+        events.push(event);
+      };
+      const subscribed = await api.subscribe(topic, listener);
+      if (subscribed instanceof Error) throw subscribed;
+      await expect.poll(() => events[0]?.topic.name).toBe("allTodos");
+
+      const synced = await api.sync("addTodo", ["shared"]);
+      if (synced instanceof Error) throw synced;
+      await expect
+        .poll(() => events.at(-1)?.value)
+        .toMatchObject([{ title: "shared", completed: 0 }]);
+
+      await api.unsubscribe(topic, listener);
+    } finally {
+      socket.close();
+    }
   });
 });

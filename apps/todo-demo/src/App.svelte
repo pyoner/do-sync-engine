@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+  import type { OperationParams } from "@do-sync-engine/core";
+  import type { ServerAPI } from "@do-sync-engine/durable-object-websocket";
   import {
     TODO_WS_PATH,
     type Todo,
@@ -9,42 +11,38 @@
     type TodoQueryName,
     type TodoQueryResults,
   } from "./todo-protocol";
-  import type { OperationParams } from "@do-sync-engine/core";
-  type Event = { topic: { name: TodoQueryName }; value: unknown };
-  type Api = {
-    subscribe<N extends TodoQueryName>(
-      query: N,
-      params: OperationParams<TodoQueries[N]>,
-      listener: (event: Event) => void,
-    ): Promise<{ unsubscribe(): boolean }>;
-    sync<N extends keyof TodoMutations & string>(
-      mutation: N,
-      params: OperationParams<TodoMutations[N]>,
-    ): Promise<void>;
-  };
+
   const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
   let todos = $state<Todo[]>([]);
   let newTitle = $state("");
   let queryResults = $state<Partial<TodoQueryResults>>({});
   let loading = $state(false);
-  let api = $state<RpcStub<Api> | null>(null);
+  let api = $state<RpcStub<ServerAPI<TodoQueries, TodoMutations>> | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
-  let subscriptions: Array<{ unsubscribe(): boolean }> = [];
 
-  function websocketUrl(): string {
-    return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`;
-  }
+
   function connect(): () => void {
-    const root = newWebSocketRpcSession<Api>(websocketUrl());
+    const root = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(
+      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`,
+    );
     api = root;
     connected = true;
     errorMessage = null;
-    for (const query of defaultQueries) {
-      void root.subscribe(query, [], (event) => {
+
+    const subscribeTo = async (query: TodoQueryName): Promise<void> => {
+      const topic = await root.createTopic(query, []);
+      if (topic instanceof Error) throw topic;
+
+      const subscribed = await root.subscribe(topic, (event) => {
         queryResults = { ...queryResults, [event.topic.name]: event.value };
         if (event.topic.name === "allTodos") todos = event.value as Todo[];
-      }).then((subscription) => subscriptions.push(subscription)).catch((error) => {
+      });
+      if (subscribed instanceof Error) throw subscribed;
+    };
+
+    for (const query of defaultQueries) {
+      void subscribeTo(query).catch((error) => {
         errorMessage = error instanceof Error ? error.message : String(error);
       });
     }
@@ -54,32 +52,48 @@
       errorMessage = error instanceof Error ? error.message : String(error);
     });
     return () => {
-      for (const subscription of subscriptions) subscription.unsubscribe();
-      subscriptions = [];
       root[Symbol.dispose]();
       api = null;
       connected = false;
     };
   }
+
   function mutate<N extends keyof TodoMutations & string>(
     mutation: N,
-    params: TodoMutations[N] extends { params: infer P } ? P : never,
+    params: OperationParams<TodoMutations[N]>,
     afterSuccess?: () => void,
   ) {
-    if (!api) return;
+    const root = api;
+    if (!root) return;
+
     loading = true;
     errorMessage = null;
-    void api.sync(mutation, params).then(afterSuccess).catch((error) => {
-      errorMessage = error instanceof Error ? error.message : String(error);
-    }).finally(() => loading = false);
+    void (async () => {
+      try {
+        const result = await root.sync(mutation, params);
+        if (result instanceof Error) throw result;
+        afterSuccess?.();
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error);
+      } finally {
+        loading = false;
+      }
+    })();
   }
+
   function addTodo() {
     const title = newTitle.trim();
-    if (title) mutate("addTodo", [title], () => newTitle = "");
+    if (title) mutate("addTodo", [title], () => (newTitle = ""));
   }
-  function toggleTodo(id: number) { mutate("toggleTodo", [id]); }
-  function deleteTodo(id: number) { mutate("deleteTodo", [id]); }
-  function clearCompleted() { mutate("clearCompleted", []); }
+  function toggleTodo(id: number) {
+    mutate("toggleTodo", [id]);
+  }
+  function deleteTodo(id: number) {
+    mutate("deleteTodo", [id]);
+  }
+  function clearCompleted() {
+    mutate("clearCompleted", []);
+  }
   onMount(connect);
 </script>
 
