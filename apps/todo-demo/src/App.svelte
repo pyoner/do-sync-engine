@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-  import type { OperationParams } from "@do-sync-engine/core";
   import type { ServerAPI } from "@do-sync-engine/durable-object-websocket";
   import {
     TODO_WS_PATH,
@@ -21,8 +20,17 @@
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
 
+  function disconnect(): void {
+    const root = api;
+    api = null;
+    connected = false;
+    loading = false;
+    root?.[Symbol.dispose]();
+  }
 
-  function connect(): () => void {
+  function connect(): void {
+    if (api !== null) return;
+
     const root = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`,
     );
@@ -35,6 +43,7 @@
       if (topic instanceof Error) throw topic;
 
       const subscribed = await root.subscribe(topic, (event) => {
+        if (api !== root) return;
         queryResults = { ...queryResults, [event.topic.name]: event.value };
         if (event.topic.name === "allTodos") todos = event.value as Todo[];
       });
@@ -43,24 +52,21 @@
 
     for (const query of defaultQueries) {
       void subscribeTo(query).catch((error) => {
+        if (api !== root) return;
         errorMessage = error instanceof Error ? error.message : String(error);
       });
     }
     root.onRpcBroken((error) => {
-      connected = false;
+      if (api !== root) return;
       api = null;
+      connected = false;
+      loading = false;
       errorMessage = error instanceof Error ? error.message : String(error);
     });
-    return () => {
-      root[Symbol.dispose]();
-      api = null;
-      connected = false;
-    };
   }
 
-  function mutate<N extends keyof TodoMutations & string>(
-    mutation: N,
-    params: OperationParams<TodoMutations[N]>,
+  function mutate(
+    operation: (root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>) => Promise<void | Error>,
     afterSuccess?: () => void,
   ) {
     const root = api;
@@ -70,41 +76,55 @@
     errorMessage = null;
     void (async () => {
       try {
-        const result = await root.sync(mutation, params);
+        const result = await operation(root);
         if (result instanceof Error) throw result;
+        if (api !== root) return;
         afterSuccess?.();
       } catch (error) {
+        if (api !== root) return;
         errorMessage = error instanceof Error ? error.message : String(error);
       } finally {
-        loading = false;
+        if (api === root) loading = false;
       }
     })();
   }
 
   function addTodo() {
     const title = newTitle.trim();
-    if (title) mutate("addTodo", [title], () => (newTitle = ""));
+    if (title) mutate((root) => root.sync("addTodo", [title]), () => (newTitle = ""));
   }
   function toggleTodo(id: number) {
-    mutate("toggleTodo", [id]);
+    mutate((root) => root.sync("toggleTodo", [id]));
   }
   function deleteTodo(id: number) {
-    mutate("deleteTodo", [id]);
+    mutate((root) => root.sync("deleteTodo", [id]));
   }
   function clearCompleted() {
-    mutate("clearCompleted", []);
+    mutate((root) => root.sync("clearCompleted", []));
   }
-  onMount(connect);
+  onMount(() => {
+    connect();
+    return disconnect;
+  });
 </script>
 
 <main>
   <h1>TODO Demo</h1>
   <p class="subtitle">Powered by <code>@do-sync-engine/core</code> + Cloudflare Durable Objects</p>
 
+  <div class="connection-control">
+    <button
+      type="button"
+      onclick={connected ? disconnect : connect}
+      aria-label={connected ? "Disconnect WebSocket" : "Connect WebSocket"}
+    >
+      {connected ? "Disconnect" : "Connect"}
+    </button>
+    <p class="status" aria-live="polite">{connected ? "Connected" : "Disconnected"}</p>
+  </div>
+
   {#if errorMessage}
     <p class="status error">{errorMessage}</p>
-  {:else if !connected}
-    <p class="status">Connecting...</p>
   {/if}
 
   <form onsubmit={(e) => { e.preventDefault(); addTodo(); }}>
@@ -191,6 +211,17 @@
 
   .status.error {
     color: var(--danger);
+  }
+
+  .connection-control {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .connection-control .status {
+    margin: 0;
   }
 
   form {
@@ -288,7 +319,6 @@
     margin: 0.25rem 0;
     font-size: 0.9rem;
   }
-
   .query-list {
     list-style: none;
     padding: 0;
