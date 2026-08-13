@@ -9,7 +9,6 @@ import type {
   QueryMap,
   StringKey,
   SyncEngine,
-  SyncEngineInterface,
   Topic,
 } from "@do-sync-engine/core";
 
@@ -32,12 +31,11 @@ type Registration<Queries extends QueryMap<Queries>> = {
   engineListener: (...args: never[]) => unknown;
   active: boolean;
 };
-
-export class ServerAPI<Queries extends QueryMap<Queries>, Mutations extends MutationMap<Mutations>>
-  extends RpcTarget
-  implements SyncEngineInterface<Queries, Mutations>
-{
-  readonly #registrations: Registration<Queries>[] = [];
+export class ServerAPI<
+  Queries extends QueryMap<Queries>,
+  Mutations extends MutationMap<Mutations>,
+> extends RpcTarget {
+  readonly #registrations: Array<Registration<Queries>> = [];
   readonly #engine: SyncEngine<Queries, Mutations>;
 
   constructor(engine: SyncEngine<Queries, Mutations>) {
@@ -65,7 +63,6 @@ export class ServerAPI<Queries extends QueryMap<Queries>, Mutations extends Muta
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
   ): void | Error {
-    let registration!: Registration<Queries>;
     const callback = listener instanceof RpcStub ? listener.dup() : new RpcStub(listener);
     const engineListener = (event: Parameters<typeof listener>[0]) => {
       void Promise.resolve()
@@ -77,7 +74,7 @@ export class ServerAPI<Queries extends QueryMap<Queries>, Mutations extends Muta
         });
     };
 
-    registration = {
+    const registration: Registration<Queries> = {
       topic,
       callback,
       engineListener,

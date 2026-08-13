@@ -32,7 +32,7 @@
     if (api !== null) return;
 
     const root = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(
-      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`,
+      `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
     );
     api = root;
     connected = true;

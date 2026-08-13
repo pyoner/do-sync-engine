@@ -1,3 +1,4 @@
+/* oxlint-disable typescript/no-namespace -- Cloudflare Env augmentation requires a namespace. */
 declare global {
   namespace Cloudflare {
     interface Env {

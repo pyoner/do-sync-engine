@@ -35,10 +35,10 @@ export class SyncEngine<
 
   constructor(options: SyncEngineOptions<Queries, Mutations>) {
     this.queries = new Map(
-      Object.entries(options.queries) as [string, Query<BaseParams, unknown>][],
+      Object.entries(options.queries) as Array<[string, Query<BaseParams, unknown>]>,
     );
     this.mutations = new Map(
-      Object.entries(options.mutations) as [string, Mutation<BaseParams, unknown>][],
+      Object.entries(options.mutations) as Array<[string, Mutation<BaseParams, unknown>]>,
     );
   }
 

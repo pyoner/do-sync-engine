@@ -9,7 +9,7 @@ export type Operation = (typeof operations)[number];
 export type SqlParameter = string | number | null;
 export type Fixture = {
   setup: { database: string[]; seed: string[] };
-  testData: { sql: string; params?: SqlParameter[]; tables: string[] }[];
+  testData: Array<{ sql: string; params?: SqlParameter[]; tables: string[] }>;
 };
 
 const sources: Record<Operation, string> = {

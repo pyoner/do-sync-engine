@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type { Listener, ListenerEvent, Mutation, Query, Topic } from "@do-sync-engine/core";
+import type {
+  BaseParams,
+  Listener,
+  ListenerEvent,
+  Mutation,
+  MutationMap,
+  Query,
+  QueryMap,
+  Topic,
+} from "@do-sync-engine/core";
 
 function expectOk<T>(value: T): Exclude<T, Error> {
   if (value instanceof Error) throw value;
@@ -19,12 +28,25 @@ function captureEvents() {
 
 const noopPublish: Listener = () => {};
 
-class TestEngine extends SyncEngine {
+class TestEngine<
+  Queries extends QueryMap<Queries>,
+  Mutations extends MutationMap<Mutations>,
+> extends SyncEngine<Queries, Mutations> {
   tests(input: Topic | ListenerEvent) {
     if ("value" in input) return this.publish(input);
-    return this.query(input);
+    return this.query(input as Topic<Extract<keyof Queries, string>, BaseParams>);
   }
 }
+
+type FixtureQueries = {
+  allUsers: Query<[], SqlRow[]>;
+  userById: Query<[number], SqlRow[]>;
+  postsOnly: Query<[], SqlRow[]>;
+};
+type FixtureMutations = {
+  insertUser: Mutation<[string], unknown>;
+  updateUserName: Mutation<[string, number], unknown>;
+};
 
 function setupDb(storage: DatabaseSync) {
   storage.exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)");
@@ -39,9 +61,9 @@ describe("SyncEngine topics and events", () => {
   let allUsers: Query<[], SqlRow[]>;
   let userById: Query<[number], SqlRow[]>;
   let postsOnly: Query<[], SqlRow[]>;
+  let engine: SyncEngine<FixtureQueries, FixtureMutations>;
   let insertUser: Mutation<[string], unknown>;
   let updateUserName: Mutation<[string, number], unknown>;
-  let engine: SyncEngine;
 
   beforeEach(() => {
     storage = new DatabaseSync(":memory:");
@@ -123,7 +145,7 @@ describe("SyncEngine topics and events", () => {
         return postsOnly.run();
       },
     };
-    engine = new SyncEngine({
+    const engine = new SyncEngine({
       queries: { trackedUserById, trackedPosts },
       mutations: { updateUserName },
     });
@@ -157,7 +179,7 @@ describe("SyncEngine topics and events", () => {
         throw new Error("query failed");
       },
     };
-    engine = new SyncEngine({
+    const engine = new SyncEngine({
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
     });
@@ -249,7 +271,7 @@ describe("SyncEngine topics and events", () => {
         return synchronousMutation.run();
       },
     };
-    engine = new SyncEngine({
+    const engine = new SyncEngine({
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
     });

@@ -71,7 +71,7 @@ describe("Drizzle SQLite adapter", () => {
 
   test("returns an error value when execution fails", () => {
     const failingBuilder = {
-      _: { tableName: "users", result: [] as { id: number }[] },
+      _: { tableName: "users", result: [] as Array<{ id: number }> },
       prepare: () => ({
         resultKind: "sync" as const,
         queryMetadata: { tables: ["users"] },

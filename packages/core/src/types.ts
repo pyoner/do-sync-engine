@@ -6,15 +6,9 @@ export type Branded<
 > = Primitive & { readonly [brand]: Tag };
 
 export type Table = Branded<string, "Table">;
-export type BaseParams = readonly (
-  | string
-  | number
-  | boolean
-  | bigint
-  | null
-  | undefined
-  | object
-)[];
+export type BaseParams = ReadonlyArray<
+  string | number | boolean | bigint | null | undefined | object
+>;
 
 type Operation<Params extends BaseParams = [], Result = unknown> = {
   tables: Set<Table>;
