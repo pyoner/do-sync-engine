@@ -38,4 +38,42 @@ describe("TodoStore Cap’n Web transport", () => {
       socket.close();
     }
   });
+  it("switches filter subscriptions without retaining the old topic", async () => {
+    const response = await exports.default.fetch(
+      new Request("https://example.com/api/todos", { headers: { Upgrade: "websocket" } }),
+    );
+    expect(response.status).toBe(101);
+    const socket = response.webSocket!;
+    socket.accept();
+    const api = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(socket);
+
+    try {
+      const allTopic = await api.createTopic("allTodos", []);
+      const activeTopic = await api.createTopic("incompleteTodos", []);
+      if (allTopic instanceof Error) throw allTopic;
+      if (activeTopic instanceof Error) throw activeTopic;
+      const allEvents: Event[] = [];
+      const activeEvents: Event[] = [];
+      const allListener = (event: Event) => allEvents.push(event);
+      const activeListener = (event: Event) => activeEvents.push(event);
+
+      const allSubscribed = await api.subscribe(allTopic, allListener);
+      if (allSubscribed instanceof Error) throw allSubscribed;
+      await expect.poll(() => allEvents.length).toBe(1);
+      await api.unsubscribe(allTopic, allListener);
+
+      const activeSubscribed = await api.subscribe(activeTopic, activeListener);
+      if (activeSubscribed instanceof Error) throw activeSubscribed;
+      await expect.poll(() => activeEvents.length).toBe(1);
+
+      const synced = await api.sync("addTodo", ["switch lifecycle"]);
+      if (synced instanceof Error) throw synced;
+      await expect
+        .poll(() => activeEvents.at(-1)?.value)
+        .toMatchObject([{ title: "shared" }, { title: "switch lifecycle" }]);
+      expect(allEvents).toHaveLength(1);
+    } finally {
+      socket.close();
+    }
+  });
 });

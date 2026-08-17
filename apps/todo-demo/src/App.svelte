@@ -7,25 +7,110 @@
     type Todo,
     type TodoMutations,
     type TodoQueries,
-    type TodoQueryName,
     type TodoQueryResults,
+    type TodoSummary,
   } from "./todo-protocol";
 
-  const defaultQueries: TodoQueryName[] = ["allTodos", "todoCount"];
-  let todos = $state<Todo[]>([]);
+  const filters = [
+    { label: "All", query: "allTodos" },
+    { label: "Active", query: "incompleteTodos" },
+    { label: "Completed", query: "completedTodos" },
+  ] as const;
+  type TodoFilter = (typeof filters)[number];
+  type TodoListItem = TodoSummary & Pick<Todo, "completed">;
+
+  let todos = $state<TodoListItem[]>([]);
   let newTitle = $state("");
   let queryResults = $state<Partial<TodoQueryResults>>({});
+  let selectedFilter = $state<TodoFilter>(filters[0]);
+  let filterLoading = $state(false);
   let loading = $state(false);
   let api = $state<RpcStub<ServerAPI<TodoQueries, TodoMutations>> | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
+  let filterSubscriptionVersion = 0;
+  let unsubscribeActiveFilter = $state<(() => void) | null>(null);
 
   function disconnect(): void {
     const root = api;
+    filterSubscriptionVersion += 1;
+    unsubscribeActiveFilter?.();
+    unsubscribeActiveFilter = null;
     api = null;
     connected = false;
+    filterLoading = false;
     loading = false;
     root?.[Symbol.dispose]();
+  }
+
+  function showSubscriptionError(root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>, version: number, error: unknown): void {
+    if (api !== root || filterSubscriptionVersion !== version) return;
+    filterLoading = false;
+    errorMessage = error instanceof Error ? error.message : String(error);
+  }
+
+  function toTodoListItems(filter: TodoFilter, value: unknown): TodoListItem[] {
+    const results = value as TodoSummary[];
+    if (filter.query === "allTodos") return results as TodoListItem[];
+    return results.map((todo) => ({
+      ...todo,
+      completed: filter.query === "completedTodos" ? 1 : 0,
+    }));
+  }
+
+  async function subscribeToFilter(
+    root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>,
+    filter: TodoFilter,
+    version: number,
+  ): Promise<void> {
+    const topic = await root.createTopic(filter.query, []);
+    if (topic instanceof Error) {
+      showSubscriptionError(root, version, topic);
+      return;
+    }
+    if (api !== root || filterSubscriptionVersion !== version) return;
+
+    const listener = (event: { value: unknown }) => {
+      if (api !== root || filterSubscriptionVersion !== version) return;
+      queryResults = { ...queryResults, [filter.query]: event.value };
+      todos = toTodoListItems(filter, event.value);
+      filterLoading = false;
+    };
+    const subscribed = await root.subscribe(topic, listener);
+    if (subscribed instanceof Error) {
+      showSubscriptionError(root, version, subscribed);
+      return;
+    }
+
+    const unsubscribe = () => {
+      void root.unsubscribe(topic, listener).catch((error) => {
+        globalThis.console.warn("Failed to unsubscribe from todo filter:", error);
+      });
+    };
+    if (api !== root || filterSubscriptionVersion !== version) {
+      unsubscribe();
+      return;
+    }
+    unsubscribeActiveFilter = unsubscribe;
+  }
+
+  function selectFilter(filter: TodoFilter): void {
+    if (selectedFilter.query === filter.query) return;
+
+    selectedFilter = filter;
+    todos = [];
+    queryResults = {};
+    filterLoading = true;
+    errorMessage = null;
+    filterSubscriptionVersion += 1;
+    unsubscribeActiveFilter?.();
+    unsubscribeActiveFilter = null;
+
+    const root = api;
+    const version = filterSubscriptionVersion;
+    if (root !== null) void subscribeToFilter(root, filter, version).catch((error) => {
+      showSubscriptionError(root, version, error);
+    });
   }
 
   function connect(): void {
@@ -36,30 +121,19 @@
     );
     api = root;
     connected = true;
+    filterLoading = true;
     errorMessage = null;
 
-    const subscribeTo = async (query: TodoQueryName): Promise<void> => {
-      const topic = await root.createTopic(query, []);
-      if (topic instanceof Error) throw topic;
-
-      const subscribed = await root.subscribe(topic, (event) => {
-        if (api !== root) return;
-        queryResults = { ...queryResults, [event.topic.name]: event.value };
-        if (event.topic.name === "allTodos") todos = event.value as Todo[];
-      });
-      if (subscribed instanceof Error) throw subscribed;
-    };
-
-    for (const query of defaultQueries) {
-      void subscribeTo(query).catch((error) => {
-        if (api !== root) return;
-        errorMessage = error instanceof Error ? error.message : String(error);
-      });
-    }
+    const version = filterSubscriptionVersion;
+    void subscribeToFilter(root, selectedFilter, version).catch((error) => {
+      showSubscriptionError(root, version, error);
+    });
     root.onRpcBroken((error) => {
       if (api !== root) return;
+      unsubscribeActiveFilter = null;
       api = null;
       connected = false;
+      filterLoading = false;
       loading = false;
       errorMessage = error instanceof Error ? error.message : String(error);
     });
@@ -81,14 +155,12 @@
         if (api !== root) return;
         afterSuccess?.();
       } catch (error) {
-        if (api !== root) return;
         errorMessage = error instanceof Error ? error.message : String(error);
       } finally {
         if (api === root) loading = false;
       }
     })();
   }
-
   function addTodo() {
     const title = newTitle.trim();
     if (title) mutate((root) => root.sync("addTodo", [title]), () => (newTitle = ""));
@@ -137,7 +209,23 @@
     <button type="submit" disabled={loading || !connected || !newTitle.trim()}>Add</button>
   </form>
 
-  {#if todos.length === 0}
+  <div class="filters" role="group" aria-label="Todo filters">
+    {#each filters as filter}
+      <button
+        type="button"
+        class:active={selectedFilter.query === filter.query}
+        aria-pressed={selectedFilter.query === filter.query}
+        onclick={() => selectFilter(filter)}
+        disabled={!connected}
+      >
+        {filter.label}
+      </button>
+    {/each}
+  </div>
+
+  {#if filterLoading}
+    <p class="status" aria-live="polite">Loading {selectedFilter.label.toLowerCase()} todos…</p>
+  {:else if todos.length === 0}
     <p class="empty">No todos yet. Add one above!</p>
   {:else}
     <ul class="todo-list">
@@ -163,18 +251,16 @@
   {/if}
 
   <div class="recompute-panel">
-    <h2>Subscribed queries</h2>
+    <h2>Subscribed query</h2>
     <ul class="query-list">
-      {#each defaultQueries as query}
-        <li>
-          <code>{query}</code>
-          <span class="row-count">({queryResults[query]?.length ?? 0} rows)</span>
-        </li>
-      {/each}
+      <li>
+        <code>{selectedFilter.query}</code>
+        <span class="row-count">({queryResults[selectedFilter.query]?.length ?? 0} rows)</span>
+      </li>
     </ul>
     <details>
-      <summary>Latest query results (JSON)</summary>
-      <pre>{JSON.stringify(queryResults, null, 2)}</pre>
+      <summary>Latest query result (JSON)</summary>
+      <pre>{JSON.stringify(queryResults[selectedFilter.query], null, 2)}</pre>
     </details>
   </div>
 </main>
@@ -222,6 +308,17 @@
 
   .connection-control .status {
     margin: 0;
+  }
+
+  .filters {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .filters button.active {
+    background: var(--accent);
+    color: #111;
   }
 
   form {
