@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { newWebSocketRpcSession, type RpcStub } from "capnweb";
   import type { ServerAPI } from "@do-sync-engine/durable-object-websocket";
+  import { newWebSocketRpcSession, type WebSocketRpcClient } from "./websocket-rpc-client";
   import {
     TODO_WS_PATH,
     type Todo,
@@ -10,7 +10,6 @@
     type TodoQueryResults,
     type TodoSummary,
   } from "./todo-protocol";
-
   const filters = [
     { label: "All", query: "allTodos" },
     { label: "Active", query: "incompleteTodos" },
@@ -25,7 +24,7 @@
   let selectedFilter = $state<TodoFilter>(filters[0]);
   let filterLoading = $state(false);
   let loading = $state(false);
-  let api = $state<RpcStub<ServerAPI<TodoQueries, TodoMutations>> | null>(null);
+  let api = $state<WebSocketRpcClient<TodoQueries, TodoMutations> | null>(null);
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
   let filterSubscriptionVersion = 0;
@@ -43,7 +42,7 @@
     root?.[Symbol.dispose]();
   }
 
-  function showSubscriptionError(root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>, version: number, error: unknown): void {
+  function showSubscriptionError(root: WebSocketRpcClient<TodoQueries, TodoMutations>, version: number, error: unknown): void {
     if (api !== root || filterSubscriptionVersion !== version) return;
     filterLoading = false;
     errorMessage = error instanceof Error ? error.message : String(error);
@@ -59,7 +58,7 @@
   }
 
   async function subscribeToFilter(
-    root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>,
+    root: WebSocketRpcClient<TodoQueries, TodoMutations>,
     filter: TodoFilter,
     version: number,
   ): Promise<void> {
@@ -140,7 +139,7 @@
   }
 
   function mutate(
-    operation: (root: RpcStub<ServerAPI<TodoQueries, TodoMutations>>) => Promise<void | Error>,
+    operation: (root: WebSocketRpcClient<TodoQueries, TodoMutations>) => Promise<void | Error>,
     afterSuccess?: () => void,
   ) {
     const root = api;

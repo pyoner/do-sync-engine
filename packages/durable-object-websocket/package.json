@@ -32,8 +32,9 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
-    "capnweb": "catalog:",
-    "dequal": "catalog:"
+    "dequal": "catalog:",
+    "errore": "catalog:",
+    "typed-rpc": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "latest",

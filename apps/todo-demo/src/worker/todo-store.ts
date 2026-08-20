@@ -1,6 +1,5 @@
-import { DurableObject } from "cloudflare:workers";
 import { SyncEngine } from "@do-sync-engine/core";
-import { newWebSocketSyncResponse } from "@do-sync-engine/durable-object-websocket";
+import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 import type { TodoMutations, TodoQueries } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
 
@@ -78,22 +77,15 @@ function createMutations(storage: SqlDatabase): TodoMutations {
     },
   } satisfies TodoMutations;
 }
-export class TodoStore extends DurableObject<Env> {
-  readonly #engine: SyncEngine<TodoQueries, TodoMutations>;
-
+export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    ctx.storage.sql.exec(SCHEMA);
-    const storage = new DurableObjectSqlStorage(ctx.storage.sql);
-    const queries = createQueries(storage);
-    const mutations = createMutations(storage);
-    this.#engine = new SyncEngine<TodoQueries, TodoMutations>({
-      queries,
-      mutations,
+    super(ctx, env, () => {
+      ctx.storage.sql.exec(SCHEMA);
+      const storage = new DurableObjectSqlStorage(ctx.storage.sql);
+      return new SyncEngine<TodoQueries, TodoMutations>({
+        queries: createQueries(storage),
+        mutations: createMutations(storage),
+      });
     });
-  }
-
-  fetch(request: Request): Response {
-    return newWebSocketSyncResponse(request, this.#engine);
   }
 }
