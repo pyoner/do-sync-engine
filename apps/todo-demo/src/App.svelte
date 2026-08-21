@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { ServerAPI } from "@do-sync-engine/durable-object-websocket";
   import { newWebSocketRpcSession, type WebSocketRpcClient } from "./websocket-rpc-client";
   import {
     TODO_WS_PATH,
@@ -115,7 +114,7 @@
   function connect(): void {
     if (api !== null) return;
 
-    const root = newWebSocketRpcSession<ServerAPI<TodoQueries, TodoMutations>>(
+    const root = newWebSocketRpcSession<TodoQueries, TodoMutations>(
       `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
     );
     api = root;

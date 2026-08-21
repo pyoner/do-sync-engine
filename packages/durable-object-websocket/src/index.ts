@@ -1,7 +1,10 @@
 export { DurableObjectWebSocket } from "./durable-object";
+export { createJsonRpcTranscoder } from "./rpc";
 export {
-  decodeSubscriptionEvent,
+  LISTENER_EVENT_METHOD,
+  createServiceApiSession,
+  listenerNotification,
   type QueryTopic,
-  type ServerAPI,
+  type ServiceAPI,
   type SubscriptionEvent,
-} from "./protocol";
+} from "./service-api";

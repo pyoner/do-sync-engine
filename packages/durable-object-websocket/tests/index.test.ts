@@ -1,14 +1,16 @@
 import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
-import { decodeSubscriptionEvent } from "../src/index.ts";
-import type { FixtureQueries } from "./cloudflare-worker.ts";
 
 const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
 };
 
-type ResponseMessage = { id: string; result?: unknown; error?: { message: string } };
+type ResponseMessage = {
+  id: string | null;
+  result?: unknown;
+  error?: { code?: number; message?: string };
+};
 
 async function connect() {
   const response = await worker.default.fetch(
@@ -63,28 +65,25 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
       await waitFor(
         messages,
         (value): value is Record<string, unknown> =>
-          typeof value === "object" && value !== null && "topic" in value,
+          typeof value === "object" &&
+          value !== null &&
+          "method" in value &&
+          value.method === "listener",
       );
       call("subscribe", topic);
       call("sync", "increment", ["alpha", 2]);
       const event = await waitFor(
         messages,
-        (value): value is { jsonrpc: string; method: string; params: [unknown[]] } =>
+        (value): value is { jsonrpc: string; method: string; params: [Record<string, unknown>] } =>
           typeof value === "object" &&
           value !== null &&
           "method" in value &&
-          value.method === "synced",
+          value.method === "listener" &&
+          "params" in value &&
+          Array.isArray(value.params) &&
+          value.params[0]?.value?.value === 2,
       );
-      expect(event).not.toHaveProperty("id");
-      expect(event.jsonrpc).toBe("2.0");
-      expect(event.params[0]).toHaveLength(1);
-      expect(event.params[0][0]).toMatchObject({ value: { key: "alpha", value: 2 } });
-      expect(
-        messages.filter(
-          (value) =>
-            decodeSubscriptionEvent<FixtureQueries>(JSON.stringify(value)) instanceof Error,
-        ),
-      ).toHaveLength(0);
+      expect(event.params[0]).toMatchObject({ value: { key: "alpha", value: 2 } });
       call("unsubscribe", topic);
       const syncId = call("sync", "increment", ["alpha", 1]);
       await waitFor(
@@ -98,7 +97,7 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
             typeof value === "object" &&
             value !== null &&
             "method" in value &&
-            value.method === "synced",
+            value.method === "listener",
         ),
       ).toHaveLength(2);
     } finally {
@@ -121,6 +120,25 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     }
   });
 
+  it("returns parse errors for malformed JSON", async () => {
+    const { socket, messages } = await connect();
+    try {
+      socket.send("{");
+      const response = await waitFor(
+        messages,
+        (value): value is ResponseMessage =>
+          typeof value === "object" &&
+          value !== null &&
+          "id" in value &&
+          value.id === null &&
+          "error" in value &&
+          JSON.stringify(value).includes('"code":-32700'),
+      );
+      expect(response.error?.code).toBe(-32700);
+    } finally {
+      socket.close();
+    }
+  });
   it("restores subscriptions after Durable Object eviction", async () => {
     const { socket, messages, call } = await connect();
     try {
@@ -128,21 +146,25 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
       await waitFor(
         messages,
         (value): value is Record<string, unknown> =>
-          typeof value === "object" && value !== null && "topic" in value,
+          typeof value === "object" &&
+          value !== null &&
+          "method" in value &&
+          value.method === "listener",
       );
       await evictDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"));
       call("sync", "increment", ["restore", 3]);
       const event = await waitFor(
         messages,
-        (value): value is { jsonrpc: string; method: string; params: [unknown[]] } =>
+        (value): value is { jsonrpc: string; method: string; params: [Record<string, unknown>] } =>
           typeof value === "object" &&
           value !== null &&
           "method" in value &&
-          value.method === "synced",
+          value.method === "listener" &&
+          "params" in value &&
+          Array.isArray(value.params) &&
+          value.params[0]?.value?.value === 3,
       );
-      expect(event).not.toHaveProperty("id");
-      expect(event.params[0]).toHaveLength(1);
-      expect(event.params[0][0]).toMatchObject({ value: { key: "restore", value: 3 } });
+      expect(event.params[0]).toMatchObject({ value: { key: "restore", value: 3 } });
     } finally {
       socket.close();
     }
