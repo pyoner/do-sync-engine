@@ -45,7 +45,6 @@ export abstract class DurableObjectWebSocket<Env, Service extends RpcService<Ser
     const response = await handleRpcFrame({
       raw,
       service: session.service,
-      createTranscoder: this.#binding.createTranscoder,
     });
     if (response instanceof Error) {
       this.#fail(socket, response);
@@ -70,10 +69,7 @@ export abstract class DurableObjectWebSocket<Env, Service extends RpcService<Ser
     const session = this.#binding.createSession({
       attachment: this.#attachment(socket),
       notify: (request) => {
-        const message = encodeRpcMessage({
-          message: request,
-          createTranscoder: this.#binding.createTranscoder,
-        });
+        const message = encodeRpcMessage(request);
         if (message instanceof Error) return message;
         return this.#send(socket, message);
       },

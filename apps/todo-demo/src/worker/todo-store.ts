@@ -1,6 +1,5 @@
 import { SyncEngine } from "@do-sync-engine/core";
 import {
-  createJsonRpcTranscoder,
   createServiceApiSession,
   DurableObjectWebSocket,
   type ServiceAPI,
@@ -93,7 +92,6 @@ export class TodoStore extends DurableObjectWebSocket<Env, ServiceAPI<TodoQuerie
           mutations: createMutations(storage),
         });
       }),
-      createTranscoder: createJsonRpcTranscoder,
     });
   }
 }

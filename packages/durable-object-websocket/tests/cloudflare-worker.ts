@@ -8,12 +8,7 @@ declare global {
 }
 import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type { Mutation, Query } from "@do-sync-engine/core";
-import {
-  DurableObjectWebSocket,
-  createJsonRpcTranscoder,
-  createServiceApiSession,
-  type ServiceAPI,
-} from "../src/index.ts";
+import { DurableObjectWebSocket, createServiceApiSession, type ServiceAPI } from "../src/index.ts";
 export type FixtureQueries = { counter: Query<[string], { key: string; value: number }> };
 export type FixtureMutations = { increment: Mutation<[string, number], void> };
 export class FixtureSyncObject extends DurableObjectWebSocket<
@@ -53,7 +48,6 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
         } satisfies FixtureMutations;
         return new SyncEngine({ queries, mutations });
       }),
-      createTranscoder: createJsonRpcTranscoder,
     });
   }
 }
