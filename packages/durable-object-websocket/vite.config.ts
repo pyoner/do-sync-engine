@@ -3,6 +3,10 @@ import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 
 export default defineConfig({
   pack: {
+    entry: {
+      index: "src/index.ts",
+      service: "src/service.ts",
+    },
     exports: true,
     deps: { neverBundle: ["@do-sync-engine/core", "cloudflare:workers"] },
   },

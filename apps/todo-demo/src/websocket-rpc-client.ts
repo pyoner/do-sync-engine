@@ -1,10 +1,10 @@
 import type { MutationMap, OperationParams, QueryMap, StringKey } from "@do-sync-engine/core";
-import type {
-  QueryTopic,
-  ServiceAPI,
-  SubscriptionEvent,
-} from "@do-sync-engine/durable-object-websocket";
-import { LISTENER_EVENT_METHOD } from "@do-sync-engine/durable-object-websocket";
+import {
+  SYNC_METHOD,
+  type QueryTopic,
+  type Service,
+  type SubscriptionEvent,
+} from "@do-sync-engine/durable-object-websocket/service";
 import { rpcClient } from "typed-rpc";
 import type { JsonRpcRequest, JsonRpcResponse, RpcTransport } from "typed-rpc";
 type PendingResponse = {
@@ -15,7 +15,7 @@ type SocketMessage = {
   readonly id?: string | number | null;
   readonly jsonrpc?: string;
   readonly method?: string;
-  readonly params?: readonly [SubscriptionEvent<QueryMap>];
+  readonly params?: ReadonlyArray<SubscriptionEvent<QueryMap>>;
 };
 export interface WebSocketRpcClient<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   createTopic<Name extends StringKey<Q>>(
@@ -64,13 +64,11 @@ export function newWebSocketRpcSession<Q extends QueryMap<Q>, M extends Mutation
       broken(new Error("Invalid WebSocket message", { cause }));
       return;
     }
-    if (
-      parsed.jsonrpc === "2.0" &&
-      parsed.method === LISTENER_EVENT_METHOD &&
-      parsed.params?.length === 1
-    ) {
-      const event = parsed.params[0] as unknown as SubscriptionEvent<Q>;
-      for (const listener of listeners.get(topicKey(event.topic)) ?? []) listener(event);
+    if (parsed.jsonrpc === "2.0" && parsed.method === SYNC_METHOD && Array.isArray(parsed.params)) {
+      for (const value of parsed.params) {
+        const event = value as unknown as SubscriptionEvent<Q>;
+        for (const listener of listeners.get(topicKey(event.topic)) ?? []) listener(event);
+      }
       return;
     }
     if (parsed.id === undefined || parsed.id === null) return;
@@ -96,7 +94,7 @@ export function newWebSocketRpcSession<Q extends QueryMap<Q>, M extends Mutation
     socket.send(JSON.stringify(request));
     return promise;
   };
-  const client = rpcClient<ServiceAPI<Q, M>>({ transport });
+  const client = rpcClient<Service<Q, M>>({ transport });
   const request = <T>(promise: Promise<T>) =>
     promise
       .then((result) => (result === null ? undefined : result))

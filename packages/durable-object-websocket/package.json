@@ -18,6 +18,7 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
+    "./service": "./dist/service.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {

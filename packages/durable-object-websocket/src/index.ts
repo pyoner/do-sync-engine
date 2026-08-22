@@ -1,9 +1,2 @@
-export { DurableObjectWebSocket } from "./durable-object";
-export {
-  LISTENER_EVENT_METHOD,
-  createServiceApiSession,
-  listenerNotification,
-  type QueryTopic,
-  type ServiceAPI,
-  type SubscriptionEvent,
-} from "./service-api";
+export { DurableObjectWebSocket } from "./durable-object-websocket";
+export { SYNC_METHOD, type QueryTopic, type Service, type SubscriptionEvent } from "./service";

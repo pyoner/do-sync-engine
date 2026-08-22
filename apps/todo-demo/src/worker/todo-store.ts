@@ -1,9 +1,5 @@
 import { SyncEngine } from "@do-sync-engine/core";
-import {
-  createServiceApiSession,
-  DurableObjectWebSocket,
-  type ServiceAPI,
-} from "@do-sync-engine/durable-object-websocket";
+import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 import type { TodoMutations, TodoQueries } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
 
@@ -81,17 +77,15 @@ function createMutations(storage: SqlDatabase): TodoMutations {
     },
   } satisfies TodoMutations;
 }
-export class TodoStore extends DurableObjectWebSocket<Env, ServiceAPI<TodoQueries, TodoMutations>> {
+export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, {
-      createSession: createServiceApiSession(() => {
-        ctx.storage.sql.exec(SCHEMA);
-        const storage = new DurableObjectSqlStorage(ctx.storage.sql);
-        return new SyncEngine<TodoQueries, TodoMutations>({
-          queries: createQueries(storage),
-          mutations: createMutations(storage),
-        });
-      }),
+    super(ctx, env, () => {
+      ctx.storage.sql.exec(SCHEMA);
+      const storage = new DurableObjectSqlStorage(ctx.storage.sql);
+      return new SyncEngine<TodoQueries, TodoMutations>({
+        queries: createQueries(storage),
+        mutations: createMutations(storage),
+      });
     });
   }
 }
