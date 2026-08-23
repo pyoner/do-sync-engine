@@ -1,18 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
 import type { MutationMap, QueryMap, SyncEngineInterface } from "@do-sync-engine/core";
 import * as errore from "errore";
-import type { QueryTopic, ServiceFactory, ServiceSession } from "./service";
-import { createService } from "./service";
-
-const decoder = new TextDecoder();
+import type { QueryTopic } from "./service";
+import {
+  createServiceSessions,
+  type ServiceSessionAdapter,
+  type ServiceSessions,
+} from "./service-session";
 
 export abstract class DurableObjectWebSocket<
   Env,
   Queries extends QueryMap<Queries>,
   Mutations extends MutationMap<Mutations>,
 > extends DurableObject<Env> {
-  readonly #sessions = new Map<WebSocket, ServiceSession>();
-  readonly #createSession: ServiceFactory<Queries>;
+  readonly #sessions: ServiceSessions<Queries>;
 
   protected constructor(
     ctx: DurableObjectState,
@@ -20,7 +21,7 @@ export abstract class DurableObjectWebSocket<
     initialize: () => SyncEngineInterface<Queries, Mutations>,
   ) {
     super(ctx, env);
-    this.#createSession = createService(initialize());
+    this.#sessions = createServiceSessions(initialize());
     for (const socket of ctx.getWebSockets()) {
       const connected = this.#connect(socket, this.#topics(socket));
       if (connected instanceof Error) {
@@ -46,51 +47,26 @@ export abstract class DurableObjectWebSocket<
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const session = this.#sessions.get(socket);
-    if (session === undefined) return;
-
-    const decoded = this.#decode(message);
-    if (decoded instanceof Error) {
-      const sent = this.#send(socket, {
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32700, message: "Parse error" },
-      });
-      if (sent instanceof Error) this.#disconnect(socket, sent, "WebSocket transport failed");
-      return;
-    }
-
-    const response = await session
-      .handle(decoded.value)
-      .catch((cause) => new Error("Failed to handle WebSocket RPC request", { cause }));
-    if (response instanceof Error) {
-      this.#disconnect(socket, response, "WebSocket transport failed");
-      return;
-    }
-    if (response === null) return;
-
-    const sent = this.#send(socket, response);
-    if (sent instanceof Error) this.#disconnect(socket, sent, "WebSocket transport failed");
+    await this.#sessions.handle(socket, message);
   }
 
   webSocketClose(socket: WebSocket): void {
-    this.#close(socket);
+    this.#sessions.close(socket);
   }
 
   webSocketError(socket: WebSocket, error: unknown): void {
     console.warn("WebSocket failed", error);
-    this.#close(socket);
+    this.#sessions.close(socket);
   }
 
   #connect(socket: WebSocket, topics: readonly unknown[]): void | Error {
-    const session = this.#createSession({
+    const adapter: ServiceSessionAdapter<Queries> = {
       topics,
       persist: (values) => this.#persist(socket, values),
-      notify: (request) => this.#send(socket, request),
+      send: (message) => this.#send(socket, message),
       fail: (error) => this.#disconnect(socket, error, "WebSocket transport failed"),
-    });
-    if (session instanceof Error) return session;
-    this.#sessions.set(socket, session);
+    };
+    return this.#sessions.connect(socket, adapter);
   }
 
   #topics(socket: WebSocket): readonly unknown[] {
@@ -108,14 +84,6 @@ export abstract class DurableObjectWebSocket<
     return [];
   }
 
-  #decode(message: string | ArrayBuffer): Error | { readonly value: unknown } {
-    const text = typeof message === "string" ? message : decoder.decode(message);
-    return errore.try({
-      try: () => ({ value: JSON.parse(text) as unknown }),
-      catch: (cause) => new Error("Failed to parse RPC message", { cause }),
-    });
-  }
-
   #persist(socket: WebSocket, topics: ReadonlyArray<QueryTopic<Queries>>): void | Error {
     return errore.try({
       try: () => socket.serializeAttachment(topics),
@@ -123,29 +91,16 @@ export abstract class DurableObjectWebSocket<
     });
   }
 
-  #send(socket: WebSocket, message: unknown): void | Error {
-    const text = errore.try({
-      try: () => JSON.stringify(message),
-      catch: (cause) => new Error("Failed to serialize RPC message", { cause }),
-    });
-    if (text instanceof Error) return text;
-    if (text === undefined) return new Error("Failed to serialize RPC message");
+  #send(socket: WebSocket, message: string): void | Error {
     return errore.try({
-      try: () => socket.send(text),
+      try: () => socket.send(message),
       catch: (cause) => new Error("WebSocket transport failed", { cause }),
     });
   }
 
-  #close(socket: WebSocket): void {
-    const session = this.#sessions.get(socket);
-    if (session === undefined) return;
-    this.#sessions.delete(socket);
-    session.close();
-  }
-
   #disconnect(socket: WebSocket, error: Error, reason: string): void {
     console.warn(error.message, error);
-    this.#close(socket);
+    this.#sessions.close(socket);
     const closed = errore.try({
       try: () => socket.close(1011, reason),
       catch: (cause) => new Error("Failed to close WebSocket", { cause }),

@@ -4,7 +4,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { SYNC_METHOD } from "../src/index.ts";
-import { createService } from "../src/service.ts";
+import { createServiceSessions } from "../src/service-session.ts";
 
 const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -25,10 +25,15 @@ type SyncNotification = {
   }>;
 };
 
-type MessageQueue = {
-  readonly messages: unknown[];
-  push(value: unknown): void;
-  waitFor<T>(predicate: (value: unknown) => value is T): Promise<T>;
+type WebSocketTestClient = {
+  subscribe(topic: unknown): Promise<ResponseMessage>;
+  unsubscribe(topic: unknown): Promise<ResponseMessage>;
+  sync(name: string, params: unknown[]): Promise<ResponseMessage>;
+  waitForSync(predicate?: (value: SyncNotification) => boolean): Promise<SyncNotification>;
+  syncCount(): number;
+  sendRaw(message: string): void;
+  waitForFrame<T>(predicate: (value: unknown) => value is T): Promise<T>;
+  close(): void;
 };
 
 function isResponseMessage(value: unknown): value is ResponseMessage {
@@ -66,51 +71,67 @@ function hasCounterValue(notification: SyncNotification, expected: number): bool
   );
 }
 
-function createMessageQueue(): MessageQueue {
-  const messages: unknown[] = [];
-  const waiters = new Set<(value: unknown) => void>();
-  const push = (value: unknown): void => {
-    messages.push(value);
-    for (const waiter of waiters) waiter(value);
-  };
-  const waitFor = <T>(predicate: (value: unknown) => value is T): Promise<T> => {
-    const existing = messages.find(predicate);
-    if (existing !== undefined) return Promise.resolve(existing);
-
-    const { promise, resolve } = Promise.withResolvers<T>();
-    const waiter = (value: unknown): void => {
-      if (!predicate(value)) return;
-      waiters.delete(waiter);
-      resolve(value);
-    };
-    waiters.add(waiter);
-    return promise;
-  };
-  return { messages, push, waitFor };
-}
-
-async function connect() {
+async function connect(): Promise<WebSocketTestClient> {
   const response = await worker.default.fetch(
     new Request("https://example.com", { headers: { Upgrade: "websocket" } }),
   );
   const socket = response.webSocket!;
   socket.accept();
-  const queue = createMessageQueue();
-  socket.addEventListener("message", (event: MessageEvent) =>
-    queue.push(JSON.parse(String(event.data))),
-  );
-  let requestId = 0;
-  const call = (method: string, ...params: unknown[]) => {
-    const id = String(++requestId);
-    socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
-    return id;
+  const frames: unknown[] = [];
+  const waiters = new Set<{
+    predicate: (value: unknown) => boolean;
+    resolve(value: unknown): void;
+  }>();
+  const push = (value: unknown): void => {
+    frames.push(value);
+    for (const waiter of waiters) {
+      if (!waiter.predicate(value)) continue;
+      waiters.delete(waiter);
+      waiter.resolve(value);
+    }
   };
-  return { socket, queue, call };
+  socket.addEventListener("message", (event: MessageEvent) => push(JSON.parse(String(event.data))));
+  let requestId = 0;
+  const waitForFrame = <T>(predicate: (value: unknown) => value is T): Promise<T> => {
+    const existing = frames.find(predicate);
+    if (existing !== undefined) return Promise.resolve(existing);
+    return new Promise<T>((resolve) => {
+      waiters.add({ predicate, resolve });
+    });
+  };
+  const call = async (method: string, params: unknown[]): Promise<ResponseMessage> => {
+    const id = String(++requestId);
+    const response = waitForFrame(
+      (value): value is ResponseMessage => isResponseMessage(value) && value.id === id,
+    );
+    socket.send(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+    return response;
+  };
+  return {
+    subscribe: (topic) => call("subscribe", [topic]),
+    unsubscribe: (topic) => call("unsubscribe", [topic]),
+    sync: (name, params) => call("sync", [name, params]),
+    waitForSync: (predicate = () => true) =>
+      waitForFrame(
+        (value): value is SyncNotification => isSyncNotification(value) && predicate(value),
+      ),
+    syncCount: () => frames.filter(isSyncNotification).length,
+    sendRaw: (message) => socket.send(message),
+    waitForFrame,
+    close: () => socket.close(),
+  };
 }
 
-function responseFor(queue: MessageQueue, id: string): Promise<ResponseMessage> {
-  return queue.waitFor(
-    (value): value is ResponseMessage => isResponseMessage(value) && value.id === id,
+async function rpcRequest(
+  sessions: { handle(connection: object, message: string): Promise<void> },
+  connection: object,
+  sent: unknown[],
+  request: { readonly id: string; readonly [key: string]: unknown },
+) {
+  await sessions.handle(connection, JSON.stringify(request));
+  return sent.find(
+    (value): value is { readonly id: string } =>
+      typeof value === "object" && value !== null && "id" in value && value.id === request.id,
   );
 }
 
@@ -129,96 +150,83 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     try {
       const alpha = { name: "counter", params: ["batch-alpha"] };
       const beta = { name: "counter", params: ["batch-beta"] };
-
-      const alphaSubscription = first.call("subscribe", alpha);
-      expect((await responseFor(first.queue, alphaSubscription)).result).toBeNull();
-      expect((await first.queue.waitFor(isSyncNotification)).params).toEqual([
+      expect((await first.subscribe(alpha)).result).toBeNull();
+      expect((await first.waitForSync()).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 0 } },
       ]);
-
-      const betaSubscription = first.call("subscribe", beta);
-      expect((await responseFor(first.queue, betaSubscription)).result).toBeNull();
-      const betaInitial = await first.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && value.params[0]?.topic.params[0] === "batch-beta",
-      );
-      expect(betaInitial.params).toEqual([{ topic: beta, value: { key: "batch-beta", value: 0 } }]);
-
-      const duplicateSubscription = first.call("subscribe", alpha);
-      expect((await responseFor(first.queue, duplicateSubscription)).result).toBeNull();
-
-      const secondSubscription = second.call("subscribe", alpha);
-      expect((await responseFor(second.queue, secondSubscription)).result).toBeNull();
-      expect((await second.queue.waitFor(isSyncNotification)).params).toEqual([
+      expect((await first.subscribe(beta)).result).toBeNull();
+      expect(
+        (await first.waitForSync((value) => value.params[0]?.topic.params[0] === "batch-beta"))
+          .params,
+      ).toEqual([{ topic: beta, value: { key: "batch-beta", value: 0 } }]);
+      expect((await first.subscribe(alpha)).result).toBeNull();
+      expect((await second.subscribe(alpha)).result).toBeNull();
+      expect((await second.waitForSync()).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 0 } },
       ]);
-
-      const firstSync = first.call("sync", "increment", ["batch-alpha", 2]);
-      expect((await responseFor(first.queue, firstSync)).result).toBeNull();
-      const firstBatch = await first.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && value.params.length === 2 && hasCounterValue(value, 2),
-      );
-      expect(firstBatch.params).toEqual([
+      expect((await first.sync("increment", ["batch-alpha", 2])).result).toBeNull();
+      expect(
+        (await first.waitForSync((value) => value.params.length === 2 && hasCounterValue(value, 2)))
+          .params,
+      ).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 2 } },
         { topic: beta, value: { key: "batch-beta", value: 0 } },
       ]);
-
-      const secondBatch = await second.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && value.params.length === 1 && hasCounterValue(value, 2),
-      );
-      expect(secondBatch.params).toEqual([
+      expect((await second.waitForSync((value) => hasCounterValue(value, 2))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 2 } },
       ]);
-
-      const unsubscribe = first.call("unsubscribe", beta);
-      expect((await responseFor(first.queue, unsubscribe)).result).toBeNull();
-      const reducedSync = first.call("sync", "increment", ["batch-alpha", 1]);
-      expect((await responseFor(first.queue, reducedSync)).result).toBeNull();
-      const reducedBatch = await first.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && value.params.length === 1 && hasCounterValue(value, 3),
-      );
-      expect(reducedBatch.params).toEqual([
+      expect((await first.unsubscribe(beta)).result).toBeNull();
+      expect((await first.sync("increment", ["batch-alpha", 1])).result).toBeNull();
+      expect((await first.waitForSync((value) => hasCounterValue(value, 3))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 3 } },
       ]);
-      const secondReducedBatch = await second.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && value.params.length === 1 && hasCounterValue(value, 3),
-      );
-      expect(secondReducedBatch.params).toEqual([
+      expect((await second.waitForSync((value) => hasCounterValue(value, 3))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 3 } },
       ]);
-      expect(first.queue.messages.filter(isSyncNotification)).toHaveLength(4);
-      expect(second.queue.messages.filter(isSyncNotification)).toHaveLength(3);
+      expect(first.syncCount()).toBe(4);
+      expect(second.syncCount()).toBe(3);
     } finally {
-      first.socket.close();
-      second.socket.close();
+      first.close();
+      second.close();
+    }
+  });
+
+  it("does not send empty sync notifications to idle sockets", async () => {
+    const idle = await connect();
+    const active = await connect();
+    try {
+      const topic = { name: "counter", params: ["active"] };
+      await active.subscribe(topic);
+      await active.waitForSync();
+      await active.sync("increment", ["active", 1]);
+      await active.waitForSync((value) => hasCounterValue(value, 1));
+      expect(idle.syncCount()).toBe(0);
+    } finally {
+      idle.close();
+      active.close();
     }
   });
 
   it("returns unknown queries as RPC errors", async () => {
     const connection = await connect();
     try {
-      const id = connection.call("subscribe", { name: "unknown", params: [] });
-      expect((await responseFor(connection.queue, id)).error).toBeDefined();
+      expect((await connection.subscribe({ name: "unknown", params: [] })).error).toBeDefined();
     } finally {
-      connection.socket.close();
+      connection.close();
     }
   });
 
   it("returns parse errors for malformed JSON", async () => {
     const connection = await connect();
     try {
-      connection.socket.send("{");
-      const response = await connection.queue.waitFor(
+      connection.sendRaw("{");
+      const response = await connection.waitForFrame(
         (value): value is ResponseMessage =>
           isResponseMessage(value) && value.id === null && value.error?.code === -32700,
       );
       expect(response.error?.code).toBe(-32700);
     } finally {
-      connection.socket.close();
+      connection.close();
     }
   });
 
@@ -226,24 +234,17 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     const connection = await connect();
     try {
       const topic = { name: "counter", params: ["restore"] };
-      const subscription = connection.call("subscribe", topic);
-      await responseFor(connection.queue, subscription);
-      expect((await connection.queue.waitFor(isSyncNotification)).params).toEqual([
-        { topic, value: { key: "restore", value: 0 } },
-      ]);
-      const beforeEviction = connection.queue.messages.filter(isSyncNotification).length;
-
+      await connection.subscribe(topic);
+      await connection.waitForSync();
+      const beforeEviction = connection.syncCount();
       await evictDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"));
-      const sync = connection.call("sync", "increment", ["restore", 3]);
-      expect((await responseFor(connection.queue, sync)).result).toBeNull();
-      const event = await connection.queue.waitFor(
-        (value): value is SyncNotification =>
-          isSyncNotification(value) && hasCounterValue(value, 3),
-      );
-      expect(event.params).toEqual([{ topic, value: { key: "restore", value: 3 } }]);
-      expect(connection.queue.messages.filter(isSyncNotification)).toHaveLength(beforeEviction + 1);
+      expect((await connection.sync("increment", ["restore", 3])).result).toBeNull();
+      expect((await connection.waitForSync((value) => hasCounterValue(value, 3))).params).toEqual([
+        { topic, value: { key: "restore", value: 3 } },
+      ]);
+      expect(connection.syncCount()).toBe(beforeEviction + 1);
     } finally {
-      connection.socket.close();
+      connection.close();
     }
   });
 
@@ -266,47 +267,49 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     const engine = new SyncEngine({ queries, mutations });
     let persistenceError: Error | null = null;
     const notifications: unknown[] = [];
-    const session = createService(engine)({
+    const sessions = createServiceSessions(engine);
+    const connection = {};
+    const connected = sessions.connect(connection, {
       topics: [],
       persist: () => persistenceError ?? undefined,
-      notify: (request) => {
-        notifications.push(request);
+      send: (request) => {
+        notifications.push(JSON.parse(request));
       },
       fail: (error) => {
         throw error;
       },
     });
-    if (session instanceof Error) throw session;
+    if (connected instanceof Error) throw connected;
 
     const topic = { name: "counter", params: [] };
     persistenceError = new Error("persistence failed");
     expect(
-      await session.handle({
+      await rpcRequest(sessions, connection, notifications, {
         jsonrpc: "2.0",
         id: "failed-subscribe",
         method: "subscribe",
         params: [topic],
       }),
     ).toMatchObject({ error: { message: "persistence failed" } });
-    expect(notifications).toHaveLength(0);
+    notifications.length = 0;
 
     persistenceError = null;
     expect(
-      await session.handle({
+      await rpcRequest(sessions, connection, notifications, {
         jsonrpc: "2.0",
         id: "retried-subscribe",
         method: "subscribe",
         params: [topic],
       }),
     ).toMatchObject({ result: null });
-    expect(notifications).toEqual([
+    expect(notifications.filter(isSyncNotification)).toEqual([
       { jsonrpc: "2.0", method: SYNC_METHOD, params: [{ topic, value: 0 }] },
     ]);
 
     notifications.length = 0;
     persistenceError = new Error("persistence failed");
     expect(
-      await session.handle({
+      await rpcRequest(sessions, connection, notifications, {
         jsonrpc: "2.0",
         id: "failed-unsubscribe",
         method: "unsubscribe",
@@ -314,17 +317,17 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
       }),
     ).toMatchObject({ error: { message: "persistence failed" } });
     expect(
-      await session.handle({
+      await rpcRequest(sessions, connection, notifications, {
         jsonrpc: "2.0",
         id: "sync-after-failed-unsubscribe",
         method: "sync",
         params: ["increment", []],
       }),
     ).toMatchObject({ result: null });
-    expect(notifications).toEqual([
+    expect(notifications.filter(isSyncNotification)).toEqual([
       { jsonrpc: "2.0", method: SYNC_METHOD, params: [{ topic, value: 1 }] },
     ]);
-    session.close();
+    sessions.close(connection);
   });
 
   it("removes partially restored listeners when normalization fails", () => {
@@ -342,14 +345,18 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     } satisfies { increment: Mutation<[], void> };
     const engine = new SyncEngine({ queries, mutations });
     const unsubscribe = vi.spyOn(engine, "unsubscribe");
-    const restored = createService(engine)({
-      topics: [{ name: "counter", params: [] }],
-      persist: () => new Error("persistence failed"),
-      notify: () => {},
-      fail: (error) => {
-        throw error;
+    const sessions = createServiceSessions(engine);
+    const restored = sessions.connect(
+      {},
+      {
+        topics: [{ name: "counter", params: [] }],
+        persist: () => new Error("persistence failed"),
+        send: () => {},
+        fail: (error) => {
+          throw error;
+        },
       },
-    });
+    );
     expect(restored).toBeInstanceOf(Error);
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
@@ -378,25 +385,27 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
       },
     } satisfies { touch: Mutation<[], void> };
     const notifications: unknown[] = [];
-    const session = createService(new SyncEngine({ queries, mutations }))({
+    const sessions = createServiceSessions(new SyncEngine({ queries, mutations }));
+    const connection = {};
+    const connected = sessions.connect(connection, {
       topics: [],
       persist: () => {},
-      notify: (request) => {
-        notifications.push(request);
+      send: (request) => {
+        notifications.push(JSON.parse(request));
       },
       fail: (error) => {
         throw error;
       },
     });
-    if (session instanceof Error) throw session;
+    if (connected instanceof Error) throw connected;
 
-    await session.handle({
+    await rpcRequest(sessions, connection, notifications, {
       jsonrpc: "2.0",
       id: "subscribe-first",
       method: "subscribe",
       params: [{ name: "first", params: [] }],
     });
-    await session.handle({
+    await rpcRequest(sessions, connection, notifications, {
       jsonrpc: "2.0",
       id: "subscribe-second",
       method: "subscribe",
@@ -405,20 +414,96 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     notifications.length = 0;
 
     expect(
-      await session.handle({
+      await rpcRequest(sessions, connection, notifications, {
         jsonrpc: "2.0",
         id: "failed-sync",
         method: "sync",
         params: ["touch", []],
       }),
     ).toMatchObject({ error: { message: "Query execution failed" } });
-    expect(notifications).toEqual([
+    expect(notifications.filter(isSyncNotification)).toEqual([
       {
         jsonrpc: "2.0",
         method: SYNC_METHOD,
         params: [{ topic: { name: "first", params: [] }, value: "first" }],
       },
     ]);
-    session.close();
+    sessions.close(connection);
+  });
+  it("rejects duplicate session connections", () => {
+    const engine = new SyncEngine({
+      queries: {
+        counter: {
+          tables: toTables(["counters"]),
+          run: () => 0,
+        },
+      } satisfies { counter: Query<[], number> },
+      mutations: {
+        increment: {
+          tables: toTables(["counters"]),
+          run: () => {},
+        },
+      } satisfies { increment: Mutation<[], void> },
+    });
+    const sessions = createServiceSessions(engine);
+    const connection = {};
+    const adapter = {
+      topics: [],
+      persist: () => {},
+      send: () => {},
+      fail: () => {},
+    };
+
+    expect(sessions.connect(connection, adapter)).toBeUndefined();
+    expect(sessions.connect(connection, adapter)).toMatchObject({
+      message: "Service session already connected",
+    });
+    expect(sessions.has(connection)).toBe(true);
+    sessions.close(connection);
+  });
+  it("removes a session before reporting notification failure", async () => {
+    const engine = new SyncEngine({
+      queries: {
+        counter: {
+          tables: toTables(["counters"]),
+          run: () => 0,
+        },
+      } satisfies { counter: Query<[], number> },
+      mutations: {
+        increment: {
+          tables: toTables(["counters"]),
+          run: () => {},
+        },
+      } satisfies { increment: Mutation<[], void> },
+    });
+    const sessions = createServiceSessions(engine);
+    const connection = {};
+    const unsubscribe = vi.spyOn(engine, "unsubscribe");
+    const failed = vi.fn();
+    const connected = sessions.connect(connection, {
+      topics: [],
+      persist: () => {},
+      send: () => new Error("notification failed"),
+      fail: (error) => {
+        expect(sessions.has(connection)).toBe(false);
+        failed(error);
+      },
+    });
+    if (connected instanceof Error) throw connected;
+
+    await sessions.handle(
+      connection,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "subscribe",
+        method: "subscribe",
+        params: [{ name: "counter", params: [] }],
+      }),
+    );
+    expect(failed).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "notification failed" }),
+    );
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(sessions.has(connection)).toBe(false);
   });
 });
