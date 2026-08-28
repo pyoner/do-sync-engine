@@ -162,7 +162,7 @@ test("typed createTopic params and listener handle", async () => {
   expectOk(engine.unsubscribe(topic, listener));
 });
 
-test("compares structurally equal topics", async () => {
+test("uses topic identity for listener registration", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
@@ -180,7 +180,47 @@ test("compares structurally equal topics", async () => {
   const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
   const listener: Listener = () => {};
 
-  expectOk(engine.subscribe(firstTopic, listener));
-  expect(engine.subscribe(secondTopic, listener)).toBeUndefined();
-  expectOk(engine.unsubscribe(firstTopic, listener));
+  const firstId = expectOk(engine.subscribe(firstTopic, listener));
+  const secondId = expectOk(engine.subscribe(secondTopic, listener));
+  expect(secondId).not.toBe(firstId);
+  engine.unsubscribe(firstTopic, listener);
+  expect(engine.subscribe(secondTopic, listener)).toBe(secondId);
+});
+
+test("supports explicit IDs and every unsubscribe form", () => {
+  const queries = {
+    value: { tables: toTables(["value"]), run: () => 1 } satisfies Query<[], number>,
+  };
+  const engine = new SyncEngine({
+    queries,
+    mutations: { noop: { tables: toTables(["value"]), run: () => null } },
+  });
+  const topic = expectOk(engine.createTopic("value", []));
+  const first: number[] = [];
+  const second: number[] = [];
+  const firstListener: Listener = () => first.push(1);
+  const secondListener: Listener = () => second.push(1);
+
+  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
+  expect(engine.subscribe(topic, secondListener, "second")).toBe("second");
+  engine.unsubscribe(topic, firstListener);
+  engine.sync("noop", []);
+  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
+  engine.sync("noop", []);
+  engine.unsubscribe("first");
+  engine.sync("noop", []);
+  engine.unsubscribe(topic, "second");
+  engine.sync("noop", []);
+  expect(first).toEqual([1, 1, 1]);
+  expect(second).toEqual([1, 1, 1, 1]);
+});
+
+test("requires and uses numeric ID factories", () => {
+  const engine = new SyncEngine<{ value: Query<[], number> }, {}, number>({
+    queries: { value: { tables: toTables([]), run: () => 1 } },
+    mutations: {},
+    createId: () => 7,
+  });
+  const topic = expectOk(engine.createTopic("value", []));
+  expect(engine.subscribe(topic, () => undefined)).toBe(7);
 });

@@ -1,3 +1,5 @@
+import type { HashMap } from "hashmap";
+
 declare const brand: unique symbol;
 
 export type Branded<
@@ -74,34 +76,66 @@ export type MutationMap<Mutations extends object = Record<string, Mutation<BaseP
       : never;
   };
 
-export interface SyncEngineOptions<
-  Queries extends QueryMap<Queries> = QueryMap,
-  Mutations extends MutationMap<Mutations> = MutationMap,
-> {
+export type Registry<Queries extends QueryMap = QueryMap, Id = string> = HashMap<
+  Topic<StringKey<Queries>, OperationParams<Queries[StringKey<Queries>]>>,
+  Map<
+    Id,
+    Listener<
+      ListenerEvent<
+        StringKey<Queries>,
+        OperationParams<Queries[StringKey<Queries>]>,
+        OperationResult<Queries[StringKey<Queries>]>
+      >
+    >
+  >
+>;
+
+export type SyncEngineOptions<
+  Queries extends QueryMap = QueryMap,
+  Mutations extends MutationMap = MutationMap,
+  Id = string,
+> = {
   queries: Queries;
   mutations: Mutations;
-}
+  createId?: () => Id;
+};
 
 export interface SyncEngineInterface<
-  Queries extends QueryMap<Queries> = QueryMap,
-  Mutations extends MutationMap<Mutations> = MutationMap,
+  Queries extends QueryMap = QueryMap,
+  Mutations extends MutationMap = MutationMap,
+  Id = string,
 > {
   createTopic<Name extends StringKey<Queries>>(
     name: Name,
     params: OperationParams<Queries[Name]>,
   ): Topic<Name, OperationParams<Queries[Name]>> | Error;
+
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | Error;
+  ): Id | Error;
+  subscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+    id: Id,
+  ): Id | Error;
+
+  unsubscribe(id: Id): void;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    id: Id,
+  ): void;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
   ): void;
+
   sync<Name extends StringKey<Mutations>>(
     mutation: Name,
     params: OperationParams<Mutations[Name]>,

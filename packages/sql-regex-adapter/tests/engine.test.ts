@@ -193,8 +193,8 @@ describe("SyncEngine topics and events", () => {
     const topic = expectOk(engine.createTopic("allUsers", []));
     const first = captureEvents();
     const second = captureEvents();
-    expectOk(engine.subscribe(topic, first.listener));
-    expect(engine.subscribe(topic, first.listener)).toBeUndefined();
+    const firstId = expectOk(engine.subscribe(topic, first.listener));
+    expect(engine.subscribe(topic, first.listener)).toBe(firstId);
     expectOk(engine.subscribe(topic, second.listener));
 
     engine.sync("insertUser", ["charlie"]);

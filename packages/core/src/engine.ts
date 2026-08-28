@@ -1,5 +1,5 @@
-import { dequal } from "dequal";
 import * as errore from "errore";
+import HashMap from "hashmap";
 import {
   MutationExecutionError,
   QueryExecutionError,
@@ -17,23 +17,30 @@ import type {
   OperationResult,
   Query,
   QueryMap,
+  Registry,
   StringKey,
   SyncEngineInterface,
   SyncEngineOptions,
   Table,
   Topic,
 } from "./types";
-type Listeners = Set<unknown>;
+type Listeners<Id, Queries extends QueryMap> = Map<
+  Id,
+  Listener<ListenerEvent<StringKey<Queries>, OperationParams<Queries[string]>>>
+>;
 
 export class SyncEngine<
-  Queries extends QueryMap<Queries> = QueryMap,
-  Mutations extends MutationMap<Mutations> = MutationMap,
-> implements SyncEngineInterface<Queries, Mutations> {
+  Queries extends QueryMap = QueryMap,
+  Mutations extends MutationMap = MutationMap,
+  Id = string,
+> implements SyncEngineInterface<Queries, Mutations, Id> {
   private readonly queries: ReadonlyMap<string, Query<BaseParams, unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<BaseParams, unknown>>;
-  private readonly registry = new Map<Topic<StringKey<Queries>, BaseParams>, Listeners>();
+  private readonly createId: () => Id;
+  private readonly registry: Registry<Queries, Id> = new HashMap();
 
-  constructor(options: SyncEngineOptions<Queries, Mutations>) {
+  constructor(options: SyncEngineOptions<Queries, Mutations, Id>) {
+    this.createId = options.createId ?? (() => crypto.randomUUID() as unknown as Id);
     this.queries = new Map(
       Object.entries(options.queries) as Array<[string, Query<BaseParams, unknown>]>,
     );
@@ -56,35 +63,77 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): void | UnknownQueryError | QueryExecutionError {
+  ): Id | UnknownQueryError | QueryExecutionError;
+  subscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+    id: Id,
+  ): Id | UnknownQueryError | QueryExecutionError;
+  subscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    listener: Listener<
+      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+    >,
+    id?: Id,
+  ): Id | UnknownQueryError | QueryExecutionError {
     const value = this.query(topic);
     if (value instanceof Error) return value;
-    let listeners: Listeners | undefined;
-    for (const [registeredTopic, registeredListeners] of this.registry) {
-      if (!dequal(registeredTopic, topic)) continue;
-      listeners = registeredListeners;
-      break;
-    }
-    if (listeners === undefined) {
-      listeners = new Set();
-      this.registry.set(topic, listeners);
-    }
-    listeners.add(listener);
+    const listeners =
+      this.registry.get(topic) ??
+      (() => {
+        const registeredListeners: Listeners<Id, Queries> = new Map();
+        this.registry.set(topic, registeredListeners);
+        return registeredListeners;
+      })();
+    const listenerId =
+      id ??
+      (() => {
+        for (const [registeredId, registeredListener] of listeners) {
+          if (registeredListener === listener) return registeredId;
+        }
+        return this.createId();
+      })();
+    listeners.set(listenerId, listener as Listener);
     listener({ topic, value });
+    return listenerId;
   }
 
+  unsubscribe(id: Id): void;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topic: Topic<Name, OperationParams<Queries[Name]>>,
+    id: Id,
+  ): void;
   unsubscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
+  ): void;
+  unsubscribe<Name extends StringKey<Queries>>(
+    topicOrId: Topic<Name, OperationParams<Queries[Name]>> | Id,
+    idOrListener?:
+      | Id
+      | Listener<
+          ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
+        >,
   ): void {
-    for (const [registeredTopic, listeners] of this.registry) {
-      if (!dequal(registeredTopic, topic)) continue;
-      listeners.delete(listener);
-      if (listeners.size === 0) this.registry.delete(registeredTopic);
+    if (arguments.length === 1) {
+      for (const listeners of this.registry.values()) listeners.delete(topicOrId as Id);
       return;
     }
+    const listeners = this.registry.get(topicOrId as Topic<Name, OperationParams<Queries[Name]>>);
+    if (listeners === undefined) return;
+    if (typeof idOrListener === "function") {
+      for (const [id, registeredListener] of listeners) {
+        if (registeredListener === idOrListener) listeners.delete(id);
+      }
+    } else if (idOrListener !== undefined) {
+      listeners.delete(idOrListener);
+    }
+    if (listeners.size === 0)
+      this.registry.delete(topicOrId as Topic<Name, OperationParams<Queries[Name]>>);
   }
 
   protected mutate<Name extends StringKey<Mutations>>(
@@ -115,11 +164,13 @@ export class SyncEngine<
   }
 
   protected publish(event: ListenerEvent): void {
-    for (const [topic, listeners] of this.registry) {
-      if (!dequal(topic, event.topic)) continue;
-      for (const listener of listeners) if (typeof listener === "function") void listener(event);
-      return;
-    }
+    const registeredEvent = event as ListenerEvent<
+      StringKey<Queries>,
+      OperationParams<Queries[string]>
+    >;
+    const listeners = this.registry.get(registeredEvent.topic);
+    if (listeners === undefined) return;
+    for (const listener of listeners.values()) void (listener as Listener)(registeredEvent);
   }
 
   sync<Name extends StringKey<Mutations>>(

@@ -20,6 +20,7 @@ catalog:
   errore: ^0.14.1
   dequal: ^2.0.3
   typed-rpc: ^6.1.2
+  hashmap: ^3.0.1
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
