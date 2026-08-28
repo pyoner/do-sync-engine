@@ -23,7 +23,7 @@
   let selectedFilter = $state<TodoFilter>(filters[0]);
   let filterLoading = $state(false);
   let loading = $state(false);
-  let api = $state<WebSocketRpcClient<TodoQueries, TodoMutations> | null>(null);
+  let api: WebSocketRpcClient<TodoQueries, TodoMutations> | null = null;
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
   let filterSubscriptionVersion = 0;
