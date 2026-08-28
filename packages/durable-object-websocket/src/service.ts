@@ -1,25 +1,16 @@
 import type {
-  ListenerEvent,
   MutationMap,
   OperationParams,
-  OperationResult,
   QueryMap,
   StringKey,
   SyncEngineInterface,
   Topic,
 } from "@do-sync-engine/core";
 import * as errore from "errore";
+import type { JsonRpcRequest } from "typed-rpc";
 
 export type QueryTopic<Queries extends QueryMap> = {
   [Name in StringKey<Queries>]: Topic<Name, OperationParams<Queries[Name]>>;
-}[StringKey<Queries>];
-
-export type SubscriptionEvent<Queries extends QueryMap> = {
-  [Name in StringKey<Queries>]: ListenerEvent<
-    Name,
-    OperationParams<Queries[Name]>,
-    OperationResult<Queries[Name]>
-  >;
 }[StringKey<Queries>];
 
 export interface Service<Queries extends QueryMap, Mutations extends MutationMap> {
@@ -33,13 +24,13 @@ export interface Service<Queries extends QueryMap, Mutations extends MutationMap
 
 export const SYNC_METHOD = "sync";
 
+function rpcNotification(method: string, params: unknown[]) {
+  return { jsonrpc: "2.0", method, params } satisfies JsonRpcRequest;
+}
+
 function rpcResult<T>(result: T | Error): T {
   if (result instanceof Error) throw result;
   return result;
-}
-
-function topicKey(topic: unknown): string | undefined {
-  return JSON.stringify(topic);
 }
 
 export class SocketService<Q extends QueryMap, M extends MutationMap> implements Service<Q, M> {
@@ -53,33 +44,31 @@ export class SocketService<Q extends QueryMap, M extends MutationMap> implements
     engine: SyncEngineInterface<WebSocket, Q, M>,
   ): void {
     const service = new SocketService(socket, engine);
-    for (const topic of service.topics()) {
-      const valid = engine.createTopic(topic.name, topic.params);
-      const result = valid instanceof Error ? valid : service.listen(valid, false);
-      if (result instanceof Error) console.warn("Failed to restore WebSocket subscription", result);
+    for (const topic of service.storedTopics()) {
+      service.subscribe(topic);
     }
   }
 
   subscribe<Name extends StringKey<Q>>(topic: Topic<Name, OperationParams<Q[Name]>>): null {
-    const valid = rpcResult(this.engine.createTopic(topic.name, topic.params));
-    const previous = this.topics();
-    const key = topicKey(valid);
-    if (previous.some((item) => topicKey(item) === key)) return null;
-    this.socket.serializeAttachment([...previous, valid]);
-    const result = this.listen(valid, true);
-    if (result instanceof Error) {
-      this.engine.unsubscribe(valid, this.socket);
-      this.socket.serializeAttachment(previous);
-      throw result;
-    }
+    const validTopic = rpcResult(this.engine.createTopic(topic.name, topic.params));
+    rpcResult(
+      this.engine.subscribe(
+        validTopic,
+        (event) => {
+          this.socket.send(JSON.stringify(rpcNotification(SYNC_METHOD, [event])));
+        },
+        this.socket,
+      ),
+    );
+
+    this.persistTopics();
     return null;
   }
 
   unsubscribe<Name extends StringKey<Q>>(topic: Topic<Name, OperationParams<Q[Name]>>): null {
     const valid = rpcResult(this.engine.createTopic(topic.name, topic.params));
-    const key = topicKey(valid);
-    this.socket.serializeAttachment(this.topics().filter((item) => topicKey(item) !== key));
     this.engine.unsubscribe(valid, this.socket);
+    this.persistTopics();
     return null;
   }
 
@@ -88,26 +77,15 @@ export class SocketService<Q extends QueryMap, M extends MutationMap> implements
     return null;
   }
 
-  private listen<Name extends StringKey<Q>>(
-    topic: Topic<Name, OperationParams<Q[Name]>>,
-    notifyInitial: boolean,
-  ): void | Error {
-    let active = notifyInitial;
-    const result = this.engine.subscribe(
-      topic,
-      (event) => {
-        if (active)
-          this.socket.send(
-            JSON.stringify({ jsonrpc: "2.0", method: SYNC_METHOD, params: [event] }),
-          );
-      },
-      this.socket,
-    );
-    active = true;
-    return result instanceof Error ? result : undefined;
+  private persistTopics(): void {
+    const topics: Array<QueryTopic<Q>> = [];
+    for (const { id, topic } of this.engine.subscriptions()) {
+      if (id === this.socket) topics.push(topic as QueryTopic<Q>);
+    }
+    this.socket.serializeAttachment(topics);
   }
 
-  private topics(): Array<QueryTopic<Q>> {
+  private storedTopics(): Array<QueryTopic<Q>> {
     const attachment = errore.try({
       try: () => this.socket.deserializeAttachment() as unknown,
       catch: (cause) => new Error("Failed to deserialize WebSocket subscriptions", { cause }),

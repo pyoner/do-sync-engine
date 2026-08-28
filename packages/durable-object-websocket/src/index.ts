@@ -1,2 +1,2 @@
 export { DurableObjectWebSocket } from "./durable-object-websocket";
-export { SYNC_METHOD, type QueryTopic, type Service, type SubscriptionEvent } from "./service";
+export { SYNC_METHOD, type QueryTopic, type Service } from "./service";
