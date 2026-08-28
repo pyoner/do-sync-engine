@@ -90,6 +90,18 @@ export type Registry<Queries extends QueryMap = QueryMap, Id = string> = HashMap
   >
 >;
 
+export type Subscription<Id, Queries extends QueryMap> = {
+  id: Id;
+  topic: Topic<StringKey<Queries>, OperationParams<Queries[StringKey<Queries>]>>;
+  listener: Listener<
+    ListenerEvent<
+      StringKey<Queries>,
+      OperationParams<Queries[StringKey<Queries>]>,
+      OperationResult<Queries[StringKey<Queries>]>
+    >
+  >;
+};
+
 export type SyncEngineOptions<
   Queries extends QueryMap = QueryMap,
   Mutations extends MutationMap = MutationMap,
@@ -140,4 +152,6 @@ export interface SyncEngineInterface<
     mutation: Name,
     params: OperationParams<Mutations[Name]>,
   ): void | Error;
+
+  subscriptions(): IterableIterator<Readonly<Subscription<Id, Queries>>>;
 }

@@ -19,6 +19,7 @@ export type {
   QueryMap,
   StringKey,
   Table,
+  Subscription,
   SyncEngineInterface,
   SyncEngineOptions,
   Topic,

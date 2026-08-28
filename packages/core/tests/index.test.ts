@@ -70,6 +70,7 @@ test("exports canonical topic and listener APIs", async () => {
     "publish",
     "query",
     "subscribe",
+    "subscriptions",
     "sync",
     "unsubscribe",
   ]);
@@ -90,7 +91,11 @@ test("typed topic params, listener values, mutations, and sync", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine({
+  const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine<
+    typeof queries,
+    typeof mutations,
+    string
+  >({
     queries,
     mutations,
   });
@@ -213,6 +218,25 @@ test("supports explicit IDs and every unsubscribe form", () => {
   engine.sync("noop", []);
   expect(first).toEqual([1, 1, 1]);
   expect(second).toEqual([1, 1, 1, 1]);
+});
+
+test("enumerates active subscriptions", () => {
+  const engine = new SyncEngine({
+    queries: { value: { tables: toTables(["value"]), run: () => 1 } },
+    mutations: {},
+  });
+  const topic = expectOk(engine.createTopic("value", []));
+  const firstListener: Listener = () => undefined;
+  const secondListener: Listener = () => undefined;
+  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
+  expect(engine.subscribe(topic, secondListener, "second")).toBe("second");
+
+  expect([...engine.subscriptions()]).toEqual([
+    { id: "first", topic, listener: firstListener },
+    { id: "second", topic, listener: secondListener },
+  ]);
+  engine.unsubscribe("first");
+  expect([...engine.subscriptions()]).toEqual([{ id: "second", topic, listener: secondListener }]);
 });
 
 test("requires and uses numeric ID factories", () => {

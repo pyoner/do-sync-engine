@@ -22,6 +22,7 @@ import type {
   SyncEngineInterface,
   SyncEngineOptions,
   Table,
+  Subscription,
   Topic,
 } from "./types";
 type Listeners<Id, Queries extends QueryMap> = Map<
@@ -171,6 +172,14 @@ export class SyncEngine<
     const listeners = this.registry.get(registeredEvent.topic);
     if (listeners === undefined) return;
     for (const listener of listeners.values()) void (listener as Listener)(registeredEvent);
+  }
+
+  *subscriptions(): IterableIterator<Readonly<Subscription<Id, Queries>>> {
+    for (const { key: topic, value } of this.registry) {
+      for (const [id, listener] of value) {
+        yield { id, topic, listener };
+      }
+    }
   }
 
   sync<Name extends StringKey<Mutations>>(
