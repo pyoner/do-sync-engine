@@ -17,7 +17,7 @@ type SocketMessage = {
   readonly method?: string;
   readonly params?: ReadonlyArray<SubscriptionEvent<QueryMap>>;
 };
-export interface WebSocketRpcClient<Q extends QueryMap<Q>, M extends MutationMap<M>> {
+export interface WebSocketRpcClient<Q extends QueryMap, M extends MutationMap> {
   createTopic<Name extends StringKey<Q>>(
     name: Name,
     params: OperationParams<Q[Name]>,
@@ -39,7 +39,7 @@ export interface WebSocketRpcClient<Q extends QueryMap<Q>, M extends MutationMap
 }
 const topicKey = (topic: { readonly name: string; readonly params: readonly unknown[] }) =>
   JSON.stringify(topic);
-export function newWebSocketRpcSession<Q extends QueryMap<Q>, M extends MutationMap<M>>(
+export function newWebSocketRpcSession<Q extends QueryMap, M extends MutationMap>(
   url: string,
 ): WebSocketRpcClient<Q, M> {
   const socket = new globalThis.WebSocket(url);

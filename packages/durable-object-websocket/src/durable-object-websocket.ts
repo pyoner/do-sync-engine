@@ -6,8 +6,8 @@ import { SocketService } from "./service";
 
 export abstract class DurableObjectWebSocket<
   Env,
-  Q extends QueryMap<Q>,
-  M extends MutationMap<M>,
+  Q extends QueryMap,
+  M extends MutationMap,
 > extends DurableObject<Env> {
   readonly #engine: SyncEngineInterface<WebSocket, Q, M>;
   protected constructor(

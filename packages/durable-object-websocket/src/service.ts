@@ -9,13 +9,12 @@ import type {
   Topic,
 } from "@do-sync-engine/core";
 import * as errore from "errore";
-import type { JsonRpcRequest } from "typed-rpc/server";
 
-export type QueryTopic<Queries extends QueryMap<Queries>> = {
+export type QueryTopic<Queries extends QueryMap> = {
   [Name in StringKey<Queries>]: Topic<Name, OperationParams<Queries[Name]>>;
 }[StringKey<Queries>];
 
-export type SubscriptionEvent<Queries extends QueryMap<Queries>> = {
+export type SubscriptionEvent<Queries extends QueryMap> = {
   [Name in StringKey<Queries>]: ListenerEvent<
     Name,
     OperationParams<Queries[Name]>,
@@ -23,53 +22,40 @@ export type SubscriptionEvent<Queries extends QueryMap<Queries>> = {
   >;
 }[StringKey<Queries>];
 
-export interface Service<
-  Queries extends QueryMap<Queries>,
-  Mutations extends MutationMap<Mutations>,
-> {
-  subscribe(topic: QueryTopic<Queries>): void | Error;
-  unsubscribe(topic: QueryTopic<Queries>): void | Error;
+export interface Service<Queries extends QueryMap, Mutations extends MutationMap> {
+  subscribe(topic: QueryTopic<Queries>): null;
+  unsubscribe(topic: QueryTopic<Queries>): null;
   sync<Name extends StringKey<Mutations>>(
     name: Name,
     params: OperationParams<Mutations[Name]>,
-  ): void | Error;
+  ): null;
 }
 
 export const SYNC_METHOD = "sync";
-
-type StoredTopic<Q extends QueryMap<Q>> = Topic<StringKey<Q>, OperationParams<Q[StringKey<Q>]>>;
 
 function rpcResult<T>(result: T | Error): T {
   if (result instanceof Error) throw result;
   return result;
 }
 
-function syncNotification(event: unknown): JsonRpcRequest {
-  return { jsonrpc: "2.0", method: SYNC_METHOD, params: [event] } satisfies JsonRpcRequest;
-}
-
 function topicKey(topic: unknown): string | undefined {
   return JSON.stringify(topic);
 }
 
-export class SocketService<Q extends QueryMap<Q>, M extends MutationMap<M>> {
+export class SocketService<Q extends QueryMap, M extends MutationMap> implements Service<Q, M> {
   constructor(
     private readonly socket: WebSocket,
     private readonly engine: SyncEngineInterface<WebSocket, Q, M>,
   ) {}
 
-  static restore<Q extends QueryMap<Q>, M extends MutationMap<M>>(
+  static restore<Q extends QueryMap, M extends MutationMap>(
     socket: WebSocket,
     engine: SyncEngineInterface<WebSocket, Q, M>,
   ): void {
     const service = new SocketService(socket, engine);
     for (const topic of service.topics()) {
       const valid = engine.createTopic(topic.name, topic.params);
-      if (valid instanceof Error) {
-        console.warn("Failed to restore WebSocket subscription", valid);
-        continue;
-      }
-      const result = service.listen(valid, false);
+      const result = valid instanceof Error ? valid : service.listen(valid, false);
       if (result instanceof Error) console.warn("Failed to restore WebSocket subscription", result);
     }
   }
@@ -81,10 +67,12 @@ export class SocketService<Q extends QueryMap<Q>, M extends MutationMap<M>> {
     if (previous.some((item) => topicKey(item) === key)) return null;
     this.socket.serializeAttachment([...previous, valid]);
     const result = this.listen(valid, true);
-    if (!(result instanceof Error)) return null;
-    this.engine.unsubscribe(valid, this.socket);
-    this.socket.serializeAttachment(previous);
-    throw result;
+    if (result instanceof Error) {
+      this.engine.unsubscribe(valid, this.socket);
+      this.socket.serializeAttachment(previous);
+      throw result;
+    }
+    return null;
   }
 
   unsubscribe<Name extends StringKey<Q>>(topic: Topic<Name, OperationParams<Q[Name]>>): null {
@@ -103,20 +91,23 @@ export class SocketService<Q extends QueryMap<Q>, M extends MutationMap<M>> {
   private listen<Name extends StringKey<Q>>(
     topic: Topic<Name, OperationParams<Q[Name]>>,
     notifyInitial: boolean,
-  ): WebSocket | Error {
+  ): void | Error {
     let active = notifyInitial;
     const result = this.engine.subscribe(
       topic,
       (event) => {
-        if (active) this.socket.send(JSON.stringify(syncNotification(event)));
+        if (active)
+          this.socket.send(
+            JSON.stringify({ jsonrpc: "2.0", method: SYNC_METHOD, params: [event] }),
+          );
       },
       this.socket,
     );
     active = true;
-    return result;
+    return result instanceof Error ? result : undefined;
   }
 
-  private topics(): Array<StoredTopic<Q>> {
+  private topics(): Array<QueryTopic<Q>> {
     const attachment = errore.try({
       try: () => this.socket.deserializeAttachment() as unknown,
       catch: (cause) => new Error("Failed to deserialize WebSocket subscriptions", { cause }),
@@ -126,7 +117,7 @@ export class SocketService<Q extends QueryMap<Q>, M extends MutationMap<M>> {
       return [];
     }
     if (attachment === null) return [];
-    if (Array.isArray(attachment)) return attachment as Array<StoredTopic<Q>>;
+    if (Array.isArray(attachment)) return attachment as Array<QueryTopic<Q>>;
     console.warn("Invalid WebSocket subscription attachment", attachment);
     return [];
   }

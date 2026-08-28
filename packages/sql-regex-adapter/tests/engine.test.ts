@@ -28,10 +28,11 @@ function captureEvents() {
 
 const noopPublish: Listener = () => {};
 
-class TestEngine<
-  Queries extends QueryMap<Queries>,
-  Mutations extends MutationMap<Mutations>,
-> extends SyncEngine<string, Queries, Mutations> {
+class TestEngine<Queries extends QueryMap, Mutations extends MutationMap> extends SyncEngine<
+  string,
+  Queries,
+  Mutations
+> {
   tests(input: Topic | ListenerEvent) {
     if ("value" in input) return this.publish(input);
     return this.query(input as Topic<Extract<keyof Queries, string>, BaseParams>);
