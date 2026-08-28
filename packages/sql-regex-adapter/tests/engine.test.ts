@@ -31,7 +31,7 @@ const noopPublish: Listener = () => {};
 class TestEngine<
   Queries extends QueryMap<Queries>,
   Mutations extends MutationMap<Mutations>,
-> extends SyncEngine<Queries, Mutations> {
+> extends SyncEngine<string, Queries, Mutations> {
   tests(input: Topic | ListenerEvent) {
     if ("value" in input) return this.publish(input);
     return this.query(input as Topic<Extract<keyof Queries, string>, BaseParams>);
@@ -61,7 +61,7 @@ describe("SyncEngine topics and events", () => {
   let allUsers: Query<[], SqlRow[]>;
   let userById: Query<[number], SqlRow[]>;
   let postsOnly: Query<[], SqlRow[]>;
-  let engine: SyncEngine<FixtureQueries, FixtureMutations>;
+  let engine: SyncEngine<string, FixtureQueries, FixtureMutations>;
   let insertUser: Mutation<[string], unknown>;
   let updateUserName: Mutation<[string, number], unknown>;
 
@@ -84,6 +84,7 @@ describe("SyncEngine topics and events", () => {
     engine = new SyncEngine({
       queries: { allUsers, userById, postsOnly },
       mutations: { insertUser, updateUserName },
+      createId: () => crypto.randomUUID(),
     });
   });
 
@@ -106,6 +107,7 @@ describe("SyncEngine topics and events", () => {
     const testEngine = new TestEngine({
       queries: { userById },
       mutations: {},
+      createId: () => crypto.randomUUID(),
     });
     const topic = expectOk(testEngine.createTopic("userById", [2]));
     expect(testEngine.tests({ ...topic, name: "missing" })).toBeInstanceOf(Error);
@@ -148,6 +150,7 @@ describe("SyncEngine topics and events", () => {
     const engine = new SyncEngine({
       queries: { trackedUserById, trackedPosts },
       mutations: { updateUserName },
+      createId: () => crypto.randomUUID(),
     });
     const topic = expectOk(engine.createTopic("trackedUserById", [2]));
     const postsTopic = expectOk(engine.createTopic("trackedPosts", []));
@@ -182,6 +185,7 @@ describe("SyncEngine topics and events", () => {
     const engine = new SyncEngine({
       queries: { neverQuery, failingQuery },
       mutations: { insertUser },
+      createId: () => crypto.randomUUID(),
     });
     engine.sync("insertUser", ["charlie"]);
     expect(queryRuns).toBe(0);
@@ -225,6 +229,7 @@ describe("SyncEngine topics and events", () => {
     const exposed = new TestEngine({
       queries: { allUsers, postsOnly },
       mutations: {},
+      createId: () => crypto.randomUUID(),
     });
     const usersTopic = expectOk(exposed.createTopic("allUsers", []));
     const postsTopic = expectOk(exposed.createTopic("postsOnly", []));
@@ -274,6 +279,7 @@ describe("SyncEngine topics and events", () => {
     const engine = new SyncEngine({
       queries: { synchronousQuery },
       mutations: { synchronousMutation: trackedSynchronousMutation },
+      createId: () => crypto.randomUUID(),
     });
     const topic = expectOk(engine.createTopic("synchronousQuery", []));
     engine.subscribe(topic, () => calls.push("listener"));

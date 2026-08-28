@@ -1,6 +1,7 @@
 import * as errore from "errore";
 import HashMap from "hashmap";
 import {
+  MissingSubscriptionIdError,
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
@@ -31,17 +32,17 @@ type Listeners<Id, Queries extends QueryMap> = Map<
 >;
 
 export class SyncEngine<
+  Id,
   Queries extends QueryMap = QueryMap,
   Mutations extends MutationMap = MutationMap,
-  Id = string,
-> implements SyncEngineInterface<Queries, Mutations, Id> {
+> implements SyncEngineInterface<Id, Queries, Mutations> {
   private readonly queries: ReadonlyMap<string, Query<BaseParams, unknown>>;
   private readonly mutations: ReadonlyMap<string, Mutation<BaseParams, unknown>>;
-  private readonly createId: () => Id;
+  private readonly createId?: () => Id;
   private readonly registry: Registry<Queries, Id> = new HashMap();
 
-  constructor(options: SyncEngineOptions<Queries, Mutations, Id>) {
-    this.createId = options.createId ?? (() => crypto.randomUUID() as unknown as Id);
+  constructor(options: SyncEngineOptions<Id, Queries, Mutations>) {
+    this.createId = options.createId;
     this.queries = new Map(
       Object.entries(options.queries) as Array<[string, Query<BaseParams, unknown>]>,
     );
@@ -64,7 +65,7 @@ export class SyncEngine<
     listener: Listener<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
-  ): Id | UnknownQueryError | QueryExecutionError;
+  ): Id | UnknownQueryError | QueryExecutionError | MissingSubscriptionIdError;
   subscribe<Name extends StringKey<Queries>>(
     topic: Topic<Name, OperationParams<Queries[Name]>>,
     listener: Listener<
@@ -78,9 +79,7 @@ export class SyncEngine<
       ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
     >,
     id?: Id,
-  ): Id | UnknownQueryError | QueryExecutionError {
-    const value = this.query(topic);
-    if (value instanceof Error) return value;
+  ): Id | UnknownQueryError | QueryExecutionError | MissingSubscriptionIdError {
     const listeners =
       this.registry.get(topic) ??
       (() => {
@@ -88,15 +87,25 @@ export class SyncEngine<
         this.registry.set(topic, registeredListeners);
         return registeredListeners;
       })();
+
     const listenerId =
       id ??
       (() => {
         for (const [registeredId, registeredListener] of listeners) {
           if (registeredListener === listener) return registeredId;
         }
-        return this.createId();
+        return this.createId?.();
       })();
+
+    if (listenerId === undefined) {
+      return new MissingSubscriptionIdError();
+    }
+
     listeners.set(listenerId, listener as Listener);
+
+    const value = this.query(topic);
+    if (value instanceof Error) return value;
+
     listener({ topic, value });
     return listenerId;
   }

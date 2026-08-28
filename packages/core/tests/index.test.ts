@@ -29,7 +29,7 @@ test("exports canonical topic and listener APIs", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine = new SyncEngine({ queries, mutations });
+  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
 
   if (false as boolean) {
     const brandedString = undefined as unknown as Branded<string, "TestString">;
@@ -91,13 +91,14 @@ test("typed topic params, listener values, mutations, and sync", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine: SyncEngineInterface<typeof queries, typeof mutations> = new SyncEngine<
+  const engine: SyncEngineInterface<string, typeof queries, typeof mutations> = new SyncEngine<
+    string,
     typeof queries,
-    typeof mutations,
-    string
+    typeof mutations
   >({
     queries,
     mutations,
+    createId: () => crypto.randomUUID(),
   });
   const topic: Topic<"numbers", []> = expectOk(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
@@ -150,7 +151,7 @@ test("typed createTopic params and listener handle", async () => {
       run: () => ({}),
     } satisfies Mutation<[], Record<string, never>>,
   };
-  const engine = new SyncEngine({ queries, mutations });
+  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
   const topic = expectOk(engine.createTopic("numbers", [42]));
   const listener: Listener = () => {};
 
@@ -180,7 +181,7 @@ test("uses topic identity for listener registration", async () => {
       run: () => ({}),
     } satisfies Mutation<[], Record<string, never>>,
   };
-  const engine = new SyncEngine({ queries, mutations });
+  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
   const firstTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
   const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
   const listener: Listener = () => {};
@@ -240,7 +241,7 @@ test("enumerates active subscriptions", () => {
 });
 
 test("requires and uses numeric ID factories", () => {
-  const engine = new SyncEngine<{ value: Query<[], number> }, {}, number>({
+  const engine = new SyncEngine<number, { value: Query<[], number> }, {}>({
     queries: { value: { tables: toTables([]), run: () => 1 } },
     mutations: {},
     createId: () => 7,

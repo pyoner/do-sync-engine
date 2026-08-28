@@ -103,9 +103,9 @@ export type Subscription<Id, Queries extends QueryMap> = {
 };
 
 export type SyncEngineOptions<
+  Id,
   Queries extends QueryMap = QueryMap,
   Mutations extends MutationMap = MutationMap,
-  Id = string,
 > = {
   queries: Queries;
   mutations: Mutations;
@@ -113,9 +113,9 @@ export type SyncEngineOptions<
 };
 
 export interface SyncEngineInterface<
+  Id,
   Queries extends QueryMap = QueryMap,
   Mutations extends MutationMap = MutationMap,
-  Id = string,
 > {
   createTopic<Name extends StringKey<Queries>>(
     name: Name,

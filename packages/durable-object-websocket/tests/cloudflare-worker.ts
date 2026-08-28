@@ -46,7 +46,10 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
           },
         },
       } satisfies FixtureMutations;
-      return new SyncEngine({ queries, mutations });
+      return new SyncEngine<WebSocket, FixtureQueries, FixtureMutations>({
+        queries,
+        mutations,
+      });
     });
   }
 }

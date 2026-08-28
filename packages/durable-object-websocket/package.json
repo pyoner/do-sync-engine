@@ -33,7 +33,6 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
-    "dequal": "catalog:",
     "errore": "catalog:",
     "typed-rpc": "catalog:"
   },

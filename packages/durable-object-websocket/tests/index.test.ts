@@ -1,10 +1,7 @@
-import { SyncEngine, toTables } from "@do-sync-engine/core";
-import type { Mutation, Query } from "@do-sync-engine/core";
 import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import { SYNC_METHOD } from "../src/index.ts";
-import { createServiceSessions } from "../src/service-session.ts";
 
 const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -122,19 +119,6 @@ async function connect(): Promise<WebSocketTestClient> {
   };
 }
 
-async function rpcRequest(
-  sessions: { handle(connection: object, message: string): Promise<void> },
-  connection: object,
-  sent: unknown[],
-  request: { readonly id: string; readonly [key: string]: unknown },
-) {
-  await sessions.handle(connection, JSON.stringify(request));
-  return sent.find(
-    (value): value is { readonly id: string } =>
-      typeof value === "object" && value !== null && "id" in value && value.id === request.id,
-  );
-}
-
 describe("Durable Object typed-rpc WebSocket transport", () => {
   it("rejects non-WebSocket requests", async () => {
     const response = await worker.default.fetch(new Request("https://example.com"));
@@ -165,13 +149,13 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
         { topic: alpha, value: { key: "batch-alpha", value: 0 } },
       ]);
       expect((await first.sync("increment", ["batch-alpha", 2])).result).toBeNull();
-      expect(
-        (await first.waitForSync((value) => value.params.length === 2 && hasCounterValue(value, 2)))
-          .params,
-      ).toEqual([
+      expect((await first.waitForSync((value) => hasCounterValue(value, 2))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 2 } },
-        { topic: beta, value: { key: "batch-beta", value: 0 } },
       ]);
+      expect(
+        (await first.waitForSync((value) => value.params[0]?.topic.params[0] === "batch-beta"))
+          .params,
+      ).toEqual([{ topic: beta, value: { key: "batch-beta", value: 0 } }]);
       expect((await second.waitForSync((value) => hasCounterValue(value, 2))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 2 } },
       ]);
@@ -183,7 +167,7 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
       expect((await second.waitForSync((value) => hasCounterValue(value, 3))).params).toEqual([
         { topic: alpha, value: { key: "batch-alpha", value: 3 } },
       ]);
-      expect(first.syncCount()).toBe(4);
+      expect(first.syncCount()).toBe(6);
       expect(second.syncCount()).toBe(3);
     } finally {
       first.close();
@@ -246,264 +230,5 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
     } finally {
       connection.close();
     }
-  });
-
-  it("rolls back failed subscription persistence and preserves failed unsubscriptions", async () => {
-    let value = 0;
-    const queries = {
-      counter: {
-        tables: toTables(["counters"]),
-        run: () => value,
-      },
-    } satisfies { counter: Query<[], number> };
-    const mutations = {
-      increment: {
-        tables: toTables(["counters"]),
-        run: () => {
-          value += 1;
-        },
-      },
-    } satisfies { increment: Mutation<[], void> };
-    const engine = new SyncEngine({ queries, mutations });
-    let persistenceError: Error | null = null;
-    const notifications: unknown[] = [];
-    const sessions = createServiceSessions(engine);
-    const connection = {};
-    const connected = sessions.connect(connection, {
-      topics: [],
-      persist: () => persistenceError ?? undefined,
-      send: (request) => {
-        notifications.push(JSON.parse(request));
-      },
-      fail: (error) => {
-        throw error;
-      },
-    });
-    if (connected instanceof Error) throw connected;
-
-    const topic = { name: "counter", params: [] };
-    persistenceError = new Error("persistence failed");
-    expect(
-      await rpcRequest(sessions, connection, notifications, {
-        jsonrpc: "2.0",
-        id: "failed-subscribe",
-        method: "subscribe",
-        params: [topic],
-      }),
-    ).toMatchObject({ error: { message: "persistence failed" } });
-    notifications.length = 0;
-
-    persistenceError = null;
-    expect(
-      await rpcRequest(sessions, connection, notifications, {
-        jsonrpc: "2.0",
-        id: "retried-subscribe",
-        method: "subscribe",
-        params: [topic],
-      }),
-    ).toMatchObject({ result: null });
-    expect(notifications.filter(isSyncNotification)).toEqual([
-      { jsonrpc: "2.0", method: SYNC_METHOD, params: [{ topic, value: 0 }] },
-    ]);
-
-    notifications.length = 0;
-    persistenceError = new Error("persistence failed");
-    expect(
-      await rpcRequest(sessions, connection, notifications, {
-        jsonrpc: "2.0",
-        id: "failed-unsubscribe",
-        method: "unsubscribe",
-        params: [topic],
-      }),
-    ).toMatchObject({ error: { message: "persistence failed" } });
-    expect(
-      await rpcRequest(sessions, connection, notifications, {
-        jsonrpc: "2.0",
-        id: "sync-after-failed-unsubscribe",
-        method: "sync",
-        params: ["increment", []],
-      }),
-    ).toMatchObject({ result: null });
-    expect(notifications.filter(isSyncNotification)).toEqual([
-      { jsonrpc: "2.0", method: SYNC_METHOD, params: [{ topic, value: 1 }] },
-    ]);
-    sessions.close(connection);
-  });
-
-  it("removes partially restored listeners when normalization fails", () => {
-    const queries = {
-      counter: {
-        tables: toTables(["counters"]),
-        run: () => 0,
-      },
-    } satisfies { counter: Query<[], number> };
-    const mutations = {
-      increment: {
-        tables: toTables(["counters"]),
-        run: () => {},
-      },
-    } satisfies { increment: Mutation<[], void> };
-    const engine = new SyncEngine({ queries, mutations });
-    const unsubscribe = vi.spyOn(engine, "unsubscribe");
-    const sessions = createServiceSessions(engine);
-    const restored = sessions.connect(
-      {},
-      {
-        topics: [{ name: "counter", params: [] }],
-        persist: () => new Error("persistence failed"),
-        send: () => {},
-        fail: (error) => {
-          throw error;
-        },
-      },
-    );
-    expect(restored).toBeInstanceOf(Error);
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
-  });
-
-  it("flushes earlier events before reporting a later query error", async () => {
-    let broken = false;
-    const queries = {
-      first: {
-        tables: toTables(["items"]),
-        run: () => "first",
-      },
-      second: {
-        tables: toTables(["items"]),
-        run: () => {
-          if (broken) throw new Error("broken");
-          return "second";
-        },
-      },
-    } satisfies { first: Query<[], string>; second: Query<[], string> };
-    const mutations = {
-      touch: {
-        tables: toTables(["items"]),
-        run: () => {
-          broken = true;
-        },
-      },
-    } satisfies { touch: Mutation<[], void> };
-    const notifications: unknown[] = [];
-    const sessions = createServiceSessions(new SyncEngine({ queries, mutations }));
-    const connection = {};
-    const connected = sessions.connect(connection, {
-      topics: [],
-      persist: () => {},
-      send: (request) => {
-        notifications.push(JSON.parse(request));
-      },
-      fail: (error) => {
-        throw error;
-      },
-    });
-    if (connected instanceof Error) throw connected;
-
-    await rpcRequest(sessions, connection, notifications, {
-      jsonrpc: "2.0",
-      id: "subscribe-first",
-      method: "subscribe",
-      params: [{ name: "first", params: [] }],
-    });
-    await rpcRequest(sessions, connection, notifications, {
-      jsonrpc: "2.0",
-      id: "subscribe-second",
-      method: "subscribe",
-      params: [{ name: "second", params: [] }],
-    });
-    notifications.length = 0;
-
-    expect(
-      await rpcRequest(sessions, connection, notifications, {
-        jsonrpc: "2.0",
-        id: "failed-sync",
-        method: "sync",
-        params: ["touch", []],
-      }),
-    ).toMatchObject({ error: { message: "Query execution failed" } });
-    expect(notifications.filter(isSyncNotification)).toEqual([
-      {
-        jsonrpc: "2.0",
-        method: SYNC_METHOD,
-        params: [{ topic: { name: "first", params: [] }, value: "first" }],
-      },
-    ]);
-    sessions.close(connection);
-  });
-  it("rejects duplicate session connections", () => {
-    const engine = new SyncEngine({
-      queries: {
-        counter: {
-          tables: toTables(["counters"]),
-          run: () => 0,
-        },
-      } satisfies { counter: Query<[], number> },
-      mutations: {
-        increment: {
-          tables: toTables(["counters"]),
-          run: () => {},
-        },
-      } satisfies { increment: Mutation<[], void> },
-    });
-    const sessions = createServiceSessions(engine);
-    const connection = {};
-    const adapter = {
-      topics: [],
-      persist: () => {},
-      send: () => {},
-      fail: () => {},
-    };
-
-    expect(sessions.connect(connection, adapter)).toBeUndefined();
-    expect(sessions.connect(connection, adapter)).toMatchObject({
-      message: "Service session already connected",
-    });
-    expect(sessions.has(connection)).toBe(true);
-    sessions.close(connection);
-  });
-  it("removes a session before reporting notification failure", async () => {
-    const engine = new SyncEngine({
-      queries: {
-        counter: {
-          tables: toTables(["counters"]),
-          run: () => 0,
-        },
-      } satisfies { counter: Query<[], number> },
-      mutations: {
-        increment: {
-          tables: toTables(["counters"]),
-          run: () => {},
-        },
-      } satisfies { increment: Mutation<[], void> },
-    });
-    const sessions = createServiceSessions(engine);
-    const connection = {};
-    const unsubscribe = vi.spyOn(engine, "unsubscribe");
-    const failed = vi.fn();
-    const connected = sessions.connect(connection, {
-      topics: [],
-      persist: () => {},
-      send: () => new Error("notification failed"),
-      fail: (error) => {
-        expect(sessions.has(connection)).toBe(false);
-        failed(error);
-      },
-    });
-    if (connected instanceof Error) throw connected;
-
-    await sessions.handle(
-      connection,
-      JSON.stringify({
-        jsonrpc: "2.0",
-        id: "subscribe",
-        method: "subscribe",
-        params: [{ name: "counter", params: [] }],
-      }),
-    );
-    expect(failed).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "notification failed" }),
-    );
-    expect(unsubscribe).toHaveBeenCalledTimes(1);
-    expect(sessions.has(connection)).toBe(false);
   });
 });

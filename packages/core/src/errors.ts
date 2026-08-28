@@ -19,3 +19,8 @@ export class MutationExecutionError extends errore.createTaggedError({
   name: "MutationExecutionError",
   message: "Mutation execution failed",
 }) {}
+
+export class MissingSubscriptionIdError extends errore.createTaggedError({
+  name: "MissingSubscriptionIdError",
+  message: "Missing subscription id",
+}) {}

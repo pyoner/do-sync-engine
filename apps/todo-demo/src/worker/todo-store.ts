@@ -82,7 +82,7 @@ export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMuta
     super(ctx, env, () => {
       ctx.storage.sql.exec(SCHEMA);
       const storage = new DurableObjectSqlStorage(ctx.storage.sql);
-      return new SyncEngine<TodoQueries, TodoMutations>({
+      return new SyncEngine<WebSocket, TodoQueries, TodoMutations>({
         queries: createQueries(storage),
         mutations: createMutations(storage),
       });
