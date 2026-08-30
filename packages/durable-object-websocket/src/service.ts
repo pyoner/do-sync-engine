@@ -1,3 +1,5 @@
+import type { JsonRpcRequest } from "typed-rpc";
+
 import type {
   MutationMap,
   OperationParams,
@@ -6,8 +8,7 @@ import type {
   SyncEngineInterface,
   Topic,
 } from "@do-sync-engine/core";
-import * as errore from "errore";
-import type { JsonRpcRequest } from "typed-rpc";
+import { WebsocketStorage } from "./websocket-storage";
 
 export type QueryTopic<Queries extends QueryMap> = {
   [Name in StringKey<Queries>]: Topic<Name, OperationParams<Queries[Name]>>;
@@ -37,16 +38,24 @@ export class SocketService<Q extends QueryMap, M extends MutationMap> implements
   constructor(
     private readonly socket: WebSocket,
     private readonly engine: SyncEngineInterface<WebSocket, Q, M>,
+    private readonly storage: WebsocketStorage,
+    private readonly topicKey: string,
   ) {}
 
   static restore<Q extends QueryMap, M extends MutationMap>(
     socket: WebSocket,
     engine: SyncEngineInterface<WebSocket, Q, M>,
+    storage: WebsocketStorage,
+    topicKey: string,
   ): void {
-    const service = new SocketService(socket, engine);
-    for (const topic of service.storedTopics()) {
-      service.subscribe(topic);
+    const service = new SocketService(socket, engine, storage, topicKey);
+    const stored = storage.get<unknown>(topicKey);
+    if (stored === null) return;
+    if (!Array.isArray(stored)) {
+      console.warn("Invalid WebSocket subscription attachment", stored);
+      return;
     }
+    for (const topic of stored as Array<QueryTopic<Q>>) service.subscribe(topic);
   }
 
   subscribe<Name extends StringKey<Q>>(topic: Topic<Name, OperationParams<Q[Name]>>): null {
@@ -60,15 +69,14 @@ export class SocketService<Q extends QueryMap, M extends MutationMap> implements
         this.socket,
       ),
     );
-
-    this.persistTopics();
+    this.storage.set(this.topicKey, this.topics());
     return null;
   }
 
   unsubscribe<Name extends StringKey<Q>>(topic: Topic<Name, OperationParams<Q[Name]>>): null {
     const valid = rpcResult(this.engine.createTopic(topic.name, topic.params));
     this.engine.unsubscribe(valid, this.socket);
-    this.persistTopics();
+    this.storage.set(this.topicKey, this.topics());
     return null;
   }
 
@@ -77,26 +85,11 @@ export class SocketService<Q extends QueryMap, M extends MutationMap> implements
     return null;
   }
 
-  private persistTopics(): void {
+  private topics(): Array<QueryTopic<Q>> {
     const topics: Array<QueryTopic<Q>> = [];
     for (const { id, topic } of this.engine.subscriptions()) {
       if (id === this.socket) topics.push(topic as QueryTopic<Q>);
     }
-    this.socket.serializeAttachment(topics);
-  }
-
-  private storedTopics(): Array<QueryTopic<Q>> {
-    const attachment = errore.try({
-      try: () => this.socket.deserializeAttachment() as unknown,
-      catch: (cause) => new Error("Failed to deserialize WebSocket subscriptions", { cause }),
-    });
-    if (attachment instanceof Error) {
-      console.warn(attachment.message, attachment);
-      return [];
-    }
-    if (attachment === null) return [];
-    if (Array.isArray(attachment)) return attachment as Array<QueryTopic<Q>>;
-    console.warn("Invalid WebSocket subscription attachment", attachment);
-    return [];
+    return topics;
   }
 }

@@ -1,4 +1,4 @@
-import { evictDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vite-plus/test";
 import { SYNC_METHOD } from "../src/index.ts";
@@ -209,6 +209,67 @@ describe("Durable Object typed-rpc WebSocket transport", () => {
           isResponseMessage(value) && value.id === null && value.error?.code === -32700,
       );
       expect(response.error?.code).toBe(-32700);
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("stores topics under the configured attachment key and removes them on close", async () => {
+    const connection = await connect();
+    try {
+      const topic = { name: "counter", params: ["close-cleanup"] };
+      await runInDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"), (instance) => {
+        (instance as unknown as { ctx: DurableObjectState }).ctx
+          .getWebSockets()[0]
+          ?.serializeAttachment({
+            session: "keep",
+          });
+      });
+      await connection.subscribe(topic);
+      await connection.waitForSync();
+      await runInDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"), (instance) => {
+        const socket = (instance as unknown as { ctx: DurableObjectState }).ctx.getWebSockets()[0]!;
+        expect(socket.deserializeAttachment()).toEqual({
+          session: "keep",
+          "fixture-topics": [topic],
+        });
+        instance.webSocketClose(socket, 1005, "");
+        expect(socket.deserializeAttachment()).toEqual({ session: "keep" });
+      });
+    } finally {
+      connection.close();
+    }
+  });
+
+  it("removes stored topics on WebSocket errors", async () => {
+    const connection = await connect();
+    try {
+      const topic = { name: "counter", params: ["error-cleanup"] };
+      await runInDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"), (instance) => {
+        (instance as unknown as { ctx: DurableObjectState }).ctx
+          .getWebSockets()[0]
+          ?.serializeAttachment({
+            session: "keep",
+          });
+      });
+      await connection.subscribe(topic);
+      await connection.waitForSync();
+      const warn = console.warn;
+      const error = new Error("test error");
+      const warnings: unknown[][] = [];
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      try {
+        await runInDurableObject(env.FIXTURE_SYNC_OBJECT.getByName("default"), (instance) => {
+          const socket = (
+            instance as unknown as { ctx: DurableObjectState }
+          ).ctx.getWebSockets()[0]!;
+          instance.webSocketError(socket, error);
+          expect(socket.deserializeAttachment()).toEqual({ session: "keep" });
+        });
+      } finally {
+        console.warn = warn;
+      }
+      expect(warnings).toContainEqual(["WebSocket failed", error]);
     } finally {
       connection.close();
     }
