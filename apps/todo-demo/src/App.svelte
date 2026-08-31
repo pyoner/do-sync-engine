@@ -179,7 +179,11 @@
 </script>
 
 <main>
-  <h1>TODO Demo</h1>
+  <h1>
+      <a href="/">
+      TODO Demo
+      </a>
+  </h1>
   <p class="subtitle">Powered by <code>@do-sync-engine/core</code> + Cloudflare Durable Objects</p>
 
   <div class="connection-control">
