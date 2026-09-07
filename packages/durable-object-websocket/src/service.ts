@@ -1,8 +1,10 @@
 import type { JsonRpcRequest } from "typed-rpc";
 
 import type {
+  ListenerEvent,
   MutationMap,
   OperationParams,
+  OperationResult,
   QueryMap,
   StringKey,
   SyncEngineInterface,
@@ -12,6 +14,14 @@ import { WebsocketStorage } from "./websocket-storage";
 
 export type QueryTopic<Queries extends QueryMap> = {
   [Name in StringKey<Queries>]: Topic<Name, OperationParams<Queries[Name]>>;
+}[StringKey<Queries>];
+
+export type SubscriptionEvent<Queries extends QueryMap> = {
+  [Name in StringKey<Queries>]: ListenerEvent<
+    Name,
+    OperationParams<Queries[Name]>,
+    OperationResult<Queries[Name]>
+  >;
 }[StringKey<Queries>];
 
 export interface Service<Queries extends QueryMap, Mutations extends MutationMap> {
