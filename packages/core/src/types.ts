@@ -1,5 +1,7 @@
 import type { HashMap } from "hashmap";
 
+export type StringKey<T> = Extract<keyof T, string>;
+
 declare const brand: unique symbol;
 
 export type Branded<
@@ -30,13 +32,13 @@ type ValidParams<Params> = [Params] extends [never]
     ? Params
     : never;
 
-export type OperationParams<OperationDef> = OperationDef extends {
+export type OpParams<OperationDef> = OperationDef extends {
   run(...params: infer Params): unknown;
 }
   ? ValidParams<Params>
   : never;
 
-export type OperationResult<OperationDef> = OperationDef extends {
+export type OpResult<OperationDef> = OperationDef extends {
   run(...params: never[]): infer Result;
 }
   ? Result
@@ -47,65 +49,48 @@ export type Topic<Name extends string = string, Params extends BaseParams = Base
   readonly params: Params;
 };
 
-export type ListenerEvent<
-  Name extends string = string,
-  Params extends BaseParams = BaseParams,
-  Value = unknown,
-> = {
-  readonly topic: Topic<Name, Params>;
-  readonly value: Value;
+export type Topics<Q extends QueryRecord> = {
+  [Name in StringKey<Q>]: Topic<Name, OpParams<Q[Name]>>;
+}[StringKey<Q>];
+
+export type ListenerEvent<T extends Topic = Topic, V = unknown> = {
+  readonly topic: T;
+  readonly value: V;
 };
 
-export type Listener<Event extends ListenerEvent = ListenerEvent> = (event: Event) => unknown;
+export type Listener<E extends ListenerEvent = ListenerEvent> = (event: E) => void;
 
-export type StringKey<T> = Extract<keyof T, string>;
+export type ListenerEvents<Q extends QueryRecord> = {
+  [Name in StringKey<Q>]: ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
+}[StringKey<Q>];
 
-export type QueryMap<Queries extends object = Record<string, Query<BaseParams, unknown>>> = {
-  [Name in keyof Queries]: Queries[Name] extends {
-    run(...params: infer Params): infer Result;
-  }
-    ? Query<Params extends BaseParams ? Params : never, Result>
-    : never;
-};
-export type MutationMap<Mutations extends object = Record<string, Mutation<BaseParams, unknown>>> =
-  {
-    [Name in keyof Mutations]: Mutations[Name] extends {
-      run(...params: infer Params): infer Metadata;
-    }
-      ? Mutation<Params extends BaseParams ? Params : never, Metadata>
-      : never;
-  };
+export type QueryRecord = Record<string, Query>;
+export type MutationRecord = Record<string, Mutation>;
 
-export type Registry<Queries extends QueryMap = QueryMap, Id = string> = HashMap<
-  Topic<StringKey<Queries>, OperationParams<Queries[StringKey<Queries>]>>,
-  Map<
-    Id,
-    Listener<
-      ListenerEvent<
-        StringKey<Queries>,
-        OperationParams<Queries[StringKey<Queries>]>,
-        OperationResult<Queries[StringKey<Queries>]>
-      >
-    >
-  >
+export type Registry<Q extends QueryRecord = QueryRecord, Id = string> = HashMap<
+  Topics<Q>,
+  Map<Id, Listener<ListenerEvents<Q>>>
 >;
 
-export type Subscription<Id, Queries extends QueryMap> = {
+export type Subscription<
+  Id,
+  T extends Topic,
+  V = unknown,
+  L extends Listener<ListenerEvent<T, V>> = Listener<ListenerEvent<T, V>>,
+> = {
   id: Id;
-  topic: Topic<StringKey<Queries>, OperationParams<Queries[StringKey<Queries>]>>;
-  listener: Listener<
-    ListenerEvent<
-      StringKey<Queries>,
-      OperationParams<Queries[StringKey<Queries>]>,
-      OperationResult<Queries[StringKey<Queries>]>
-    >
-  >;
+  topic: T;
+  listener: L;
 };
+
+export type Subscriptions<Id, Q extends QueryRecord> = {
+  [Name in StringKey<Q>]: Subscription<Id, Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
+}[StringKey<Q>];
 
 export type SyncEngineOptions<
   Id,
-  Queries extends QueryMap = QueryMap,
-  Mutations extends MutationMap = MutationMap,
+  Queries extends QueryRecord = QueryRecord,
+  Mutations extends MutationRecord = MutationRecord,
 > = {
   queries: Queries;
   mutations: Mutations;
@@ -114,44 +99,38 @@ export type SyncEngineOptions<
 
 export interface SyncEngineInterface<
   Id,
-  Queries extends QueryMap = QueryMap,
-  Mutations extends MutationMap = MutationMap,
+  Queries extends QueryRecord = QueryRecord,
+  Mutations extends MutationRecord = MutationRecord,
 > {
-  createTopic<Name extends StringKey<Queries>>(
+  createTopic<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     name: Name,
-    params: OperationParams<Queries[Name]>,
-  ): Topic<Name, OperationParams<Queries[Name]>> | Error;
+    params: Params,
+  ): Topic<Name, Params> | Error;
 
-  subscribe<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-    listener: Listener<
-      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
-    >,
+  subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
   ): Id | Error;
-  subscribe<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-    listener: Listener<
-      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
-    >,
+  subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
     id: Id,
   ): Id | Error;
 
   unsubscribe(id: Id): void;
-  unsubscribe<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
+  unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
     id: Id,
   ): void;
-  unsubscribe<Name extends StringKey<Queries>>(
-    topic: Topic<Name, OperationParams<Queries[Name]>>,
-    listener: Listener<
-      ListenerEvent<Name, OperationParams<Queries[Name]>, OperationResult<Queries[Name]>>
-    >,
+  unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
   ): void;
 
-  sync<Name extends StringKey<Mutations>>(
+  sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
     mutation: Name,
-    params: OperationParams<Mutations[Name]>,
+    params: Params,
   ): void | Error;
 
-  subscriptions(): IterableIterator<Readonly<Subscription<Id, Queries>>>;
+  subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries>>>;
 }
