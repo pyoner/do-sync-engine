@@ -64,8 +64,8 @@ export type ListenerEvents<Q extends QueryRecord> = {
   [Name in StringKey<Q>]: ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
 }[StringKey<Q>];
 
-export type QueryRecord = Record<string, Query>;
-export type MutationRecord = Record<string, Mutation>;
+export type QueryRecord = Record<string, Query<never[]>>;
+export type MutationRecord = Record<string, Mutation<never[]>>;
 
 export type Registry<Q extends QueryRecord = QueryRecord, Id = string> = HashMap<
   Topics<Q>,

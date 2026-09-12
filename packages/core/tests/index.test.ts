@@ -103,7 +103,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   const topic: Topic<"numbers", []> = expectOk(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
-  const listener: Listener<ListenerEvent<"numbers", [], number[]>> = ({
+  const listener: Listener<ListenerEvent<Topic<"numbers", []>, number[]>> = ({
     topic: publishedTopic,
     value,
   }) => {
