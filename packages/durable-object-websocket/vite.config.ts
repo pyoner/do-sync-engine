@@ -5,10 +5,11 @@ export default defineConfig({
   pack: {
     entry: {
       index: "src/index.ts",
+      client: "src/client.ts",
       service: "src/service.ts",
     },
     exports: true,
-    deps: { neverBundle: ["@do-sync-engine/core", "cloudflare:workers"] },
+    deps: { neverBundle: ["@do-sync-engine/core", "cloudflare:workers", "capnweb"] },
   },
   lint: { options: { typeAware: true, typeCheck: true } },
   fmt: {},

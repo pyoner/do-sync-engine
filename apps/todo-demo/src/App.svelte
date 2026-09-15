@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { newWebSocketRpcSession, type WebSocketRpcClient } from "./websocket-rpc-client";
+  import {
+    newWebSocketRpcSession,
+    type WebSocketRpcClient,
+  } from "@do-sync-engine/durable-object-websocket/client";
   import {
     TODO_WS_PATH,
     type Todo,
@@ -81,8 +84,10 @@
     }
 
     const unsubscribe = () => {
-      void root.unsubscribe(topic, listener).catch((error) => {
-        globalThis.console.warn("Failed to unsubscribe from todo filter:", error);
+      void root.unsubscribe(topic, listener).then((result) => {
+        if (result instanceof Error) {
+          globalThis.console.warn("Failed to unsubscribe from todo filter:", result);
+        }
       });
     };
     if (api !== root || filterSubscriptionVersion !== version) {

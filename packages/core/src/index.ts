@@ -1,22 +1,24 @@
 export { toTables } from "./helpers";
 export { SyncEngine } from "./engine";
+
 export {
   MutationExecutionError,
   QueryExecutionError,
   UnknownMutationError,
   UnknownQueryError,
 } from "./errors";
+
 export type {
   BaseParams,
   Branded,
   Mutation,
   MutationRecord,
-  OpParams as OperationParams,
-  OpResult as OperationResult,
+  OpParams,
+  OpResult,
   Listener,
   ListenerEvent,
   Query,
-  QueryRecord as QueryMap,
+  QueryRecord,
   StringKey,
   Table,
   Subscription,
