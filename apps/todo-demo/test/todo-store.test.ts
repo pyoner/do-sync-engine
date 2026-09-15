@@ -45,8 +45,9 @@ describe("TodoStore Capnweb WebSocket transport", () => {
         });
       };
 
-      const subscribeResult = await client.subscribe(topic, listener);
-      expect(typeof subscribeResult).toBe("string");
+      const subId = await client.subscribe(topic, listener);
+      if (subId instanceof Error) throw subId;
+      expect(typeof subId).toBe("string");
 
       await waitFor(() => events.length >= 1);
       const uniqueTitle = `round-trip-${crypto.randomUUID()}`;
@@ -67,7 +68,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
         );
       }
 
-      const unsubResult = await client.unsubscribe(topic, listener);
+      const unsubResult = await client.unsubscribe(subId);
       expect(unsubResult).toBeUndefined();
     } finally {
       client[Symbol.dispose]();

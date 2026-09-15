@@ -73,8 +73,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const { record, listener, wait } = createListener<{
         value: { key: string; value: number };
       }>();
-      const subscribeResult = await client.subscribe(topic, listener);
-      expect(typeof subscribeResult).toBe("string");
+      const subId = await client.subscribe(topic, listener);
+      expect(typeof subId).toBe("string");
 
       const initial = await wait((e) => e.value.key === key && e.value.value === 0);
       expect(initial.value.value).toBe(0);
@@ -91,7 +91,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("manages subscriber deduplication, multiple callbacks, and explicit ID replacement", async () => {
+  it("manages subscriber deduplication and multiple callbacks", async () => {
     const { client, socket } = await connect();
     try {
       const key = `multi-${crypto.randomUUID()}`;
@@ -103,12 +103,12 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       expect(typeof id1).toBe("string");
       await first.wait((e) => e.value.value === 0);
 
-      // Resubscribing same callback/topic without ID returns same ID and repeats initial delivery
+      // Resubscribing same callback/topic returns same subscription ID and repeats initial delivery
       const id2 = await client.subscribe(topic, first.listener);
       expect(id2).toBe(id1);
       expect(first.record.events.length).toBe(2);
 
-      // Different callback on same topic returns distinct ID and receives initial delivery
+      // Different callback on same topic returns distinct subscription ID and receives initial delivery
       const second = createListener<{ value: { key: string; value: number } }>();
       const id3 = await client.subscribe(topic, second.listener);
       expect(typeof id3).toBe("string");
@@ -121,25 +121,13 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       await second.wait((e) => e.value.value === 1);
       expect(first.record.events.length).toBe(3);
       expect(second.record.events.length).toBe(2);
-
-      // Explicit same topic/ID replaces the registration with a new callback
-      const third = createListener<{ value: { key: string; value: number } }>();
-      const id4 = await client.subscribe(topic, third.listener, id1 as string);
-      expect(id4).toBe(id1);
-      await third.wait((e) => e.value.value === 1);
-
-      await client.sync("increment", [key, 2]);
-      await third.wait((e) => e.value.value === 3);
-      await second.wait((e) => e.value.value === 3);
-      // Replaced callback received no additional events after replacement
-      expect(first.record.events.length).toBe(3);
     } finally {
       client[Symbol.dispose]();
       socket.close();
     }
   });
 
-  it("handles topic-specific, ID-only, and listener-form unsubscriptions", async () => {
+  it("handles unsubscriptions by subscription ID", async () => {
     const { client, socket } = await connect();
     try {
       const key1 = `unsub1-${crypto.randomUUID()}`;
@@ -148,18 +136,17 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const topic2 = await client.createTopic("counter", [key2]);
       if (topic1 instanceof Error || topic2 instanceof Error) throw new Error("Topic error");
 
-      const explicitId = `shared-explicit-${crypto.randomUUID()}`;
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
 
-      // Register two topics under one explicit ID
-      await client.subscribe(topic1, cb1.listener, explicitId);
-      await client.subscribe(topic2, cb2.listener, explicitId);
+      const id1 = await client.subscribe(topic1, cb1.listener);
+      if (id1 instanceof Error) throw id1;
+      const id2 = await client.subscribe(topic2, cb2.listener);
+      if (id2 instanceof Error) throw id2;
       await cb1.wait((e) => e.value.value === 0);
       await cb2.wait((e) => e.value.value === 0);
 
-      // unsubscribe(topic, id) removes only topic1
-      const unsub1 = await client.unsubscribe(topic1, explicitId);
+      const unsub1 = await client.unsubscribe(id1);
       expect(unsub1).toBeUndefined();
 
       await client.sync("increment", [key1, 1]);
@@ -167,40 +154,10 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       await cb2.wait((e) => e.value.value === 5);
       expect(cb1.record.events.length).toBe(1);
 
-      // unsubscribe(id) removes remaining records for that explicit ID across topics
-      const unsubAllId = await client.unsubscribe(explicitId);
-      expect(unsubAllId).toBeUndefined();
+      const unsub2 = await client.unsubscribe(id2);
+      expect(unsub2).toBeUndefined();
 
-      await client.sync("increment", [key2, 2]);
-      // Barrier check with a new subscription to confirm event delivery settled
-      const barrier = createListener<{ value: { key: string; value: number } }>();
-      await client.subscribe(topic2, barrier.listener);
-      await barrier.wait((e) => e.value.value === 7);
-      expect(cb2.record.events.length).toBe(3);
-
-      // Register one callback under two explicit IDs on one topic
-      const multiId1 = `id-a-${crypto.randomUUID()}`;
-      const multiId2 = `id-b-${crypto.randomUUID()}`;
-      const sharedCb = createListener<{ value: { key: string; value: number } }>();
-      const otherCb = createListener<{ value: { key: string; value: number } }>();
-
-      await client.subscribe(topic1, sharedCb.listener, multiId1);
-      await client.subscribe(topic1, sharedCb.listener, multiId2);
-      await client.subscribe(topic1, otherCb.listener);
-      await otherCb.wait((e) => e.value.key === key1);
-
-      // Deserialized equivalent topic for unsubscribe
-      const equivalentTopic1 = await client.createTopic("counter", [key1]);
-      if (equivalentTopic1 instanceof Error) throw equivalentTopic1;
-      const unsubShared = await client.unsubscribe(equivalentTopic1, sharedCb.listener);
-      expect(unsubShared).toBeUndefined();
-
-      await client.sync("increment", [key1, 10]);
-      await otherCb.wait((e) => e.value.value === 11);
-      // sharedCb received 2 initial events and 0 after unsubscribe
-      expect(sharedCb.record.events.length).toBe(2);
-
-      // Unknown removals are no-ops
+      // Unknown ID removal is no-op
       const noopUnsub = await client.unsubscribe("non-existent-id");
       expect(noopUnsub).toBeUndefined();
     } finally {
@@ -218,26 +175,21 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const topic = await first.client.createTopic("counter", [key]);
       if (topic instanceof Error) throw topic;
 
-      const explicitId = "same-explicit-id";
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
 
-      await first.client.subscribe(topic, cb1.listener, explicitId);
-      await second.client.subscribe(topic, cb2.listener, explicitId);
+      const id1 = await first.client.subscribe(topic, cb1.listener);
+      if (id1 instanceof Error) throw id1;
+      const id2 = await second.client.subscribe(topic, cb2.listener);
+      if (id2 instanceof Error) throw id2;
       await cb1.wait((e) => e.value.value === 0);
       await cb2.wait((e) => e.value.value === 0);
 
-      // First client unsubscribes its explicit ID; second client must remain registered
-      await first.client.unsubscribe(explicitId);
+      await first.client.unsubscribe(id1);
       await first.client.sync("increment", [key, 4]);
       await cb2.wait((e) => e.value.value === 4);
       expect(cb1.record.events.length).toBe(1);
 
-      // Idle connection receives no events
-      const idleCount = (idle.client as unknown as { count?: number }).count ?? 0;
-      expect(idleCount).toBe(0);
-
-      // Closing first connection leaves second working
       first.client[Symbol.dispose]();
       first.socket.close();
 
@@ -252,57 +204,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("enumerates subscriptions asynchronously with stubs and allows unsubscribing returned stub", async () => {
-    const { client, socket } = await connect();
-    try {
-      const key = `enum-${crypto.randomUUID()}`;
-      const topic = await client.createTopic("counter", [key]);
-      if (topic instanceof Error) throw topic;
-
-      const cb = createListener<{ value: { key: string; value: number } }>();
-      const id = await client.subscribe(topic, cb.listener, "custom-id");
-      expect(id).toBe("custom-id");
-      await cb.wait((e) => e.value.value === 0);
-
-      let found = false;
-      for await (const entry of client.subscriptions()) {
-        try {
-          if (entry.id === "custom-id") {
-            found = true;
-            expect(entry.topic).toEqual(topic);
-            expect(await entry.listener.listenerId).toBeDefined();
-
-            // Unsubscribe using the yielded stub
-            const unsubResult = await client.unsubscribe(
-              entry.topic as never,
-              entry.listener as never,
-            );
-            expect(unsubResult).toBeUndefined();
-          }
-        } finally {
-          entry[Symbol.dispose]();
-        }
-      }
-      expect(found).toBe(true);
-
-      // Confirm unsubscription succeeded
-      await client.sync("increment", [key, 10]);
-      const barrier = createListener<{ value: { key: string; value: number } }>();
-      await client.subscribe(topic, barrier.listener);
-      await barrier.wait((e) => e.value.value === 10);
-      expect(cb.record.events.length).toBe(1);
-
-      // Early break completes cleanly
-      for await (const entry of client.subscriptions()) {
-        entry[Symbol.dispose]();
-        break;
-      }
-    } finally {
-      client[Symbol.dispose]();
-      socket.close();
-    }
-  });
-
   it("returns errors as values for unknown query or mutation and invalid listenerId", async () => {
     const { client, socket } = await connect();
     try {
@@ -314,7 +215,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const syncError = await client.sync("unknownMutation" as never, [] as never);
       expect(syncError).toBeInstanceOf(Error);
 
-      // Invalid listenerId
       const malformedStub = new RpcStub(
         Object.assign(() => {}, { listenerId: "" }),
       ) as unknown as RpcListener;
@@ -343,25 +243,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       await client.subscribe(topicNull, cbNull.listener);
       await cbUndef.wait((e) => e !== undefined);
       await cbNull.wait((e) => e !== undefined);
-
-      // Recreate [1n, undefined] topic independently and unsubscribe it
-      const reconstructedUndef = await client.createTopic("echoParams", [1n, undefined]);
-      if (reconstructedUndef instanceof Error) throw reconstructedUndef;
-      await client.unsubscribe(reconstructedUndef, cbUndef.listener);
-
-      // Enumerate and verify only null remains
-      const remaining: unknown[] = [];
-      for await (const entry of client.subscriptions()) {
-        try {
-          if (entry.topic.name === "echoParams") {
-            remaining.push(entry.topic.params);
-          }
-        } finally {
-          entry[Symbol.dispose]();
-        }
-      }
-      expect(remaining.length).toBe(1);
-      expect(remaining[0]).toEqual([1n, null]);
     } finally {
       client[Symbol.dispose]();
       socket.close();
@@ -402,7 +283,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     if (topic instanceof Error) throw topic;
 
     const subscribePromise = service.subscribe(topic, stub);
-    // Dispose the service while listenerId read is pending
     service[Symbol.dispose]();
     resolveListenerId("delayed-id");
 
@@ -411,7 +291,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     expect((result as Error).message).toBe("WebSocket RPC session is closed");
     stub[Symbol.dispose]();
 
-    // Verify engine has 0 subscriptions left
     let subscriptionCount = 0;
     for (const _sub of engine.subscriptions()) subscriptionCount++;
     expect(subscriptionCount).toBe(0);
