@@ -1,192 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { RpcStub, newWebSocketRpcSession } from "capnweb";
-  import type { Service } from "@do-sync-engine/durable-object-websocket";
-  import {
-    TODO_WS_PATH,
-    type Todo,
-    type TodoMutations,
-    type TodoQueries,
-    type TodoQueryResults,
-    type TodoSummary,
-  } from "./todo-protocol";
-  const filters = [
-    { label: "All", query: "allTodos" },
-    { label: "Active", query: "incompleteTodos" },
-    { label: "Completed", query: "completedTodos" },
-  ] as const;
-  type TodoFilter = (typeof filters)[number];
-  type TodoListItem = TodoSummary & Pick<Todo, "completed">;
+  import { createTodoAppState } from "./todo-app-state.svelte";
 
-  let todos = $state<TodoListItem[]>([]);
-  let newTitle = $state("");
-  let queryResults = $state<Partial<TodoQueryResults>>({});
-  let selectedFilter = $state<TodoFilter>(filters[0]);
-  let filterLoading = $state(false);
-  let loading = $state(false);
-  let api: RpcStub<Service<TodoQueries, TodoMutations>> | null = null;
-  let connected = $state(false);
-  let errorMessage = $state<string | null>(null);
-  let filterSubscriptionVersion = 0;
-  let unsubscribeActiveFilter = $state<(() => void) | null>(null);
+  const app = createTodoAppState();
+  const {
+    connect,
+    disconnect,
+    selectFilter,
+    addTodo,
+    toggleTodo,
+    deleteTodo,
+    clearCompleted,
+  } = app;
 
-  function disconnect(): void {
-    const root = api;
-    filterSubscriptionVersion += 1;
-    unsubscribeActiveFilter?.();
-    unsubscribeActiveFilter = null;
-    api = null;
-    connected = false;
-    filterLoading = false;
-    loading = false;
-    root?.[Symbol.dispose]();
-  }
-
-  function showSubscriptionError(
-    root: RpcStub<Service<TodoQueries, TodoMutations>>,
-    version: number,
-    error: unknown,
-  ): void {
-    if (api !== root || filterSubscriptionVersion !== version) return;
-    filterLoading = false;
-    errorMessage = error instanceof Error ? error.message : String(error);
-  }
-
-  function toTodoListItems(filter: TodoFilter, value: unknown): TodoListItem[] {
-    const results = value as TodoSummary[];
-    if (filter.query === "allTodos") return results as TodoListItem[];
-    return results.map((todo) => ({
-      ...todo,
-      completed: filter.query === "completedTodos" ? 1 : 0,
-    }));
-  }
-
-  async function subscribeToFilter(
-    root: RpcStub<Service<TodoQueries, TodoMutations>>,
-    filter: TodoFilter,
-    version: number,
-  ): Promise<void> {
-    const topic = await root.createTopic(filter.query, []);
-    if (topic instanceof Error) {
-      showSubscriptionError(root, version, topic);
-      return;
-    }
-    if (api !== root || filterSubscriptionVersion !== version) return;
-
-    const listener = (event: { value: unknown }) => {
-      if (api !== root || filterSubscriptionVersion !== version) return;
-      queryResults = { ...queryResults, [filter.query]: event.value };
-      todos = toTodoListItems(filter, event.value);
-      filterLoading = false;
-    };
-    const listenerStub = new RpcStub(listener);
-    let subscribeResult: void | Error;
-    try {
-      subscribeResult = await root.subscribe(topic, listenerStub);
-    } finally {
-      listenerStub[Symbol.dispose]();
-    }
-    if (subscribeResult instanceof Error) {
-      showSubscriptionError(root, version, subscribeResult);
-      return;
-    }
-
-    const unsubscribe = () => {
-      void root.unsubscribe(topic)
-        .then((result) => {
-          if (result instanceof Error) {
-            globalThis.console.warn("Failed to unsubscribe from todo filter:", result);
-          }
-        })
-        .catch((error) => {
-          globalThis.console.warn("Failed to unsubscribe from todo filter:", error);
-        });
-    };
-    if (api !== root || filterSubscriptionVersion !== version) {
-      unsubscribe();
-      return;
-    }
-    unsubscribeActiveFilter = unsubscribe;
-  }
-
-  function selectFilter(filter: TodoFilter): void {
-    if (selectedFilter.query === filter.query) return;
-
-    selectedFilter = filter;
-    todos = [];
-    queryResults = {};
-    filterLoading = true;
-    errorMessage = null;
-    filterSubscriptionVersion += 1;
-    unsubscribeActiveFilter?.();
-    unsubscribeActiveFilter = null;
-
-    const root = api;
-    const version = filterSubscriptionVersion;
-    if (root !== null) void subscribeToFilter(root, filter, version).catch((error) => {
-      showSubscriptionError(root, version, error);
-    });
-  }
-  function connect(): void {
-    if (api !== null) return;
-    const root = newWebSocketRpcSession<Service<TodoQueries, TodoMutations>>(
-      `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
-    );
-    api = root;
-    connected = true;
-    filterLoading = true;
-    errorMessage = null;
-
-    const version = filterSubscriptionVersion;
-    void subscribeToFilter(root, selectedFilter, version).catch((error) => {
-      showSubscriptionError(root, version, error);
-    });
-    root.onRpcBroken((error) => {
-      if (api !== root) return;
-      unsubscribeActiveFilter = null;
-      api = null;
-      connected = false;
-      filterLoading = false;
-      loading = false;
-      errorMessage = error instanceof Error ? error.message : String(error);
-    });
-  }
-
-  function mutate(
-    operation: (root: RpcStub<Service<TodoQueries, TodoMutations>>) => Promise<void | Error>,
-    afterSuccess?: () => void,
-  ) {
-    const root = api;
-    if (!root) return;
-
-    loading = true;
-    errorMessage = null;
-    void (async () => {
-      try {
-        const result = await operation(root);
-        if (result instanceof Error) throw result;
-        if (api !== root) return;
-        afterSuccess?.();
-      } catch (error) {
-        errorMessage = error instanceof Error ? error.message : String(error);
-      } finally {
-        if (api === root) loading = false;
-      }
-    })();
-  }
-  function addTodo() {
-    const title = newTitle.trim();
-    if (title) mutate((root) => root.sync("addTodo", [title]), () => (newTitle = ""));
-  }
-  function toggleTodo(id: number) {
-    mutate((root) => root.sync("toggleTodo", [id]));
-  }
-  function deleteTodo(id: number) {
-    mutate((root) => root.sync("deleteTodo", [id]));
-  }
-  function clearCompleted() {
-    mutate((root) => root.sync("clearCompleted", []));
-  }
   onMount(() => {
     connect();
     return disconnect;
@@ -204,66 +30,66 @@
   <div class="connection-control">
     <button
       type="button"
-      onclick={connected ? disconnect : connect}
-      aria-label={connected ? "Disconnect WebSocket" : "Connect WebSocket"}
+      onclick={app.connected ? disconnect : connect}
+      aria-label={app.connected ? "Disconnect WebSocket" : "Connect WebSocket"}
     >
-      {connected ? "Disconnect" : "Connect"}
+      {app.connected ? "Disconnect" : "Connect"}
     </button>
-    <p class="status" aria-live="polite">{connected ? "Connected" : "Disconnected"}</p>
+    <p class="status" aria-live="polite">{app.connected ? "Connected" : "Disconnected"}</p>
   </div>
 
-  {#if errorMessage}
-    <p class="status error">{errorMessage}</p>
+  {#if app.errorMessage}
+    <p class="status error">{app.errorMessage}</p>
   {/if}
 
   <form onsubmit={(e) => { e.preventDefault(); addTodo(); }}>
     <input
       type="text"
-      bind:value={newTitle}
+      bind:value={app.newTitle}
       placeholder="What needs doing?"
-      disabled={loading || !connected}
+      disabled={app.loading || !app.connected}
     />
-    <button type="submit" disabled={loading || !connected || !newTitle.trim()}>Add</button>
+    <button type="submit" disabled={app.loading || !app.connected || !app.newTitle.trim()}>Add</button>
   </form>
 
   <div class="filters" role="group" aria-label="Todo filters">
-    {#each filters as filter}
+    {#each app.filters as filter}
       <button
         type="button"
-        class:active={selectedFilter.query === filter.query}
-        aria-pressed={selectedFilter.query === filter.query}
+        class:active={app.selectedFilter.query === filter.query}
+        aria-pressed={app.selectedFilter.query === filter.query}
         onclick={() => selectFilter(filter)}
-        disabled={!connected}
+        disabled={!app.connected}
       >
         {filter.label}
       </button>
     {/each}
   </div>
 
-  {#if filterLoading}
-    <p class="status" aria-live="polite">Loading {selectedFilter.label.toLowerCase()} todos…</p>
-  {:else if todos.length === 0}
+  {#if app.filterLoading}
+    <p class="status" aria-live="polite">Loading {app.selectedFilter.label.toLowerCase()} todos…</p>
+  {:else if app.todos.length === 0}
     <p class="empty">No todos yet. Add one above!</p>
   {:else}
     <ul class="todo-list">
-      {#each todos as todo (todo.id)}
+      {#each app.todos as todo (todo.id)}
         <li class:completed={todo.completed}>
           <label>
             <input
               type="checkbox"
               checked={!!todo.completed}
               onchange={() => toggleTodo(todo.id)}
-              disabled={loading || !connected}
+              disabled={app.loading || !app.connected}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={loading || !connected}>×</button>
+          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={app.loading || !app.connected}>×</button>
         </li>
       {/each}
     </ul>
 
-    {#if todos.some(t => t.completed)}
-      <button class="clear" onclick={clearCompleted} disabled={loading || !connected}>Clear completed</button>
+    {#if app.todos.some(t => t.completed)}
+      <button class="clear" onclick={clearCompleted} disabled={app.loading || !app.connected}>Clear completed</button>
     {/if}
   {/if}
 
@@ -271,13 +97,13 @@
     <h2>Subscribed query</h2>
     <ul class="query-list">
       <li>
-        <code>{selectedFilter.query}</code>
-        <span class="row-count">({queryResults[selectedFilter.query]?.length ?? 0} rows)</span>
+        <code>{app.selectedFilter.query}</code>
+        <span class="row-count">({app.queryResults[app.selectedFilter.query]?.length ?? 0} rows)</span>
       </li>
     </ul>
     <details>
       <summary>Latest query result (JSON)</summary>
-      <pre>{JSON.stringify(queryResults[selectedFilter.query], null, 2)}</pre>
+      <pre>{JSON.stringify(app.queryResults[app.selectedFilter.query], null, 2)}</pre>
     </details>
   </div>
 </main>
