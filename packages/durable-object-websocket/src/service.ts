@@ -14,6 +14,10 @@ import type {
 
 export type RpcListener<E extends ListenerEvent = ListenerEvent> = RpcStub<Listener<E>>;
 
+type SyncArgs<Mutations extends MutationRecord> = {
+  [Name in StringKey<Mutations>]: [mutation: Name, params: OpParams<Mutations[Name]>];
+}[StringKey<Mutations>];
+
 export interface Service<
   Queries extends QueryRecord = QueryRecord,
   Mutations extends MutationRecord = MutationRecord,
@@ -29,11 +33,15 @@ export interface Service<
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
   ): void | Error;
-  sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
-    mutation: Name,
-    params: Params,
-  ): void | Error;
+  sync(...args: SyncArgs<Mutations>): void | Error;
 }
+
+export type RpcClient<Queries extends QueryRecord, Mutations extends MutationRecord> = Omit<
+  RpcStub<Service<Queries, Mutations>>,
+  "sync"
+> & {
+  sync(...args: SyncArgs<Mutations>): Promise<void | Error>;
+};
 
 export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   extends RpcTarget
@@ -82,10 +90,7 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     previous.listener[Symbol.dispose]();
   }
 
-  sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
-    mutation: Name,
-    params: Params,
-  ): void | Error {
+  sync(...[mutation, params]: SyncArgs<M>): void | Error {
     return this.#engine.sync(mutation, params);
   }
 

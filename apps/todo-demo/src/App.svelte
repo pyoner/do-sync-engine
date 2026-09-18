@@ -1,9 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    newWebSocketRpcSession,
-    type WebSocketRpcClient,
-  } from "@do-sync-engine/durable-object-websocket/client";
+  import { RpcStub, newWebSocketRpcSession } from "capnweb";
+  import type { RpcClient, Service } from "@do-sync-engine/durable-object-websocket";
   import {
     TODO_WS_PATH,
     type Todo,
@@ -26,7 +24,7 @@
   let selectedFilter = $state<TodoFilter>(filters[0]);
   let filterLoading = $state(false);
   let loading = $state(false);
-  let api: WebSocketRpcClient<TodoQueries, TodoMutations> | null = null;
+  let api: RpcClient<TodoQueries, TodoMutations> | null = null;
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
   let filterSubscriptionVersion = 0;
@@ -44,7 +42,11 @@
     root?.[Symbol.dispose]();
   }
 
-  function showSubscriptionError(root: WebSocketRpcClient<TodoQueries, TodoMutations>, version: number, error: unknown): void {
+  function showSubscriptionError(
+    root: RpcClient<TodoQueries, TodoMutations>,
+    version: number,
+    error: unknown,
+  ): void {
     if (api !== root || filterSubscriptionVersion !== version) return;
     filterLoading = false;
     errorMessage = error instanceof Error ? error.message : String(error);
@@ -60,7 +62,7 @@
   }
 
   async function subscribeToFilter(
-    root: WebSocketRpcClient<TodoQueries, TodoMutations>,
+    root: RpcClient<TodoQueries, TodoMutations>,
     filter: TodoFilter,
     version: number,
   ): Promise<void> {
@@ -77,18 +79,28 @@
       todos = toTodoListItems(filter, event.value);
       filterLoading = false;
     };
-    const subscribeResult = await root.subscribe(topic, listener);
+    const listenerStub = new RpcStub(listener);
+    let subscribeResult: void | Error;
+    try {
+      subscribeResult = await root.subscribe(topic, listenerStub);
+    } finally {
+      listenerStub[Symbol.dispose]();
+    }
     if (subscribeResult instanceof Error) {
       showSubscriptionError(root, version, subscribeResult);
       return;
     }
 
     const unsubscribe = () => {
-      void root.unsubscribe(topic).then((result) => {
-        if (result instanceof Error) {
-          globalThis.console.warn("Failed to unsubscribe from todo filter:", result);
-        }
-      });
+      void root.unsubscribe(topic)
+        .then((result) => {
+          if (result instanceof Error) {
+            globalThis.console.warn("Failed to unsubscribe from todo filter:", result);
+          }
+        })
+        .catch((error) => {
+          globalThis.console.warn("Failed to unsubscribe from todo filter:", error);
+        });
     };
     if (api !== root || filterSubscriptionVersion !== version) {
       unsubscribe();
@@ -115,13 +127,11 @@
       showSubscriptionError(root, version, error);
     });
   }
-
   function connect(): void {
     if (api !== null) return;
-
-    const root = newWebSocketRpcSession<TodoQueries, TodoMutations>(
+    const root = newWebSocketRpcSession<Service<TodoQueries, TodoMutations>>(
       `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
-    );
+    ) as unknown as RpcClient<TodoQueries, TodoMutations>;
     api = root;
     connected = true;
     filterLoading = true;
@@ -143,7 +153,7 @@
   }
 
   function mutate(
-    operation: (root: WebSocketRpcClient<TodoQueries, TodoMutations>) => Promise<void | Error>,
+    operation: (root: RpcClient<TodoQueries, TodoMutations>) => Promise<void | Error>,
     afterSuccess?: () => void,
   ) {
     const root = api;

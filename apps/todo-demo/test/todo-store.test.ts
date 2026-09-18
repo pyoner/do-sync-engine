@@ -1,6 +1,7 @@
 import { exports } from "cloudflare:workers";
+import { newWebSocketRpcSession, RpcStub } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
-import { newWebSocketRpcSession } from "@do-sync-engine/durable-object-websocket/client";
+import type { Service } from "@do-sync-engine/durable-object-websocket";
 import type { TodoMutations, TodoQueries, TodoSummary } from "../src/todo-protocol.ts";
 
 describe("TodoStore Capnweb WebSocket transport", () => {
@@ -20,7 +21,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
     expect(response.status).toBe(101);
     const socket = response.webSocket!;
     socket.accept();
-    const client = newWebSocketRpcSession<TodoQueries, TodoMutations>(socket);
+    const client = newWebSocketRpcSession<Service<TodoQueries, TodoMutations>>(socket);
 
     try {
       const topic = await client.createTopic("allTodos", []);
@@ -45,7 +46,13 @@ describe("TodoStore Capnweb WebSocket transport", () => {
         });
       };
 
-      const subscribeResult = await client.subscribe(topic, listener);
+      const listenerStub = new RpcStub(listener);
+      let subscribeResult: void | Error;
+      try {
+        subscribeResult = await client.subscribe(topic as never, listenerStub as never);
+      } finally {
+        listenerStub[Symbol.dispose]();
+      }
       if (subscribeResult instanceof Error) throw subscribeResult;
       expect(subscribeResult).toBeUndefined();
 

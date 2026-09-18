@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
+import { newWebSocketRpcSession, RpcStub } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
-import { newWebSocketRpcSession, type WebSocketRpcClient } from "../src/client.ts";
-import { SocketService, type RpcListener, type Service } from "../src/service.ts";
+import { SocketService, type RpcClient, type RpcListener, type Service } from "../src/service.ts";
 import type { FixtureMutations, FixtureQueries } from "./cloudflare-worker.ts";
 import { SyncEngine, type Query } from "@do-sync-engine/core";
 
@@ -9,7 +9,7 @@ const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
 };
 
-type Client = WebSocketRpcClient<FixtureQueries, FixtureMutations>;
+type Client = RpcClient<FixtureQueries, FixtureMutations>;
 
 async function connect(): Promise<{ client: Client; socket: WebSocket }> {
   const response = await worker.default.fetch(
@@ -17,7 +17,7 @@ async function connect(): Promise<{ client: Client; socket: WebSocket }> {
   );
   const socket = response.webSocket!;
   socket.accept();
-  const client = newWebSocketRpcSession<FixtureQueries, FixtureMutations>(socket);
+  const client = newWebSocketRpcSession<Service<FixtureQueries, FixtureMutations>>(socket);
   return { client, socket };
 }
 
@@ -63,6 +63,19 @@ function createDisposableRpcListener(onDispose: () => void): RpcListener {
   }) as unknown as RpcListener;
 }
 
+async function subscribeWithStub<T>(
+  client: Client,
+  topic: unknown,
+  listener: (event: T) => void,
+): Promise<void | Error> {
+  const stub = new RpcStub(listener);
+  try {
+    return await client.subscribe(topic as never, stub as never);
+  } finally {
+    stub[Symbol.dispose]();
+  }
+}
+
 describe("Durable Object Capnweb WebSocket transport", () => {
   it("rejects non-WebSocket requests", async () => {
     const response = await worker.default.fetch(new Request("https://example.com"));
@@ -82,7 +95,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const { record, listener, wait } = createListener<{
         value: { key: string; value: number };
       }>();
-      const result = await client.subscribe(topic, listener);
+      const result = await subscribeWithStub(client, topic, listener);
       expect(result).toBeUndefined();
 
       const initial = await wait((e) => e.value.key === key && e.value.value === 0);
@@ -112,11 +125,13 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const secondListener = createListener<{ value: { key: string; value: number } }>();
       const otherSocketListener = createListener<{ value: { key: string; value: number } }>();
 
-      expect(await first.client.subscribe(topic, firstListener.listener)).toBeUndefined();
+      expect(await subscribeWithStub(first.client, topic, firstListener.listener)).toBeUndefined();
       await firstListener.wait((e) => e.value.value === 0);
-      expect(await first.client.subscribe(topic, secondListener.listener)).toBeUndefined();
+      expect(await subscribeWithStub(first.client, topic, secondListener.listener)).toBeUndefined();
       await secondListener.wait((e) => e.value.value === 0);
-      expect(await second.client.subscribe(topic, otherSocketListener.listener)).toBeUndefined();
+      expect(
+        await subscribeWithStub(second.client, topic, otherSocketListener.listener),
+      ).toBeUndefined();
       await otherSocketListener.wait((e) => e.value.value === 0);
 
       await first.client.sync("increment", [key, 1]);
@@ -147,8 +162,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
-      expect(await client.subscribe(topic1, cb1.listener)).toBeUndefined();
-      expect(await client.subscribe(topic2, cb2.listener)).toBeUndefined();
+      expect(await subscribeWithStub(client, topic1, cb1.listener)).toBeUndefined();
+      expect(await subscribeWithStub(client, topic2, cb2.listener)).toBeUndefined();
       await cb1.wait((e) => e.value.value === 0);
       await cb2.wait((e) => e.value.value === 0);
 
@@ -180,8 +195,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
-      expect(await first.client.subscribe(topic, cb1.listener)).toBeUndefined();
-      expect(await second.client.subscribe(topic, cb2.listener)).toBeUndefined();
+      expect(await subscribeWithStub(first.client, topic, cb1.listener)).toBeUndefined();
+      expect(await subscribeWithStub(second.client, topic, cb2.listener)).toBeUndefined();
       await cb1.wait((e) => e.value.value === 0);
       expect(await first.client.unsubscribe(topic)).toBeUndefined();
       await first.client.sync("increment", [key, 4]);
@@ -298,7 +313,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     try {
       const badTopic = { name: "unknownQuery", params: [] } as never;
       const cb = createListener<unknown>();
-      const subscribeError = await client.subscribe(badTopic, cb.listener as never);
+      const subscribeError = await subscribeWithStub(client, badTopic, cb.listener);
       expect(subscribeError).toBeInstanceOf(Error);
 
       const syncError = await client.sync("unknownMutation" as never, [] as never);
@@ -319,8 +334,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const cbUndef = createListener<unknown>();
       const cbNull = createListener<unknown>();
 
-      await client.subscribe(topicUndef, cbUndef.listener);
-      await client.subscribe(topicNull, cbNull.listener);
+      await subscribeWithStub(client, topicUndef, cbUndef.listener);
+      await subscribeWithStub(client, topicNull, cbNull.listener);
       await cbUndef.wait((e) => e !== undefined);
       await cbNull.wait((e) => e !== undefined);
     } finally {
@@ -331,7 +346,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
   it("enforces static compile-time type negative constraints", () => {
     if (false as boolean) {
-      const dummyClient = null as unknown as WebSocketRpcClient<FixtureQueries, FixtureMutations>;
+      const dummyClient = null as unknown as RpcClient<FixtureQueries, FixtureMutations>;
       const dummyService = null as unknown as Service<FixtureQueries, FixtureMutations>;
       const dummyTopic = null as unknown as { readonly name: "counter"; readonly params: [string] };
       const dummyListener = (() => {}) as never;
