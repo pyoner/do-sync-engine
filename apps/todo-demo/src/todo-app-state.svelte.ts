@@ -19,37 +19,74 @@ type TodoFilter = (typeof filters)[number];
 type TodoListItem = TodoSummary & Pick<Todo, "completed">;
 type TodoService = RpcStub<Service<TodoQueries, TodoMutations>>;
 
+type SubscriptionState =
+  | { tag: "idle" }
+  | { tag: "loading"; version: number; loaded: boolean }
+  | { tag: "active"; version: number; unsubscribe: () => void };
+type MutationState = { tag: "idle" } | { tag: "pending" };
+type FeedbackState = { tag: "idle" } | { tag: "error"; message: string };
+type SessionState =
+  | { tag: "disconnected" }
+  | {
+      tag: "connected";
+      root: TodoService;
+      subscription: SubscriptionState;
+      mutation: MutationState;
+    };
+
 export function createTodoAppState() {
   const state = $state({
     todos: [] as TodoListItem[],
     newTitle: "",
     queryResults: {} as Partial<TodoQueryResults>,
     selectedFilter: filters[0] as TodoFilter,
-    filterLoading: false,
-    loading: false,
-    api: null as TodoService | null,
-    connected: false,
-    errorMessage: null as string | null,
-    filterSubscriptionVersion: 0,
-    unsubscribeActiveFilter: null as (() => void) | null,
+    session: { tag: "disconnected" } as SessionState,
+    feedback: { tag: "idle" } as FeedbackState,
   });
+  let nextSubscriptionVersion = 0;
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function currentSession(
+    root: TodoService,
+  ): Extract<SessionState, { tag: "connected" }> | undefined {
+    const session = state.session;
+    return session.tag === "connected" && session.root === root ? session : undefined;
+  }
+
+  function currentSubscription(root: TodoService, version: number): boolean {
+    const subscription = currentSession(root)?.subscription;
+    return subscription?.tag !== "idle" && subscription?.version === version;
+  }
+
+  function cancelSubscription(session: Extract<SessionState, { tag: "connected" }>): void {
+    if (session.subscription.tag === "active") session.subscription.unsubscribe();
+    session.subscription = { tag: "idle" };
+  }
+
+  function closeSession(root?: TodoService, error?: unknown): void {
+    const session = state.session;
+    if (session.tag !== "connected" || (root !== undefined && session.root !== root)) return;
+
+    cancelSubscription(session);
+    state.session = { tag: "disconnected" };
+    state.feedback =
+      error === undefined ? { tag: "idle" } : { tag: "error", message: errorMessage(error) };
+    session.root[Symbol.dispose]();
+  }
 
   function disconnect(): void {
-    const root = state.api;
-    state.filterSubscriptionVersion += 1;
-    state.unsubscribeActiveFilter?.();
-    state.unsubscribeActiveFilter = null;
-    state.api = null;
-    state.connected = false;
-    state.filterLoading = false;
-    state.loading = false;
-    root?.[Symbol.dispose]();
+    closeSession();
   }
 
   function showSubscriptionError(root: TodoService, version: number, error: unknown): void {
-    if (state.api !== root || state.filterSubscriptionVersion !== version) return;
-    state.filterLoading = false;
-    state.errorMessage = error instanceof Error ? error.message : String(error);
+    const session = currentSession(root);
+    if (session === undefined || !currentSubscription(root, version)) return;
+
+    session.subscription = { tag: "idle" };
+    state.feedback = { tag: "error", message: errorMessage(error) };
   }
 
   function toTodoListItems(filter: TodoFilter, value: unknown): TodoListItem[] {
@@ -71,13 +108,16 @@ export function createTodoAppState() {
       showSubscriptionError(root, version, topic);
       return;
     }
-    if (state.api !== root || state.filterSubscriptionVersion !== version) return;
+    if (!currentSubscription(root, version)) return;
 
     const listener = (event: { value: unknown }) => {
-      if (state.api !== root || state.filterSubscriptionVersion !== version) return;
+      if (!currentSubscription(root, version)) return;
       state.queryResults = { ...state.queryResults, [filter.query]: event.value };
       state.todos = toTodoListItems(filter, event.value);
-      state.filterLoading = false;
+      const session = currentSession(root);
+      if (session !== undefined && session.subscription.tag === "loading") {
+        session.subscription.loaded = true;
+      }
     };
     const listenerStub = new RpcStub(listener);
     let subscribeResult: void | Error;
@@ -103,11 +143,24 @@ export function createTodoAppState() {
           globalThis.console.warn("Failed to unsubscribe from todo filter:", error);
         });
     };
-    if (state.api !== root || state.filterSubscriptionVersion !== version) {
+    const session = currentSession(root);
+    if (session === undefined || !currentSubscription(root, version)) {
       unsubscribe();
       return;
     }
-    state.unsubscribeActiveFilter = unsubscribe;
+    session.subscription = { tag: "active", version, unsubscribe };
+  }
+
+  function startSubscription(root: TodoService, filter: TodoFilter): void {
+    const session = currentSession(root);
+    if (session === undefined) return;
+
+    cancelSubscription(session);
+    const version = ++nextSubscriptionVersion;
+    session.subscription = { tag: "loading", version, loaded: false };
+    void subscribeToFilter(root, filter, version).catch((error) => {
+      showSubscriptionError(root, version, error);
+    });
   }
 
   function selectFilter(filter: TodoFilter): void {
@@ -116,43 +169,26 @@ export function createTodoAppState() {
     state.selectedFilter = filter;
     state.todos = [];
     state.queryResults = {};
-    state.filterLoading = true;
-    state.errorMessage = null;
-    state.filterSubscriptionVersion += 1;
-    state.unsubscribeActiveFilter?.();
-    state.unsubscribeActiveFilter = null;
-
-    const root = state.api;
-    const version = state.filterSubscriptionVersion;
-    if (root !== null) {
-      void subscribeToFilter(root, filter, version).catch((error) => {
-        showSubscriptionError(root, version, error);
-      });
-    }
+    state.feedback = { tag: "idle" };
+    if (state.session.tag === "connected") startSubscription(state.session.root, filter);
   }
 
   function connect(): void {
-    if (state.api !== null) return;
+    if (state.session.tag === "connected") return;
+
     const root = newWebSocketRpcSession<Service<TodoQueries, TodoMutations>>(
       `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
     );
-    state.api = root;
-    state.connected = true;
-    state.filterLoading = true;
-    state.errorMessage = null;
-
-    const version = state.filterSubscriptionVersion;
-    void subscribeToFilter(root, state.selectedFilter, version).catch((error) => {
-      showSubscriptionError(root, version, error);
-    });
+    state.session = {
+      tag: "connected",
+      root,
+      subscription: { tag: "idle" },
+      mutation: { tag: "idle" },
+    };
+    state.feedback = { tag: "idle" };
+    startSubscription(root, state.selectedFilter);
     root.onRpcBroken((error) => {
-      if (state.api !== root) return;
-      state.unsubscribeActiveFilter = null;
-      state.api = null;
-      state.connected = false;
-      state.filterLoading = false;
-      state.loading = false;
-      state.errorMessage = error instanceof Error ? error.message : String(error);
+      closeSession(root, error);
     });
   }
 
@@ -160,32 +196,37 @@ export function createTodoAppState() {
     operation: (root: TodoService) => Promise<void | Error>,
     afterSuccess?: () => void,
   ): void {
-    const root = state.api;
-    if (root === null) return;
+    const session = state.session;
+    if (session.tag !== "connected") return;
 
-    state.loading = true;
-    state.errorMessage = null;
+    const root = session.root;
+    session.mutation = { tag: "pending" };
+    state.feedback = { tag: "idle" };
     void (async () => {
       try {
         const result = await operation(root);
         if (result instanceof Error) throw result;
-        if (state.api !== root) return;
+        if (currentSession(root) === undefined) return;
         afterSuccess?.();
       } catch (error) {
-        state.errorMessage = error instanceof Error ? error.message : String(error);
+        if (currentSession(root) !== undefined) {
+          state.feedback = { tag: "error", message: errorMessage(error) };
+        }
       } finally {
-        if (state.api === root) state.loading = false;
+        const activeSession = currentSession(root);
+        if (activeSession !== undefined) activeSession.mutation = { tag: "idle" };
       }
     })();
   }
 
   function addTodo(): void {
     const title = state.newTitle.trim();
-    if (title)
+    if (title) {
       mutate(
         (root) => root.sync("addTodo", [title]),
         () => (state.newTitle = ""),
       );
+    }
   }
 
   function toggleTodo(id: number): void {
@@ -217,16 +258,20 @@ export function createTodoAppState() {
       return state.selectedFilter;
     },
     get filterLoading() {
-      return state.filterLoading;
+      return (
+        state.session.tag === "connected" &&
+        state.session.subscription.tag === "loading" &&
+        !state.session.subscription.loaded
+      );
     },
     get loading() {
-      return state.loading;
+      return state.session.tag === "connected" && state.session.mutation.tag === "pending";
     },
     get connected() {
-      return state.connected;
+      return state.session.tag === "connected";
     },
     get errorMessage() {
-      return state.errorMessage;
+      return state.feedback.tag === "error" ? state.feedback.message : null;
     },
     filters,
     disconnect,
