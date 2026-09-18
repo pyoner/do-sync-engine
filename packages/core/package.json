@@ -25,7 +25,7 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
+    ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
   "publishConfig": {

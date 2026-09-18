@@ -58,7 +58,10 @@ export type ListenerEvent<T extends Topic = Topic, V = unknown> = {
   readonly value: V;
 };
 
-export type Listener<E extends ListenerEvent = ListenerEvent> = (event: E) => void;
+export type Listener<
+  E extends ListenerEvent = ListenerEvent,
+  Properties extends object = object,
+> = ((event: E) => void) & Properties;
 
 export type ListenerEvents<Q extends QueryRecord> = {
   [Name in StringKey<Q>]: ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
@@ -67,10 +70,11 @@ export type ListenerEvents<Q extends QueryRecord> = {
 export type QueryRecord = Record<string, Query<never[]>>;
 export type MutationRecord = Record<string, Mutation<never[]>>;
 
-export type Registry<Q extends QueryRecord = QueryRecord, Id = string> = HashMap<
-  Topics<Q>,
-  Map<Id, Listener<ListenerEvents<Q>>>
->;
+export type Registry<
+  Q extends QueryRecord = QueryRecord,
+  Id = string,
+  L extends Listener<ListenerEvents<Q>> = Listener<ListenerEvents<Q>>,
+> = HashMap<Topics<Q>, Map<Id, L>>;
 
 export type Subscription<
   Id,
@@ -83,8 +87,13 @@ export type Subscription<
   listener: L;
 };
 
-export type Subscriptions<Id, Q extends QueryRecord> = {
-  [Name in StringKey<Q>]: Subscription<Id, Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
+export type Subscriptions<Id, Q extends QueryRecord, Properties extends object = object> = {
+  [Name in StringKey<Q>]: Subscription<
+    Id,
+    Topic<Name, OpParams<Q[Name]>>,
+    OpResult<Q[Name]>,
+    Listener<ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>, Properties>
+  >;
 }[StringKey<Q>];
 
 export type SyncEngineOptions<
@@ -101,6 +110,7 @@ export interface SyncEngineInterface<
   Id,
   Queries extends QueryRecord = QueryRecord,
   Mutations extends MutationRecord = MutationRecord,
+  ListenerProperties extends object = object,
 > {
   createTopic<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     name: Name,
@@ -109,13 +119,23 @@ export interface SyncEngineInterface<
 
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
   ): Id | Error;
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
     id: Id,
   ): Id | Error;
+
+  has<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+  ): boolean;
 
   unsubscribe(id: Id): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
@@ -124,7 +144,10 @@ export interface SyncEngineInterface<
   ): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
   ): void;
 
   sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
@@ -132,5 +155,17 @@ export interface SyncEngineInterface<
     params: Params,
   ): void | Error;
 
-  subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries>>>;
+  subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>;
+  subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+  ): IterableIterator<
+    Readonly<
+      Subscription<
+        Id,
+        Topic<Name, Params>,
+        OpResult<Queries[Name]>,
+        Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
+      >
+    >
+  >;
 }

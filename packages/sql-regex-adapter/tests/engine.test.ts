@@ -3,14 +3,14 @@ import { DatabaseSync } from "node:sqlite";
 import { createAdapter, type SqlRow } from "../src/index.ts";
 import { SyncEngine, toTables } from "@do-sync-engine/core";
 import type {
-  BaseParams,
   Listener,
   ListenerEvent,
   Mutation,
-  MutationMap,
+  MutationRecord,
   Query,
-  QueryMap,
+  QueryRecord,
   Topic,
+  Topics,
 } from "@do-sync-engine/core";
 
 function expectOk<T>(value: T): Exclude<T, Error> {
@@ -28,14 +28,14 @@ function captureEvents() {
 
 const noopPublish: Listener = () => {};
 
-class TestEngine<Queries extends QueryMap, Mutations extends MutationMap> extends SyncEngine<
+class TestEngine<Queries extends QueryRecord, Mutations extends MutationRecord> extends SyncEngine<
   string,
   Queries,
   Mutations
 > {
   tests(input: Topic | ListenerEvent) {
     if ("value" in input) return this.publish(input);
-    return this.query(input as Topic<Extract<keyof Queries, string>, BaseParams>);
+    return this.query(input as Topics<Queries>);
   }
 }
 

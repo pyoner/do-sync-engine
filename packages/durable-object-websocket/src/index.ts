@@ -1,2 +1,2 @@
 export { DurableObjectWebSocket } from "./durable-object-websocket";
-export type { QueryTopic, RpcListener, Service } from "./service";
+export type { RpcListener, Service } from "./service";

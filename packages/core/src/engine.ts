@@ -21,6 +21,8 @@ import type {
   SyncEngineOptions,
   Table,
   Topic,
+  Topics,
+  Subscription,
   Subscriptions,
   ListenerEvents,
 } from "./types";
@@ -29,11 +31,16 @@ export class SyncEngine<
   Id,
   Queries extends QueryRecord = QueryRecord,
   Mutations extends MutationRecord = MutationRecord,
-> implements SyncEngineInterface<Id, Queries, Mutations> {
+  ListenerProperties extends object = object,
+> implements SyncEngineInterface<Id, Queries, Mutations, ListenerProperties> {
   private readonly queries: Queries;
   private readonly mutations: Mutations;
   private readonly createId?: () => Id;
-  private readonly registry: Registry<Queries, Id> = new HashMap();
+  private readonly registry: Registry<
+    Queries,
+    Id,
+    Listener<ListenerEvents<Queries>, ListenerProperties>
+  > = new HashMap();
 
   constructor(options: SyncEngineOptions<Id, Queries, Mutations>) {
     this.createId = options.createId;
@@ -52,30 +59,32 @@ export class SyncEngine<
 
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
   ): Id | UnknownQueryError | QueryExecutionError | MissingSubscriptionIdError;
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
     id: Id,
   ): Id | UnknownQueryError | QueryExecutionError;
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
     id?: Id,
   ): Id | UnknownQueryError | QueryExecutionError | MissingSubscriptionIdError {
-    const listeners =
-      this.registry.get(topic) ??
-      (() => {
-        const registeredListeners = new Map<Id, Listener<ListenerEvents<Queries>>>();
-        this.registry.set(topic, registeredListeners);
-        return registeredListeners;
-      })();
-
+    const listeners = this.registry.get(topic);
     const listenerId =
       id ??
       (() => {
-        for (const [registeredId, registeredListener] of listeners) {
+        for (const [registeredId, registeredListener] of listeners ?? []) {
           if (registeredListener === listener) return registeredId;
         }
         return this.createId?.();
@@ -85,13 +94,28 @@ export class SyncEngine<
       return new MissingSubscriptionIdError();
     }
 
-    listeners.set(listenerId, listener as Listener);
-
     const value = this.query(topic);
     if (value instanceof Error) return value;
 
+    const registeredListeners =
+      listeners ??
+      (() => {
+        const created = new Map<Id, Listener<ListenerEvents<Queries>, ListenerProperties>>();
+        this.registry.set(topic, created);
+        return created;
+      })();
+    registeredListeners.set(
+      listenerId,
+      listener as Listener<ListenerEvents<Queries>, ListenerProperties>,
+    );
     listener({ topic, value });
     return listenerId;
+  }
+
+  has<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+  ): boolean {
+    return this.registry.has(topic);
   }
 
   unsubscribe(id: Id): void;
@@ -101,14 +125,22 @@ export class SyncEngine<
   ): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-    listener: Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
   ): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topicOrId: Topic<Name, Params> | Id,
-    idOrListener?: Id | Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
+    idOrListener?:
+      | Id
+      | Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>,
   ): void {
     if (arguments.length === 1) {
-      for (const listeners of this.registry.values()) listeners.delete(topicOrId as Id);
+      for (const [topic, listeners] of this.registry.entries()) {
+        listeners.delete(topicOrId as Id);
+        if (listeners.size === 0) this.registry.delete(topic);
+      }
       return;
     }
     const listeners = this.registry.get(topicOrId as Topic<Name, Params>);
@@ -160,11 +192,35 @@ export class SyncEngine<
     if (listeners === undefined) return;
     for (const listener of listeners.values()) void (listener as Listener)(registeredEvent);
   }
-
-  *subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries>>> {
-    for (const { key: topic, value } of this.registry) {
+  subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>;
+  subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+  ): IterableIterator<
+    Readonly<
+      Subscription<
+        Id,
+        Topic<Name, Params>,
+        OpResult<Queries[Name]>,
+        Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
+      >
+    >
+  >;
+  *subscriptions(topic?: Topics<Queries>) {
+    if (topic !== undefined) {
+      const listeners = this.registry.get(topic);
+      if (listeners === undefined) return;
+      for (const [id, listener] of listeners) {
+        yield { id, topic, listener } as unknown as Readonly<
+          Subscriptions<Id, Queries, ListenerProperties>
+        >;
+      }
+      return;
+    }
+    for (const { key: registeredTopic, value } of this.registry) {
       for (const [id, listener] of value) {
-        yield { id, topic, listener } as unknown as Readonly<Subscriptions<Id, Queries>>;
+        yield { id, topic: registeredTopic, listener } as unknown as Readonly<
+          Subscriptions<Id, Queries, ListenerProperties>
+        >;
       }
     }
   }

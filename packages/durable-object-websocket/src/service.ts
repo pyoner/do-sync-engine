@@ -1,3 +1,5 @@
+import { RpcStub, RpcTarget } from "capnweb";
+
 import type {
   Listener,
   ListenerEvent,
@@ -9,18 +11,13 @@ import type {
   SyncEngineInterface,
   Topic,
 } from "@do-sync-engine/core";
-import { RpcStub, RpcTarget, serialize } from "capnweb";
-import * as errore from "errore";
 
-export type QueryTopic<Queries extends QueryRecord> = {
-  [Name in StringKey<Queries>]: Topic<Name, OpParams<Queries[Name]>>;
-}[StringKey<Queries>];
+export type RpcListener<E extends ListenerEvent = ListenerEvent> = RpcStub<Listener<E>>;
 
-export type RpcListener<E extends ListenerEvent = ListenerEvent> = RpcStub<
-  Listener<E> & { readonly listenerId: string }
->;
-
-export interface Service<Id extends string, Queries extends QueryRecord = QueryRecord> {
+export interface Service<
+  Queries extends QueryRecord = QueryRecord,
+  Mutations extends MutationRecord = MutationRecord,
+> {
   createTopic<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     name: Name,
     params: Params,
@@ -28,34 +25,28 @@ export interface Service<Id extends string, Queries extends QueryRecord = QueryR
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     listener: RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
-  ): Promise<Id | Error>;
-  unsubscribe(id: Id): Promise<void | Error>;
+  ): Promise<void | Error>;
+  unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+  ): Promise<void | Error>;
+  sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
+    mutation: Name,
+    params: Params,
+  ): void | Error;
 }
-
-type RetainedSubscription = {
-  readonly id: string;
-  readonly listenerId: string;
-  readonly ownedListener: RpcListener;
-  readonly wrapper: Listener;
-};
-
-type TopicEntry<Q extends QueryRecord> = {
-  readonly topic: QueryTopic<Q>;
-  readonly subscriptions: Map<string, RetainedSubscription>;
-};
 
 export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   extends RpcTarget
-  implements Service<string, Q>
+  implements Service<Q, M>
 {
-  readonly #engine: SyncEngineInterface<string, Q, M>;
-  readonly #sessionId = crypto.randomUUID();
-  readonly #topics = new Map<string, TopicEntry<Q>>();
+  readonly #engine: SyncEngineInterface<WebSocket, Q, M, Disposable>;
+  readonly #socket: WebSocket;
   #disposed = false;
 
-  constructor(engine: SyncEngineInterface<string, Q, M>) {
+  constructor(engine: SyncEngineInterface<WebSocket, Q, M, Disposable>, socket: WebSocket) {
     super();
     this.#engine = engine;
+    this.#socket = socket;
   }
 
   createTopic<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
@@ -68,56 +59,44 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   async subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
     listener: RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>>,
-  ): Promise<string | Error> {
-    const topicKey = this.#encodeTopic(topic);
-    if (topicKey instanceof Error) return topicKey;
-
-    const listenerId = await this.#listenerId(listener as unknown as RpcListener);
-    if (listenerId instanceof Error) return listenerId;
-    if (listenerId.length === 0) return new Error("RPC listenerId must be a non-empty string");
+  ): Promise<void | Error> {
     if (this.#disposed) return new Error("WebSocket RPC session is closed");
 
-    const entry =
-      this.#topics.get(topicKey) ??
-      (() => {
-        const created = { topic, subscriptions: new Map<string, RetainedSubscription>() };
-        this.#topics.set(topicKey, created);
-        return created;
-      })();
-    const existing = [...entry.subscriptions.values()].find(
-      (record) => record.listenerId === listenerId,
-    );
-    if (existing !== undefined) {
-      const result = this.#engine.subscribe(
-        entry.topic,
-        existing.wrapper,
-        this.#internalId(existing.id),
-      );
-      if (result instanceof Error) return result;
-      return existing.id;
-    }
-
-    const id = crypto.randomUUID();
+    const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
     const ownedListener = listener.dup() as unknown as RpcListener;
-    const wrapper: Listener = (event) => {
-      void Promise.resolve((ownedListener as unknown as (value: unknown) => void)(event)).catch(
-        (cause) => {
-          console.error(new Error("WebSocket subscription listener failed", { cause }));
+    const wrapper: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>,
+      Disposable
+    > = Object.assign(
+      (event: ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>) => {
+        void Promise.resolve((ownedListener as unknown as (value: unknown) => void)(event)).catch(
+          (cause) => {
+            console.error(new Error("WebSocket subscription listener failed", { cause }));
+          },
+        );
+      },
+      {
+        [Symbol.dispose]() {
+          ownedListener[Symbol.dispose]();
         },
-      );
-    };
-    entry.subscriptions.set(id, { id, listenerId, ownedListener, wrapper });
-    const result = this.#engine.subscribe(entry.topic, wrapper, this.#internalId(id));
-    if (result instanceof Error) return result;
-    return id;
+      },
+    );
+
+    const result = this.#engine.subscribe(topic, wrapper, this.#socket);
+    if (result instanceof Error) {
+      wrapper[Symbol.dispose]();
+      return result;
+    }
+    previous?.listener[Symbol.dispose]();
   }
 
-  async unsubscribe(id: string): Promise<void | Error> {
-    if (typeof id !== "string") return new Error("Subscription ID must be a string");
-    for (const [topicKey, entry] of [...this.#topics.entries()]) {
-      this.#remove(entry, id);
-      if (entry.subscriptions.size === 0) this.#topics.delete(topicKey);
-    }
+  async unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+    topic: Topic<Name, Params>,
+  ): Promise<void | Error> {
+    const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
+    if (previous === undefined) return;
+    this.#engine.unsubscribe(topic, this.#socket);
+    previous.listener[Symbol.dispose]();
   }
 
   sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
@@ -130,41 +109,10 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   [Symbol.dispose](): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    for (const entry of this.#topics.values()) {
-      for (const record of entry.subscriptions.values()) {
-        this.#engine.unsubscribe(entry.topic, this.#internalId(record.id));
-        record.ownedListener[Symbol.dispose]();
-      }
-      entry.subscriptions.clear();
+    const subscriptions = [...this.#engine.subscriptions()].filter(({ id }) => id === this.#socket);
+    for (const { topic, listener } of subscriptions) {
+      this.#engine.unsubscribe(topic, this.#socket);
+      listener[Symbol.dispose]();
     }
-    this.#topics.clear();
-  }
-
-  #encodeTopic(topic: QueryTopic<Q>): string | Error {
-    return errore.try({
-      try: () => serialize([topic.name, topic.params]),
-      catch: (cause) => new Error("Failed to encode subscription topic", { cause }),
-    });
-  }
-
-  async #listenerId(listener: RpcListener): Promise<string | Error> {
-    const value = await (listener as unknown as { listenerId: Promise<string> }).listenerId.catch(
-      (cause: unknown) => new Error("Failed to read RPC listener identity", { cause }),
-    );
-    if (value instanceof Error) return value;
-    if (typeof value !== "string") return new Error("RPC listenerId must be a non-empty string");
-    return value;
-  }
-
-  #internalId(id: string): string {
-    return `${this.#sessionId}:${id}`;
-  }
-
-  #remove(entry: TopicEntry<Q>, id: string): void {
-    const record = entry.subscriptions.get(id);
-    if (record === undefined) return;
-    this.#engine.unsubscribe(entry.topic, this.#internalId(id));
-    record.ownedListener[Symbol.dispose]();
-    entry.subscriptions.delete(id);
   }
 }

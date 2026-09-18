@@ -25,4 +25,5 @@ export type {
   SyncEngineInterface,
   SyncEngineOptions,
   Topic,
+  Topics,
 } from "./types";

@@ -1,5 +1,5 @@
 import { expect, test } from "vite-plus/test";
-import { SyncEngine, toTables } from "../src/index.js";
+import { QueryExecutionError, SyncEngine, toTables } from "../src/index.js";
 import type {
   BaseParams,
   Branded,
@@ -29,7 +29,12 @@ test("exports canonical topic and listener APIs", async () => {
       run: () => ({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
+  type ListenerProperties = { marker: string };
+  const engine = new SyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
+    queries,
+    mutations,
+    createId: () => crypto.randomUUID(),
+  });
 
   if (false as boolean) {
     const brandedString = undefined as unknown as Branded<string, "TestString">;
@@ -61,11 +66,18 @@ test("exports canonical topic and listener APIs", async () => {
     params: [],
   });
 
-  const listener: Listener = () => {};
-  expectOk(engine.subscribe(topic, listener));
+  const listener: Listener<
+    ListenerEvent<Topic<"numbers", []>, number>,
+    ListenerProperties
+  > = Object.assign(() => {}, { marker: "numbers" });
+  const listenerId = expectOk(engine.subscribe(topic, listener));
+  const [subscription] = [...engine.subscriptions(topic)];
+  expect(subscription?.listener).toBe(listener);
+  expect(subscription?.listener.marker).toBe("numbers");
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
+    "has",
     "mutate",
     "publish",
     "query",
@@ -74,6 +86,8 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
+  expect(engine.has(topic)).toBe(true);
+  expect(listenerId).toBeDefined();
   expectOk(engine.unsubscribe(topic, listener));
   expectOk(engine.unsubscribe(topic, listener));
 });
@@ -184,12 +198,21 @@ test("uses topic identity for listener registration", async () => {
   const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
   const firstTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
   const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
+  const emptyTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
   const listener: Listener = () => {};
 
   const firstId = expectOk(engine.subscribe(firstTopic, listener));
   const secondId = expectOk(engine.subscribe(secondTopic, listener));
   expect(secondId).not.toBe(firstId);
+  expect(engine.has(firstTopic)).toBe(true);
+  expect([...engine.subscriptions(firstTopic)]).toEqual([
+    { id: firstId, topic: firstTopic, listener },
+  ]);
+  expect(engine.has(emptyTopic)).toBe(false);
+  expect([...engine.subscriptions(emptyTopic)]).toEqual([]);
   engine.unsubscribe(firstTopic, listener);
+  expect(engine.has(firstTopic)).toBe(false);
+  expect([...engine.subscriptions(firstTopic)]).toEqual([]);
   expect(engine.subscribe(secondTopic, listener)).toBe(secondId);
 });
 
@@ -202,6 +225,7 @@ test("supports explicit IDs and every unsubscribe form", () => {
     mutations: { noop: { tables: toTables(["value"]), run: () => null } },
   });
   const topic = expectOk(engine.createTopic("value", []));
+  const isolatedTopic = expectOk(engine.createTopic("value", []));
   const first: number[] = [];
   const second: number[] = [];
   const firstListener: Listener = () => first.push(1);
@@ -216,9 +240,52 @@ test("supports explicit IDs and every unsubscribe form", () => {
   engine.unsubscribe("first");
   engine.sync("noop", []);
   engine.unsubscribe(topic, "second");
+  expect(engine.has(topic)).toBe(false);
+  expect(engine.subscribe(isolatedTopic, () => {}, "isolated")).toBe("isolated");
+  expect(engine.has(isolatedTopic)).toBe(true);
+  engine.unsubscribe("isolated");
+  expect(engine.has(isolatedTopic)).toBe(false);
   engine.sync("noop", []);
   expect(first).toEqual([1, 1, 1]);
   expect(second).toEqual([1, 1, 1, 1]);
+});
+
+test("preserves an explicit listener when replacement query fails", () => {
+  let shouldFail = false;
+  const originalEvents: number[] = [];
+  const replacementEvents: number[] = [];
+  type ListenerProperties = { source: string };
+  const queries = {
+    value: {
+      tables: toTables(["value"]),
+      run: () => {
+        if (shouldFail) throw new Error("query failed");
+        return 1;
+      },
+    },
+  };
+  const mutations = { touch: { tables: toTables(["value"]), run: () => undefined } };
+  const engine = new SyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
+    queries,
+    mutations,
+  });
+  const topic = expectOk(engine.createTopic("value", []));
+  const original = Object.assign(() => originalEvents.push(1), { source: "original" });
+  const replacement = Object.assign(() => replacementEvents.push(1), { source: "replacement" });
+
+  expect(engine.subscribe(topic, original, "same")).toBe("same");
+  shouldFail = true;
+  const replacementResult = engine.subscribe(topic, replacement, "same");
+  expect(replacementResult).toBeInstanceOf(QueryExecutionError);
+  expect((replacementResult as Error).message).toBe("Query execution failed");
+  const [subscription] = [...engine.subscriptions(topic)];
+  expect(subscription?.listener).toBe(original);
+  expect(subscription?.listener.source).toBe("original");
+
+  shouldFail = false;
+  expect(engine.sync("touch", [])).toBeUndefined();
+  expect(originalEvents).toEqual([1, 1]);
+  expect(replacementEvents).toEqual([]);
 });
 
 test("enumerates active subscriptions", () => {

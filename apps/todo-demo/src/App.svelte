@@ -77,14 +77,14 @@
       todos = toTodoListItems(filter, event.value);
       filterLoading = false;
     };
-    const subId = await root.subscribe(topic, listener);
-    if (subId instanceof Error) {
-      showSubscriptionError(root, version, subId);
+    const subscribeResult = await root.subscribe(topic, listener);
+    if (subscribeResult instanceof Error) {
+      showSubscriptionError(root, version, subscribeResult);
       return;
     }
 
     const unsubscribe = () => {
-      void root.unsubscribe(subId).then((result) => {
+      void root.unsubscribe(topic).then((result) => {
         if (result instanceof Error) {
           globalThis.console.warn("Failed to unsubscribe from todo filter:", result);
         }

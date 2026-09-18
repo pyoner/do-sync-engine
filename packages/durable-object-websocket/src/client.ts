@@ -18,12 +18,11 @@ type ClientListener<
 > =
   | Listener<ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>>
   | RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>>;
-
-type RemoteService<Q extends QueryRecord, M extends MutationRecord> = Service<string, Q> & {
+type RemoteService<Q extends QueryRecord, M extends MutationRecord> = Service<Q, M> & {
   sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
     mutation: Name,
     params: Params,
-  ): Promise<void | Error>;
+  ): void | Error;
   onRpcBroken(callback: (error: unknown) => void): void;
   [Symbol.dispose](): void;
 };
@@ -36,8 +35,10 @@ export interface WebSocketRpcClient<Q extends QueryRecord, M extends MutationRec
   subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
     listener: ClientListener<Q, Name, Params>,
-  ): Promise<string | Error>;
-  unsubscribe(id: string): Promise<void | Error>;
+  ): Promise<void | Error>;
+  unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+    topic: Topic<Name, Params>,
+  ): Promise<void | Error>;
   sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
     mutation: Name,
     params: Params,
@@ -46,56 +47,35 @@ export interface WebSocketRpcClient<Q extends QueryRecord, M extends MutationRec
   [Symbol.dispose](): void;
 }
 
-type IdentifiedListener = Listener & { readonly listenerId: string };
-
 export function newWebSocketRpcSession<Q extends QueryRecord, M extends MutationRecord>(
   socket: string | WebSocket,
 ): WebSocketRpcClient<Q, M> {
   const remote = createRpcSession(socket) as unknown as RemoteService<Q, M>;
-  const identifiedListeners = new WeakMap<Listener, IdentifiedListener>();
-
-  const identified = (listener: Listener): IdentifiedListener => {
-    const existing = identifiedListeners.get(listener);
-    if (existing !== undefined) return existing;
-    const forwarding = ((event: ListenerEvent) => listener(event as never)) as IdentifiedListener;
-    Object.defineProperty(forwarding, "listenerId", {
-      value: crypto.randomUUID(),
-      enumerable: true,
-    });
-    identifiedListeners.set(listener, forwarding);
-    return forwarding;
-  };
-
   const scopedListener = (listener: Listener | RpcListener): RpcListener => {
-    if (listener instanceof RpcStub) {
-      return new RpcStub(
-        Object.assign(((e: ListenerEvent) => (listener as unknown as Listener)(e)) as Listener, {
-          get listenerId() {
-            return (listener as unknown as { listenerId: Promise<string> }).listenerId;
-          },
-        }),
-      ) as unknown as RpcListener;
-    }
-    return new RpcStub(identified(listener as Listener));
+    if (listener instanceof RpcStub) return listener.dup();
+    return new RpcStub(listener as Listener);
   };
 
   const requestError = (cause: unknown): Error =>
     new Error("WebSocket RPC request failed", { cause });
 
   const client: WebSocketRpcClient<Q, M> = {
-    createTopic<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+    async createTopic<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
       name: Name,
       params: Params,
     ) {
-      return Promise.resolve()
-        .then(() => remote.createTopic(name, params))
-        .catch(requestError);
+      try {
+        await Promise.resolve();
+        return remote.createTopic(name, params);
+      } catch (cause) {
+        return requestError(cause);
+      }
     },
 
     async subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
       topic: Topic<Name, Params>,
       listener: ClientListener<Q, Name, Params>,
-    ): Promise<string | Error> {
+    ): Promise<void | Error> {
       const scoped = scopedListener(listener as Listener | RpcListener);
       try {
         return await Promise.resolve()
@@ -106,19 +86,24 @@ export function newWebSocketRpcSession<Q extends QueryRecord, M extends Mutation
       }
     },
 
-    async unsubscribe(id: string): Promise<void | Error> {
+    async unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+      topic: Topic<Name, Params>,
+    ): Promise<void | Error> {
       return Promise.resolve()
-        .then(() => remote.unsubscribe(id))
+        .then(() => remote.unsubscribe(topic))
         .catch(requestError);
     },
 
-    sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
+    async sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
       mutation: Name,
       params: Params,
     ) {
-      return Promise.resolve()
-        .then(() => remote.sync(mutation, params))
-        .catch(requestError);
+      try {
+        await Promise.resolve();
+        return remote.sync(mutation, params);
+      } catch (cause) {
+        return requestError(cause);
+      }
     },
 
     onRpcBroken(listener: (error: Error) => void): void {

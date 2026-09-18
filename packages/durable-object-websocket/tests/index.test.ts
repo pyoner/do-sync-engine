@@ -1,10 +1,9 @@
 import { exports } from "cloudflare:workers";
-import { RpcStub } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
 import { newWebSocketRpcSession, type WebSocketRpcClient } from "../src/client.ts";
-import { SocketService, type RpcListener } from "../src/service.ts";
+import { SocketService, type RpcListener, type Service } from "../src/service.ts";
 import type { FixtureMutations, FixtureQueries } from "./cloudflare-worker.ts";
-import { SyncEngine } from "@do-sync-engine/core";
+import { SyncEngine, type Query } from "@do-sync-engine/core";
 
 const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -54,6 +53,16 @@ function createListener<T>() {
   };
 }
 
+function createDisposableRpcListener(onDispose: () => void): RpcListener {
+  const owned = Object.assign((_event: unknown) => {}, {
+    [Symbol.dispose]: onDispose,
+  });
+  return Object.assign((_event: unknown) => {}, {
+    dup: () => owned,
+    [Symbol.dispose]: () => {},
+  }) as unknown as RpcListener;
+}
+
 describe("Durable Object Capnweb WebSocket transport", () => {
   it("rejects non-WebSocket requests", async () => {
     const response = await worker.default.fetch(new Request("https://example.com"));
@@ -73,8 +82,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       const { record, listener, wait } = createListener<{
         value: { key: string; value: number };
       }>();
-      const subId = await client.subscribe(topic, listener);
-      expect(typeof subId).toBe("string");
+      const result = await client.subscribe(topic, listener);
+      expect(result).toBeUndefined();
 
       const initial = await wait((e) => e.value.key === key && e.value.value === 0);
       expect(initial.value.value).toBe(0);
@@ -91,82 +100,76 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("manages subscriber deduplication and multiple callbacks", async () => {
-    const { client, socket } = await connect();
+  it("keeps separately serialized topics isolated by identity", async () => {
+    const first = await connect();
+    const second = await connect();
     try {
       const key = `multi-${crypto.randomUUID()}`;
-      const topic = await client.createTopic("counter", [key]);
+      const topic = await first.client.createTopic("counter", [key]);
       if (topic instanceof Error) throw topic;
 
-      const first = createListener<{ value: { key: string; value: number } }>();
-      const id1 = await client.subscribe(topic, first.listener);
-      expect(typeof id1).toBe("string");
-      await first.wait((e) => e.value.value === 0);
+      const firstListener = createListener<{ value: { key: string; value: number } }>();
+      const secondListener = createListener<{ value: { key: string; value: number } }>();
+      const otherSocketListener = createListener<{ value: { key: string; value: number } }>();
 
-      // Resubscribing same callback/topic returns same subscription ID and repeats initial delivery
-      const id2 = await client.subscribe(topic, first.listener);
-      expect(id2).toBe(id1);
-      expect(first.record.events.length).toBe(2);
+      expect(await first.client.subscribe(topic, firstListener.listener)).toBeUndefined();
+      await firstListener.wait((e) => e.value.value === 0);
+      expect(await first.client.subscribe(topic, secondListener.listener)).toBeUndefined();
+      await secondListener.wait((e) => e.value.value === 0);
+      expect(await second.client.subscribe(topic, otherSocketListener.listener)).toBeUndefined();
+      await otherSocketListener.wait((e) => e.value.value === 0);
 
-      // Different callback on same topic returns distinct subscription ID and receives initial delivery
-      const second = createListener<{ value: { key: string; value: number } }>();
-      const id3 = await client.subscribe(topic, second.listener);
-      expect(typeof id3).toBe("string");
-      expect(id3).not.toBe(id1);
-      await second.wait((e) => e.value.value === 0);
-
-      // Mutating triggers both callbacks once
-      await client.sync("increment", [key, 1]);
-      await first.wait((e) => e.value.value === 1);
-      await second.wait((e) => e.value.value === 1);
-      expect(first.record.events.length).toBe(3);
-      expect(second.record.events.length).toBe(2);
+      await first.client.sync("increment", [key, 1]);
+      await secondListener.wait((e) => e.value.value === 1);
+      await otherSocketListener.wait((e) => e.value.value === 1);
+      expect(firstListener.record.events.length).toBe(2);
+      expect(secondListener.record.events.length).toBe(2);
+      expect(otherSocketListener.record.events.length).toBe(2);
     } finally {
-      client[Symbol.dispose]();
-      socket.close();
+      first.client[Symbol.dispose]();
+      first.socket.close();
+      second.client[Symbol.dispose]();
+      second.socket.close();
     }
   });
 
-  it("handles unsubscriptions by subscription ID", async () => {
+  it("treats serialized topic unsubscription as identity-specific", async () => {
     const { client, socket } = await connect();
     try {
       const key1 = `unsub1-${crypto.randomUUID()}`;
       const key2 = `unsub2-${crypto.randomUUID()}`;
       const topic1 = await client.createTopic("counter", [key1]);
       const topic2 = await client.createTopic("counter", [key2]);
-      if (topic1 instanceof Error || topic2 instanceof Error) throw new Error("Topic error");
+      const unknownTopic = await client.createTopic("counter", ["unknown"]);
+      if (topic1 instanceof Error || topic2 instanceof Error || unknownTopic instanceof Error) {
+        throw new Error("Topic error");
+      }
 
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
-
-      const id1 = await client.subscribe(topic1, cb1.listener);
-      if (id1 instanceof Error) throw id1;
-      const id2 = await client.subscribe(topic2, cb2.listener);
-      if (id2 instanceof Error) throw id2;
+      expect(await client.subscribe(topic1, cb1.listener)).toBeUndefined();
+      expect(await client.subscribe(topic2, cb2.listener)).toBeUndefined();
       await cb1.wait((e) => e.value.value === 0);
       await cb2.wait((e) => e.value.value === 0);
 
-      const unsub1 = await client.unsubscribe(id1);
-      expect(unsub1).toBeUndefined();
-
+      expect(await client.unsubscribe(topic1)).toBeUndefined();
       await client.sync("increment", [key1, 1]);
       await client.sync("increment", [key2, 5]);
+      await cb1.wait((e) => e.value.value === 1);
       await cb2.wait((e) => e.value.value === 5);
-      expect(cb1.record.events.length).toBe(1);
+      expect(cb1.record.events.length).toBe(3);
+      expect(cb2.record.events.length).toBe(3);
 
-      const unsub2 = await client.unsubscribe(id2);
-      expect(unsub2).toBeUndefined();
-
-      // Unknown ID removal is no-op
-      const noopUnsub = await client.unsubscribe("non-existent-id");
-      expect(noopUnsub).toBeUndefined();
+      expect(await client.unsubscribe(topic1)).toBeUndefined();
+      expect(await client.unsubscribe(topic2)).toBeUndefined();
+      expect(await client.unsubscribe(unknownTopic)).toBeUndefined();
     } finally {
       client[Symbol.dispose]();
       socket.close();
     }
   });
 
-  it("isolates connection namespaces, preserves idle connections, and cleans up on close", async () => {
+  it("isolates connections and preserves active listeners after another closes", async () => {
     const first = await connect();
     const second = await connect();
     const idle = await connect();
@@ -177,22 +180,17 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
       const cb1 = createListener<{ value: { key: string; value: number } }>();
       const cb2 = createListener<{ value: { key: string; value: number } }>();
-
-      const id1 = await first.client.subscribe(topic, cb1.listener);
-      if (id1 instanceof Error) throw id1;
-      const id2 = await second.client.subscribe(topic, cb2.listener);
-      if (id2 instanceof Error) throw id2;
+      expect(await first.client.subscribe(topic, cb1.listener)).toBeUndefined();
+      expect(await second.client.subscribe(topic, cb2.listener)).toBeUndefined();
       await cb1.wait((e) => e.value.value === 0);
-      await cb2.wait((e) => e.value.value === 0);
-
-      await first.client.unsubscribe(id1);
+      expect(await first.client.unsubscribe(topic)).toBeUndefined();
       await first.client.sync("increment", [key, 4]);
+      await cb1.wait((e) => e.value.value === 4);
       await cb2.wait((e) => e.value.value === 4);
-      expect(cb1.record.events.length).toBe(1);
+      expect(cb1.record.events.length).toBe(2);
 
       first.client[Symbol.dispose]();
       first.socket.close();
-
       await second.client.sync("increment", [key, 3]);
       await cb2.wait((e) => e.value.value === 7);
       expect(cb2.record.events.length).toBe(3);
@@ -204,7 +202,124 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("returns errors as values for unknown query or mutation and invalid listenerId", async () => {
+  it("disposes replaced and unsubscribed RPC listeners, handles failed registration, and logs rejected delivery", async () => {
+    type DirectQueries = { value: Query<[], number> };
+    const pair = new WebSocketPair();
+    const server = pair[1];
+    server.accept();
+    let shouldFail = false;
+    const engine = new SyncEngine<WebSocket, DirectQueries, {}, Disposable>({
+      queries: {
+        value: {
+          tables: new Set(),
+          run: () => {
+            if (shouldFail) throw new Error("query failed");
+            return 0;
+          },
+        },
+      },
+      mutations: {},
+    });
+    const service = new SocketService<DirectQueries, {}>(engine, server);
+    const topic = engine.createTopic("value", []);
+    if (topic instanceof Error) throw topic;
+    const disposed: string[] = [];
+    const first = createDisposableRpcListener(() => disposed.push("first"));
+    const second = createDisposableRpcListener(() => disposed.push("second"));
+    const failing = createDisposableRpcListener(() => disposed.push("failing"));
+
+    const consoleErrors: unknown[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => consoleErrors.push(...args);
+
+    try {
+      expect(await service.subscribe(topic, first)).toBeUndefined();
+      expect(disposed).toEqual([]);
+
+      shouldFail = true;
+      expect(await service.subscribe(topic, failing)).toBeInstanceOf(Error);
+      expect(disposed).toEqual(["failing"]);
+      expect([...engine.subscriptions(topic)]).toHaveLength(1);
+      const [activeSub] = [...engine.subscriptions(topic)];
+      expect(activeSub?.listener).toBeDefined();
+
+      shouldFail = false;
+      expect(await service.subscribe(topic, second)).toBeUndefined();
+      expect(disposed).toEqual(["failing", "first"]);
+      expect([...engine.subscriptions(topic)]).toHaveLength(1);
+
+      const [finalSub] = [...engine.subscriptions(topic)];
+      const errorCause = new Error("rejected delivery");
+      const rejectingRpc = Object.assign(() => Promise.reject(errorCause), {
+        dup: () => rejectingRpc,
+        [Symbol.dispose]: () => disposed.push("rejecting"),
+      }) as unknown as RpcListener;
+
+      expect(await service.subscribe(topic, rejectingRpc)).toBeUndefined();
+      finalSub?.listener({ topic, value: 123 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(
+        consoleErrors.some(
+          (err) =>
+            err instanceof Error &&
+            err.message === "WebSocket subscription listener failed" &&
+            err.cause === errorCause,
+        ),
+      ).toBe(true);
+
+      expect(await service.unsubscribe(topic)).toBeUndefined();
+      expect(disposed).toContain("second");
+      expect(disposed).toContain("rejecting");
+      expect([...engine.subscriptions(topic)]).toHaveLength(0);
+    } finally {
+      console.error = originalError;
+      service[Symbol.dispose]();
+      first[Symbol.dispose]();
+      second[Symbol.dispose]();
+      failing[Symbol.dispose]();
+      server.close();
+    }
+  });
+
+  it("disposes socket subscriptions, asserts identity-distinct disposal on close, and rejects subscriptions after close", async () => {
+    const pair = new WebSocketPair();
+    const server = pair[1];
+    server.accept();
+    const engine = new SyncEngine<WebSocket, FixtureQueries, FixtureMutations, Disposable>({
+      queries: {
+        counter: { tables: new Set(), run: (key) => ({ key, value: 0 }) },
+        echoParams: { tables: new Set(), run: (count, optional) => ({ count, optional }) },
+      },
+      mutations: { increment: { tables: new Set(), run: () => undefined } },
+    });
+    const service = new SocketService<FixtureQueries, FixtureMutations>(engine, server);
+    const topic = engine.createTopic("counter", ["cleanup"]);
+    const distinctTopic = engine.createTopic("counter", ["distinct"]);
+    if (topic instanceof Error || distinctTopic instanceof Error) throw new Error("Topic error");
+    const disposed: string[] = [];
+    const stub = createDisposableRpcListener(() => disposed.push("stub"));
+    const distinctStub = createDisposableRpcListener(() => disposed.push("distinctStub"));
+
+    try {
+      expect(await service.subscribe(topic, stub)).toBeUndefined();
+      expect(await service.subscribe(distinctTopic, distinctStub)).toBeUndefined();
+      expect([...engine.subscriptions()]).toHaveLength(2);
+      service[Symbol.dispose]();
+      expect([...engine.subscriptions()]).toHaveLength(0);
+      expect(disposed).toEqual(["stub", "distinctStub"]);
+      const result = await service.subscribe(topic, stub);
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).message).toBe("WebSocket RPC session is closed");
+      expect([...engine.subscriptions()]).toHaveLength(0);
+    } finally {
+      stub[Symbol.dispose]();
+      distinctStub[Symbol.dispose]();
+      server.close();
+    }
+  });
+
+  it("returns errors as values for unknown query or mutation", async () => {
     const { client, socket } = await connect();
     try {
       const badTopic = { name: "unknownQuery", params: [] } as never;
@@ -214,15 +329,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
       const syncError = await client.sync("unknownMutation" as never, [] as never);
       expect(syncError).toBeInstanceOf(Error);
-
-      const malformedStub = new RpcStub(
-        Object.assign(() => {}, { listenerId: "" }),
-      ) as unknown as RpcListener;
-      const goodTopic = await client.createTopic("counter", ["valid"]);
-      if (goodTopic instanceof Error) throw goodTopic;
-      const idError = await client.subscribe(goodTopic, malformedStub);
-      expect(idError).toBeInstanceOf(Error);
-      expect((idError as Error).message).toBe("RPC listenerId must be a non-empty string");
     } finally {
       client[Symbol.dispose]();
       socket.close();
@@ -249,57 +355,12 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("guards against deferred listenerId registration when session is closed concurrently", async () => {
-    const engine = new SyncEngine<string, FixtureQueries, FixtureMutations>({
-      queries: {
-        counter: {
-          tables: new Set(),
-          run: (key) => ({ key, value: 0 }),
-        },
-        echoParams: {
-          tables: new Set(),
-          run: (count, optional) => ({ count, optional }),
-        },
-      },
-      mutations: {
-        increment: {
-          tables: new Set(),
-          run: () => {},
-        },
-      },
-    });
-    const service = new SocketService<FixtureQueries, FixtureMutations>(engine);
-    let resolveListenerId!: (id: string) => void;
-    const deferredPromise = new Promise<string>((resolve) => {
-      resolveListenerId = resolve;
-    });
-    const deferredListener = Object.assign(() => {}, {
-      get listenerId() {
-        return deferredPromise;
-      },
-    });
-    const stub = new RpcStub(deferredListener) as unknown as RpcListener;
-    const topic = engine.createTopic("counter", ["deferred"]);
-    if (topic instanceof Error) throw topic;
-
-    const subscribePromise = service.subscribe(topic, stub);
-    service[Symbol.dispose]();
-    resolveListenerId("delayed-id");
-
-    const result = await subscribePromise;
-    expect(result).toBeInstanceOf(Error);
-    expect((result as Error).message).toBe("WebSocket RPC session is closed");
-    stub[Symbol.dispose]();
-
-    let subscriptionCount = 0;
-    for (const _sub of engine.subscriptions()) subscriptionCount++;
-    expect(subscriptionCount).toBe(0);
-  });
-
   it("enforces static compile-time type negative constraints", () => {
     if (false as boolean) {
       const dummyClient = null as unknown as WebSocketRpcClient<FixtureQueries, FixtureMutations>;
+      const dummyService = null as unknown as Service<FixtureQueries, FixtureMutations>;
       const dummyTopic = null as unknown as { readonly name: "counter"; readonly params: [string] };
+      const dummyListener = (() => {}) as never;
 
       // @ts-expect-error - Unknown query name
       void dummyClient.createTopic("unknownQuery", ["val"]);
@@ -313,8 +374,27 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       // @ts-expect-error - Callback receiving mismatched result type
       void dummyClient.subscribe(dummyTopic, (_event: { value: { wrongProperty: boolean } }) => {});
 
+      // @ts-expect-error - Removed 3-argument subscribe overload
+      void dummyClient.subscribe(dummyTopic, dummyListener, "id");
+
+      // @ts-expect-error - Unsubscribe requires a topic
+      void dummyClient.unsubscribe("id");
+      void dummyClient.unsubscribe(dummyTopic);
+
       // @ts-expect-error - Unknown mutation name
       void dummyClient.sync("unknownMutation", []);
+
+      void dummyService.sync("increment", ["alpha", 1]);
+      void dummyService.unsubscribe(dummyTopic);
+
+      // @ts-expect-error - Service has no subscriptions method
+      void dummyService.subscriptions();
+
+      // @ts-expect-error - Service has no 3-argument subscribe overload
+      void dummyService.subscribe(dummyTopic, dummyListener, "id");
+
+      // @ts-expect-error - Service unsubscribe accepts only a topic
+      void dummyService.unsubscribe("id");
 
       // @ts-expect-error - Wrong mutation params
       void dummyClient.sync("increment", ["alpha", "not-a-number"]);

@@ -8,12 +8,12 @@ export abstract class DurableObjectWebSocket<
   Q extends QueryRecord,
   M extends MutationRecord,
 > extends DurableObject<Env> {
-  readonly #engine: SyncEngineInterface<string, Q, M>;
+  readonly #engine: SyncEngineInterface<WebSocket, Q, M, Disposable>;
 
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
-    initialize: () => SyncEngineInterface<string, Q, M>,
+    initialize: () => SyncEngineInterface<WebSocket, Q, M, Disposable>,
   ) {
     super(ctx, env);
     this.#engine = initialize();
@@ -26,9 +26,9 @@ export abstract class DurableObjectWebSocket<
     const pair = new WebSocketPair();
     const server = pair[1];
     server.accept();
-    const service = new SocketService(this.#engine);
-    const root = newWebSocketRpcSession(server, service);
-    root.onRpcBroken(() => service[Symbol.dispose]());
+    const service = new SocketService(this.#engine, server);
+    const session = newWebSocketRpcSession(server, service);
+    session.onRpcBroken(() => service[Symbol.dispose]());
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 }
