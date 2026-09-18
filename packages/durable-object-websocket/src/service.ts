@@ -25,10 +25,10 @@ export interface Service<
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     listener: RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>>,
-  ): Promise<void | Error>;
+  ): void | Error;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-  ): Promise<void | Error>;
+  ): void | Error;
   sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
     mutation: Name,
     params: Params,
@@ -56,43 +56,26 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     return this.#engine.createTopic(name, params);
   }
 
-  async subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+  subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
     listener: RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>>,
-  ): Promise<void | Error> {
+  ): void | Error {
     if (this.#disposed) return new Error("WebSocket RPC session is closed");
 
     const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
-    const ownedListener = listener.dup() as unknown as RpcListener;
-    const wrapper: Listener<
-      ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>,
-      Disposable
-    > = Object.assign(
-      (event: ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>) => {
-        void Promise.resolve((ownedListener as unknown as (value: unknown) => void)(event)).catch(
-          (cause) => {
-            console.error(new Error("WebSocket subscription listener failed", { cause }));
-          },
-        );
-      },
-      {
-        [Symbol.dispose]() {
-          ownedListener[Symbol.dispose]();
-        },
-      },
-    );
+    const ownedListener = listener.dup();
 
-    const result = this.#engine.subscribe(topic, wrapper, this.#socket);
+    const result = this.#engine.subscribe(topic, ownedListener, this.#socket);
     if (result instanceof Error) {
-      wrapper[Symbol.dispose]();
+      ownedListener[Symbol.dispose]();
       return result;
     }
     previous?.listener[Symbol.dispose]();
   }
 
-  async unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
+  unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
-  ): Promise<void | Error> {
+  ): void | Error {
     const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
     if (previous === undefined) return;
     this.#engine.unsubscribe(topic, this.#socket);

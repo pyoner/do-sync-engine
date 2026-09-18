@@ -202,7 +202,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("disposes replaced and unsubscribed RPC listeners, handles failed registration, and logs rejected delivery", async () => {
+  it("disposes replaced and failed RPC listeners", async () => {
     type DirectQueries = { value: Query<[], number> };
     const pair = new WebSocketPair();
     const server = pair[1];
@@ -228,52 +228,26 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     const second = createDisposableRpcListener(() => disposed.push("second"));
     const failing = createDisposableRpcListener(() => disposed.push("failing"));
 
-    const consoleErrors: unknown[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => consoleErrors.push(...args);
-
     try {
-      expect(await service.subscribe(topic, first)).toBeUndefined();
+      expect(service.subscribe(topic, first)).toBeUndefined();
       expect(disposed).toEqual([]);
 
       shouldFail = true;
-      expect(await service.subscribe(topic, failing)).toBeInstanceOf(Error);
+      expect(service.subscribe(topic, failing)).toBeInstanceOf(Error);
       expect(disposed).toEqual(["failing"]);
       expect([...engine.subscriptions(topic)]).toHaveLength(1);
       const [activeSub] = [...engine.subscriptions(topic)];
       expect(activeSub?.listener).toBeDefined();
 
       shouldFail = false;
-      expect(await service.subscribe(topic, second)).toBeUndefined();
+      expect(service.subscribe(topic, second)).toBeUndefined();
       expect(disposed).toEqual(["failing", "first"]);
       expect([...engine.subscriptions(topic)]).toHaveLength(1);
 
-      const [finalSub] = [...engine.subscriptions(topic)];
-      const errorCause = new Error("rejected delivery");
-      const rejectingRpc = Object.assign(() => Promise.reject(errorCause), {
-        dup: () => rejectingRpc,
-        [Symbol.dispose]: () => disposed.push("rejecting"),
-      }) as unknown as RpcListener;
-
-      expect(await service.subscribe(topic, rejectingRpc)).toBeUndefined();
-      finalSub?.listener({ topic, value: 123 });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(
-        consoleErrors.some(
-          (err) =>
-            err instanceof Error &&
-            err.message === "WebSocket subscription listener failed" &&
-            err.cause === errorCause,
-        ),
-      ).toBe(true);
-
-      expect(await service.unsubscribe(topic)).toBeUndefined();
-      expect(disposed).toContain("second");
-      expect(disposed).toContain("rejecting");
+      expect(service.unsubscribe(topic)).toBeUndefined();
+      expect(disposed).toEqual(["failing", "first", "second"]);
       expect([...engine.subscriptions(topic)]).toHaveLength(0);
     } finally {
-      console.error = originalError;
       service[Symbol.dispose]();
       first[Symbol.dispose]();
       second[Symbol.dispose]();
@@ -302,13 +276,13 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     const distinctStub = createDisposableRpcListener(() => disposed.push("distinctStub"));
 
     try {
-      expect(await service.subscribe(topic, stub)).toBeUndefined();
-      expect(await service.subscribe(distinctTopic, distinctStub)).toBeUndefined();
+      expect(service.subscribe(topic, stub)).toBeUndefined();
+      expect(service.subscribe(distinctTopic, distinctStub)).toBeUndefined();
       expect([...engine.subscriptions()]).toHaveLength(2);
       service[Symbol.dispose]();
       expect([...engine.subscriptions()]).toHaveLength(0);
       expect(disposed).toEqual(["stub", "distinctStub"]);
-      const result = await service.subscribe(topic, stub);
+      const result = service.subscribe(topic, stub);
       expect(result).toBeInstanceOf(Error);
       expect((result as Error).message).toBe("WebSocket RPC session is closed");
       expect([...engine.subscriptions()]).toHaveLength(0);
