@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { RpcStub, newWebSocketRpcSession } from "capnweb";
-  import type { RpcClient, Service } from "@do-sync-engine/durable-object-websocket";
+  import type { Service } from "@do-sync-engine/durable-object-websocket";
   import {
     TODO_WS_PATH,
     type Todo,
@@ -24,7 +24,7 @@
   let selectedFilter = $state<TodoFilter>(filters[0]);
   let filterLoading = $state(false);
   let loading = $state(false);
-  let api: RpcClient<TodoQueries, TodoMutations> | null = null;
+  let api: RpcStub<Service<TodoQueries, TodoMutations>> | null = null;
   let connected = $state(false);
   let errorMessage = $state<string | null>(null);
   let filterSubscriptionVersion = 0;
@@ -43,7 +43,7 @@
   }
 
   function showSubscriptionError(
-    root: RpcClient<TodoQueries, TodoMutations>,
+    root: RpcStub<Service<TodoQueries, TodoMutations>>,
     version: number,
     error: unknown,
   ): void {
@@ -62,7 +62,7 @@
   }
 
   async function subscribeToFilter(
-    root: RpcClient<TodoQueries, TodoMutations>,
+    root: RpcStub<Service<TodoQueries, TodoMutations>>,
     filter: TodoFilter,
     version: number,
   ): Promise<void> {
@@ -131,7 +131,7 @@
     if (api !== null) return;
     const root = newWebSocketRpcSession<Service<TodoQueries, TodoMutations>>(
       `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`,
-    ) as unknown as RpcClient<TodoQueries, TodoMutations>;
+    );
     api = root;
     connected = true;
     filterLoading = true;
@@ -153,7 +153,7 @@
   }
 
   function mutate(
-    operation: (root: RpcClient<TodoQueries, TodoMutations>) => Promise<void | Error>,
+    operation: (root: RpcStub<Service<TodoQueries, TodoMutations>>) => Promise<void | Error>,
     afterSuccess?: () => void,
   ) {
     const root = api;

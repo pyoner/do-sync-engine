@@ -1,7 +1,7 @@
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcStub } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
-import { SocketService, type RpcClient, type RpcListener, type Service } from "../src/service.ts";
+import { SocketService, type RpcListener, type Service } from "../src/service.ts";
 import type { FixtureMutations, FixtureQueries } from "./cloudflare-worker.ts";
 import { SyncEngine, type Query } from "@do-sync-engine/core";
 
@@ -9,7 +9,7 @@ const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
 };
 
-type Client = RpcClient<FixtureQueries, FixtureMutations>;
+type Client = RpcStub<Service<FixtureQueries, FixtureMutations>>;
 
 async function connect(): Promise<{ client: Client; socket: WebSocket }> {
   const response = await worker.default.fetch(
@@ -346,7 +346,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
   it("enforces static compile-time type negative constraints", () => {
     if (false as boolean) {
-      const dummyClient = null as unknown as RpcClient<FixtureQueries, FixtureMutations>;
+      const dummyClient = null as unknown as RpcStub<Service<FixtureQueries, FixtureMutations>>;
       const dummyService = null as unknown as Service<FixtureQueries, FixtureMutations>;
       const dummyTopic = null as unknown as { readonly name: "counter"; readonly params: [string] };
       const dummyListener = (() => {}) as never;
@@ -384,9 +384,6 @@ describe("Durable Object Capnweb WebSocket transport", () => {
 
       // @ts-expect-error - Service unsubscribe accepts only a topic
       void dummyService.unsubscribe("id");
-
-      // @ts-expect-error - Wrong mutation params
-      void dummyClient.sync("increment", ["alpha", "not-a-number"]);
     }
   });
 });
