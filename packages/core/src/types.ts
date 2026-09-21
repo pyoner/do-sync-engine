@@ -97,10 +97,17 @@ export type SyncEngineOptions<
   Id,
   Queries extends QueryRecord = QueryRecord,
   Mutations extends MutationRecord = MutationRecord,
+  ListenerProperties extends object = object,
 > = {
   queries: Queries;
   mutations: Mutations;
-  createId?: () => Id;
+  createId?: <Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+    topic: Topic<Name, Params>,
+    listener: Listener<
+      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
+      ListenerProperties
+    >,
+  ) => Id;
 };
 
 export interface SyncEngineInterface<

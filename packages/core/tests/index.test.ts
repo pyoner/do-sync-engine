@@ -299,12 +299,19 @@ test("enumerates active subscriptions", () => {
   expect([...engine.subscriptions()]).toEqual([{ id: "second", topic, listener: secondListener }]);
 });
 
-test("requires and uses numeric ID factories", () => {
-  const engine = new SyncEngine<number, { value: Query<[], number> }, {}>({
+test("passes subscription arguments to numeric ID factories", () => {
+  const received: unknown[][] = [];
+  const engine = new SyncEngine<number, { value: Query<[], number> }, {}, { marker: string }>({
     queries: { value: { tables: toTables([]), run: () => 1 } },
     mutations: {},
-    createId: () => 7,
+    createId: (topic, listener) => {
+      expect(listener.marker).toBe("value");
+      received.push([topic, listener]);
+      return 7;
+    },
   });
   const topic = expectOk(engine.createTopic("value", []));
-  expect(engine.subscribe(topic, () => undefined)).toBe(7);
+  const listener = Object.assign(() => undefined, { marker: "value" });
+  expect(engine.subscribe(topic, listener)).toBe(7);
+  expect(received).toEqual([[topic, listener]]);
 });

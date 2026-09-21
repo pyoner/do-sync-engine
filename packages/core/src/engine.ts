@@ -35,14 +35,19 @@ export class SyncEngine<
 > implements SyncEngineInterface<Id, Queries, Mutations, ListenerProperties> {
   private readonly queries: Queries;
   private readonly mutations: Mutations;
-  private readonly createId?: () => Id;
+  private readonly createId?: SyncEngineOptions<
+    Id,
+    Queries,
+    Mutations,
+    ListenerProperties
+  >["createId"];
   private readonly registry: Registry<
     Queries,
     Id,
     Listener<ListenerEvents<Queries>, ListenerProperties>
   > = new HashMap();
 
-  constructor(options: SyncEngineOptions<Id, Queries, Mutations>) {
+  constructor(options: SyncEngineOptions<Id, Queries, Mutations, ListenerProperties>) {
     this.createId = options.createId;
     this.queries = options.queries;
     this.mutations = options.mutations;
@@ -87,7 +92,7 @@ export class SyncEngine<
         for (const [registeredId, registeredListener] of listeners ?? []) {
           if (registeredListener === listener) return registeredId;
         }
-        return this.createId?.();
+        return this.createId?.(topic, listener);
       })();
 
     if (listenerId === undefined) {
