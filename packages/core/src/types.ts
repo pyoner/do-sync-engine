@@ -130,10 +130,6 @@ export interface SyncEngineInterface<
     id: Id,
   ): Id | Error;
 
-  has<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-  ): boolean;
-
   unsubscribe(id: Id): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,

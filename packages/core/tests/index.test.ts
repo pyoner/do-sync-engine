@@ -77,7 +77,6 @@ test("exports canonical topic and listener APIs", async () => {
   expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
     "constructor",
     "createTopic",
-    "has",
     "mutate",
     "publish",
     "query",
@@ -86,7 +85,6 @@ test("exports canonical topic and listener APIs", async () => {
     "sync",
     "unsubscribe",
   ]);
-  expect(engine.has(topic)).toBe(true);
   expect(listenerId).toBeDefined();
   expectOk(engine.unsubscribe(topic, listener));
   expectOk(engine.unsubscribe(topic, listener));
@@ -204,14 +202,11 @@ test("uses topic identity for listener registration", async () => {
   const firstId = expectOk(engine.subscribe(firstTopic, listener));
   const secondId = expectOk(engine.subscribe(secondTopic, listener));
   expect(secondId).not.toBe(firstId);
-  expect(engine.has(firstTopic)).toBe(true);
   expect([...engine.subscriptions(firstTopic)]).toEqual([
     { id: firstId, topic: firstTopic, listener },
   ]);
-  expect(engine.has(emptyTopic)).toBe(false);
   expect([...engine.subscriptions(emptyTopic)]).toEqual([]);
   engine.unsubscribe(firstTopic, listener);
-  expect(engine.has(firstTopic)).toBe(false);
   expect([...engine.subscriptions(firstTopic)]).toEqual([]);
   expect(engine.subscribe(secondTopic, listener)).toBe(secondId);
 });
@@ -240,11 +235,8 @@ test("supports explicit IDs and every unsubscribe form", () => {
   engine.unsubscribe("first");
   engine.sync("noop", []);
   engine.unsubscribe(topic, "second");
-  expect(engine.has(topic)).toBe(false);
   expect(engine.subscribe(isolatedTopic, () => {}, "isolated")).toBe("isolated");
-  expect(engine.has(isolatedTopic)).toBe(true);
   engine.unsubscribe("isolated");
-  expect(engine.has(isolatedTopic)).toBe(false);
   engine.sync("noop", []);
   expect(first).toEqual([1, 1, 1]);
   expect(second).toEqual([1, 1, 1, 1]);

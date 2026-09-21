@@ -112,12 +112,6 @@ export class SyncEngine<
     return listenerId;
   }
 
-  has<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-  ): boolean {
-    return this.registry.has(topic);
-  }
-
   unsubscribe(id: Id): void;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
