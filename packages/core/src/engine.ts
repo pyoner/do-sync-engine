@@ -185,13 +185,14 @@ export class SyncEngine<
   }
 
   protected publish<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    event: ListenerEvent,
+    event: ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
   ): void {
-    const registeredEvent = event as ListenerEvent<Topic<Name, Params>>;
+    const registeredEvent = event;
     const listeners = this.registry.get(registeredEvent.topic);
     if (listeners === undefined) return;
-    for (const listener of listeners.values()) void (listener as Listener)(registeredEvent);
+    for (const listener of listeners.values()) void listener(registeredEvent);
   }
+
   subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>;
   subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
@@ -200,7 +201,6 @@ export class SyncEngine<
       Subscription<
         Id,
         Topic<Name, Params>,
-        OpResult<Queries[Name]>,
         Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
       >
     >

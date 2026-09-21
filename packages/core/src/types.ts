@@ -1,5 +1,7 @@
 import type { HashMap } from "hashmap";
 
+type Any = any; // oxlint-disable-line
+
 export type StringKey<T> = Extract<keyof T, string>;
 
 declare const brand: unique symbol;
@@ -14,17 +16,14 @@ export type BaseParams = ReadonlyArray<
   string | number | boolean | bigint | null | undefined | object
 >;
 
-type Operation<Params extends BaseParams = [], Result = unknown> = {
+type Operation<Params extends BaseParams, Result> = {
   tables: Set<Table>;
   run(...params: Params): Result;
 };
 
-export type Query<Params extends BaseParams = [], Result = unknown> = Operation<Params, Result>;
+export type Query<Params extends BaseParams, Result> = Operation<Params, Result>;
 
-export type Mutation<Params extends BaseParams = [], Metadata = unknown> = Operation<
-  Params,
-  Metadata
->;
+export type Mutation<Params extends BaseParams, Metadata> = Operation<Params, Metadata>;
 
 type ValidParams<Params> = [Params] extends [never]
   ? BaseParams
@@ -39,7 +38,7 @@ export type OpParams<OperationDef> = OperationDef extends {
   : never;
 
 export type OpResult<OperationDef> = OperationDef extends {
-  run(...params: never[]): infer Result;
+  run(...params: unknown[]): infer Result;
 }
   ? Result
   : never;
@@ -53,7 +52,7 @@ export type Topics<Q extends QueryRecord> = {
   [Name in StringKey<Q>]: Topic<Name, OpParams<Q[Name]>>;
 }[StringKey<Q>];
 
-export type ListenerEvent<T extends Topic = Topic, V = unknown> = {
+export type ListenerEvent<T extends Topic = Topic, V = Any> = {
   readonly topic: T;
   readonly value: V;
 };
@@ -67,8 +66,8 @@ export type ListenerEvents<Q extends QueryRecord> = {
   [Name in StringKey<Q>]: ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
 }[StringKey<Q>];
 
-export type QueryRecord = Record<string, Query<never[]>>;
-export type MutationRecord = Record<string, Mutation<never[]>>;
+export type QueryRecord = Record<string, Query<BaseParams, Any>>;
+export type MutationRecord = Record<string, Mutation<BaseParams, Any>>;
 
 export type Registry<
   Q extends QueryRecord = QueryRecord,
@@ -78,9 +77,8 @@ export type Registry<
 
 export type Subscription<
   Id,
-  T extends Topic,
-  V = unknown,
-  L extends Listener<ListenerEvent<T, V>> = Listener<ListenerEvent<T, V>>,
+  T extends Topic<string, BaseParams>,
+  L extends Listener<ListenerEvent<T, Any>>,
 > = {
   id: Id;
   topic: T;
@@ -91,7 +89,6 @@ export type Subscriptions<Id, Q extends QueryRecord, Properties extends object =
   [Name in StringKey<Q>]: Subscription<
     Id,
     Topic<Name, OpParams<Q[Name]>>,
-    OpResult<Q[Name]>,
     Listener<ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>, Properties>
   >;
 }[StringKey<Q>];
@@ -163,7 +160,6 @@ export interface SyncEngineInterface<
       Subscription<
         Id,
         Topic<Name, Params>,
-        OpResult<Queries[Name]>,
         Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
       >
     >
