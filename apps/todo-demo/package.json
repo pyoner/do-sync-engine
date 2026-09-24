@@ -14,14 +14,15 @@
     "@do-sync-engine/core": "workspace:*",
     "@do-sync-engine/durable-object-websocket": "workspace:*",
     "@do-sync-engine/sql-regex-adapter": "workspace:*",
-    "capnweb": "catalog:",
-    "zod": "catalog:"
+    "@do-sync-engine/xstate-store": "workspace:*",
+    "@xstate/store-svelte": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "latest",
     "@cloudflare/vitest-pool-workers": "latest",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@types/node": "^24.13.2",
+    "capnweb": "catalog:",
     "portless": "catalog:",
     "svelte": "^5.56.3",
     "typescript": "catalog:",

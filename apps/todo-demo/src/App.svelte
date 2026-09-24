@@ -13,10 +13,7 @@
     clearCompleted,
   } = app;
 
-  onMount(() => {
-    connect();
-    return disconnect;
-  });
+  onMount(() => disconnect);
 </script>
 
 <main>
@@ -35,7 +32,7 @@
     >
       {app.connected ? "Disconnect" : "Connect"}
     </button>
-    <p class="status" aria-live="polite">{app.connected ? "Connected" : "Disconnected"}</p>
+    <p class="status" aria-live="polite">{app.connecting ? "Connecting" : app.connected ? "Connected" : "Disconnected"}</p>
   </div>
 
   {#if app.errorMessage}
@@ -98,12 +95,12 @@
     <ul class="query-list">
       <li>
         <code>{app.selectedFilter.query}</code>
-        <span class="row-count">({app.queryResults[app.selectedFilter.query]?.length ?? 0} rows)</span>
+        <span class="row-count">({app.queryResult?.length ?? 0} rows)</span>
       </li>
     </ul>
     <details>
       <summary>Latest query result (JSON)</summary>
-      <pre>{JSON.stringify(app.queryResults[app.selectedFilter.query], null, 2)}</pre>
+      <pre>{JSON.stringify(app.queryResult, null, 2)}</pre>
     </details>
   </div>
 </main>
@@ -121,8 +118,6 @@
     max-width: 640px;
     margin: 2rem auto;
     padding: 0 1rem;
-    font-family: system-ui, -apple-system, sans-serif;
-    color: var(--fg);
   }
 
   h1 { margin-bottom: 0.25rem; }
@@ -176,7 +171,6 @@
     border: 1px solid var(--border);
     border-radius: 6px;
     background: #1a1a1a;
-    color: var(--fg);
     font-size: 1rem;
   }
 

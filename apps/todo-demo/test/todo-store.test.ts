@@ -1,19 +1,42 @@
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcStub } from "capnweb";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { createSyncStore } from "@do-sync-engine/xstate-store";
 import type { Service } from "@do-sync-engine/durable-object-websocket";
+import type { Topics } from "@do-sync-engine/core";
 import type { TodoMutations, TodoQueries, TodoSummary } from "../src/todo-protocol.ts";
 
-describe("TodoStore Capnweb WebSocket transport", () => {
-  it("accepts a WebSocket connection", async () => {
-    const response = await exports.default.fetch(
-      new Request("https://example.com/api/todos", { headers: { Upgrade: "websocket" } }),
-    );
-    expect(response.status).toBe(101);
-    response.webSocket?.accept();
-    response.webSocket?.close();
-  });
+type StoreContext = {
+  status: string;
+  topics: Record<string, unknown>;
+  error: Error | null;
+};
+type StoreView = {
+  getSnapshot: () => { context: StoreContext };
+  subscribe: (listener: (snapshot: { context: StoreContext }) => void) => {
+    unsubscribe: () => void;
+  };
+};
 
+function waitForContext(store: StoreView, predicate: (context: StoreContext) => boolean) {
+  const context = store.getSnapshot().context;
+  if (predicate(context)) return Promise.resolve(context);
+
+  let unsubscribe = () => {};
+  const promise = new Promise<StoreContext>((resolve, reject) => {
+    const subscription = store.subscribe(({ context }) => {
+      if (context.error !== null) reject(context.error);
+      else if (predicate(context)) resolve(context);
+    });
+    unsubscribe = () => subscription.unsubscribe();
+  });
+  void promise.then(
+    () => unsubscribe(),
+    () => unsubscribe(),
+  );
+  return promise;
+}
+describe("TodoStore Capnweb WebSocket transport", () => {
   it("subscribes allTodos, adds a unique todo, observes it, and cleans up", async () => {
     const response = await exports.default.fetch(
       new Request("https://example.com/api/todos", { headers: { Upgrade: "websocket" } }),
@@ -80,6 +103,66 @@ describe("TodoStore Capnweb WebSocket transport", () => {
     } finally {
       client[Symbol.dispose]();
       socket.close();
+    }
+  });
+
+  it("connects through createSyncStore, subscribes, syncs, and unsubscribes", async () => {
+    const response = await exports.default.fetch(
+      new Request("https://example.com/api/todos", { headers: { Upgrade: "websocket" } }),
+    );
+    expect(response.status).toBe(101);
+    const socket = response.webSocket!;
+    socket.accept();
+    class FakeWebSocket {
+      static CLOSING = WebSocket.CLOSING;
+
+      constructor() {
+        queueMicrotask(() => socket.dispatchEvent(new Event("open")));
+        return socket as unknown as FakeWebSocket;
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const client = createSyncStore<TodoQueries, TodoMutations>({
+      url: "ws://example.com/api/todos",
+      autoconnect: false,
+    });
+
+    try {
+      client.store.trigger.connect();
+      await waitForContext(client.store, ({ status }) => status === "ready");
+
+      const allTopic: Topics<TodoQueries> = { name: "allTodos", params: [] };
+      client.subscribe(allTopic, "allTodos");
+      await waitForContext(client.store, ({ topics }) => Array.isArray(topics.allTodos));
+
+      const firstTitle = `store-${crypto.randomUUID()}`;
+      expect(await client.sync("addTodo", [firstTitle])).toBeUndefined();
+      const updatedAll = (
+        await waitForContext(
+          client.store,
+          ({ topics }) =>
+            Array.isArray(topics.allTodos) &&
+            topics.allTodos.some(
+              (todo) =>
+                typeof todo === "object" &&
+                todo !== null &&
+                "title" in todo &&
+                todo.title === firstTitle,
+            ),
+        )
+      ).topics.allTodos as TodoSummary[];
+      const firstTodo = updatedAll.find((todo) => todo.title === firstTitle);
+      expect(firstTodo).toBeDefined();
+      if (firstTodo === undefined) throw new Error("Added todo was not returned");
+
+      client.unsubscribe(allTopic);
+      expect(client.store.getSnapshot().context.status).toBe("ready");
+      expect(client.store.getSnapshot().context.error).toBeNull();
+      expect(await client.sync("deleteTodo", [firstTodo.id])).toBeUndefined();
+    } finally {
+      client.store.trigger.disconnect();
+      socket.close();
+      vi.unstubAllGlobals();
     }
   });
 });

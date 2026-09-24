@@ -64,9 +64,9 @@ vp run todo-demo#deploy
 ## Project layout
 
 - [`src/App.svelte`](./src/App.svelte) — Todo UI and subscription status display.
+- [`src/todo-app-state.svelte.ts`](./src/todo-app-state.svelte.ts) — Reactive client state and sync-store subscriptions.
 - [`src/main.ts`](./src/main.ts) — Client entry point.
 - [`src/worker/index.ts`](./src/worker/index.ts) — Worker fetch handler and Durable Object export.
 - [`src/worker/todo-store.ts`](./src/worker/todo-store.ts) — Durable Object todo state and mutations.
-- [`src/worker/subscription-registry.ts`](./src/worker/subscription-registry.ts) — WebSocket subscription management.
 - [`vite.config.ts`](./vite.config.ts) — Svelte, Cloudflare, and test plugin configuration.
 - [`test/`](./test/) — Worker and subscription tests.

@@ -3,8 +3,6 @@ import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket
 import type { TodoMutations, TodoQueries } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
 
-type SqlDatabase = InstanceType<typeof DurableObjectSqlStorage>;
-
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS todos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,11 +12,10 @@ const SCHEMA = `
   )
 `;
 
-function createQueries(storage: SqlDatabase): TodoQueries {
+function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
   const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
   const completedTodosSql = "SELECT id, title FROM todos WHERE completed = 1 ORDER BY id";
-  const todoCountSql = "SELECT COUNT(*) AS total_count FROM todos";
 
   return {
     allTodos: {
@@ -45,15 +42,10 @@ function createQueries(storage: SqlDatabase): TodoQueries {
           .query(completedTodosSql)
           .map((row) => ({ id: Number(row.id), title: String(row.title) })),
     },
-    todoCount: {
-      tables: storage.tables(todoCountSql),
-      run: () =>
-        storage.query(todoCountSql).map((row) => ({ total_count: Number(row.total_count) })),
-    },
   };
 }
 
-function createMutations(storage: SqlDatabase): TodoMutations {
+function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
   const addTodoSql = "INSERT INTO todos (title) VALUES (?)";
   const toggleTodoSql = "UPDATE todos SET completed = NOT completed WHERE id = ?";
   const deleteTodoSql = "DELETE FROM todos WHERE id = ?";
@@ -61,21 +53,21 @@ function createMutations(storage: SqlDatabase): TodoMutations {
   return {
     addTodo: {
       tables: storage.tables(addTodoSql),
-      run: (title) => storage.execute(addTodoSql, title as string),
+      run: (title) => storage.execute(addTodoSql, title),
     },
     toggleTodo: {
       tables: storage.tables(toggleTodoSql),
-      run: (id) => storage.execute(toggleTodoSql, id as number),
+      run: (id) => storage.execute(toggleTodoSql, id),
     },
     deleteTodo: {
       tables: storage.tables(deleteTodoSql),
-      run: (id) => storage.execute(deleteTodoSql, id as number),
+      run: (id) => storage.execute(deleteTodoSql, id),
     },
     clearCompleted: {
       tables: storage.tables(clearCompletedSql),
       run: () => storage.execute(clearCompletedSql),
     },
-  } satisfies TodoMutations;
+  };
 }
 export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMutations> {
   constructor(ctx: DurableObjectState, env: Env) {
