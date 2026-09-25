@@ -215,4 +215,26 @@ describe("createSyncStore connection strategies", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("closes a failed session when a closed listener reconnects", () => {
+    const sockets = installFakeWebSocket();
+    const client = createSyncStore<Queries, Mutations>({
+      url: "ws://localhost",
+      strategy: new ManualConnectionStrategy(),
+    });
+    client.store.on("closed", () => client.connect());
+    try {
+      client.connect();
+      sockets[0]?.dispatchEvent(new Event("error"));
+      expect(sockets).toHaveLength(2);
+      expect(sockets[0]?.closed).toBe(true);
+      expect(sockets[1]?.closed).toBe(false);
+      expect(client.store.getSnapshot().context.status).toBe("connecting");
+
+      client.disconnect();
+      expect(sockets[1]?.closed).toBe(true);
+    } finally {
+      client[Symbol.dispose]();
+      vi.unstubAllGlobals();
+    }
+  });
 });

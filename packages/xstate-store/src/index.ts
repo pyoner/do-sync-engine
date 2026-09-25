@@ -34,6 +34,7 @@ type Session<Q extends QueryRecord, M extends MutationRecord> = {
   chain: Promise<void>;
   ready: Promise<void>;
   open: () => void;
+  disposed: boolean;
 };
 type Events<Q extends QueryRecord, M extends MutationRecord> = {
   connecting: {};
@@ -105,7 +106,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     const ready = new Promise<void>((resolve) => {
       open = resolve;
     });
-    const session: ClientSession = { chain: Promise.resolve(), ready, open };
+    const session: ClientSession = { chain: Promise.resolve(), ready, open, disposed: false };
     current = session;
     store.trigger.connecting();
     if (current !== session) return;
@@ -138,8 +139,9 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     store.trigger.disconnected();
   };
   const disposeSession = (session: ClientSession, close: boolean) => {
-    if (current !== session) return;
-    current = undefined;
+    if (session.disposed) return;
+    session.disposed = true;
+    if (current === session) current = undefined;
     session.open();
     session.root?.[Symbol.dispose]();
     if (close && session.socket !== undefined && session.socket.readyState < WebSocket.CLOSING) {
