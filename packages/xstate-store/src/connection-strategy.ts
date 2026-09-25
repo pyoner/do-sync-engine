@@ -16,7 +16,7 @@ export abstract class ConnectionStrategy {
     this.#controller?.disconnect();
   }
 
-  dispose(): void {
+  [Symbol.dispose](): void {
     this.disconnect();
     this.#controller = undefined;
   }
@@ -65,9 +65,9 @@ export class SubscriptionOwnedConnectionStrategy extends ConnectionStrategy {
     this.count = 0;
   }
 
-  override dispose(): void {
+  override [Symbol.dispose](): void {
     this.count = 0;
-    super.dispose();
+    super[Symbol.dispose]();
   }
 
   protected empty(): void {
@@ -107,9 +107,9 @@ export class IdleTimeoutConnectionStrategy extends SubscriptionOwnedConnectionSt
     super.failed();
   }
 
-  override dispose(): void {
+  override [Symbol.dispose](): void {
     clearTimeout(this.#timer);
     this.#timer = undefined;
-    super.dispose();
+    super[Symbol.dispose]();
   }
 }

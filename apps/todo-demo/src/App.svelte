@@ -13,7 +13,7 @@
     clearCompleted,
   } = app;
 
-  onMount(() => disconnect);
+  onMount(() => app[Symbol.dispose]);
 </script>
 
 <main>

@@ -108,7 +108,7 @@ describe("createSyncStore connection strategies", () => {
       client.subscribe(countTopic, "count");
       client.unsubscribe(countTopic);
       expect(sockets[0]?.closed).toBe(false);
-      client.dispose();
+      client[Symbol.dispose]();
       expect(client.store.getSnapshot().context.status).toBe("disconnected");
       expect(sockets[0]?.closed).toBe(true);
     } finally {
@@ -135,6 +135,31 @@ describe("createSyncStore connection strategies", () => {
       client.unsubscribe(countTopic);
       vi.advanceTimersByTime(100);
       expect(client.store.getSnapshot().context.status).toBe("disconnected");
+      expect(sockets[0]?.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("clears the idle timer and detaches the controller on disposal", () => {
+    vi.useFakeTimers();
+    const sockets = installFakeWebSocket();
+    const strategy = new IdleTimeoutConnectionStrategy(100);
+    try {
+      const client = createSyncStore<Queries, Mutations>({
+        url: "ws://localhost",
+        strategy,
+      });
+      client.subscribe(countTopic, "count");
+      client.unsubscribe(countTopic);
+      client[Symbol.dispose]();
+      expect(vi.getTimerCount()).toBe(0);
+      client[Symbol.dispose]();
+      vi.advanceTimersByTime(100);
+      strategy.connect();
+      expect(client.store.getSnapshot().context.status).toBe("disconnected");
+      expect(sockets).toHaveLength(1);
       expect(sockets[0]?.closed).toBe(true);
     } finally {
       vi.useRealTimers();

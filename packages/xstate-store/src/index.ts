@@ -114,10 +114,10 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     }
   };
   const disconnectSocket = () => {
-    if (current !== undefined) dispose(current, true);
+    if (current !== undefined) disposeSession(current, true);
     store.trigger.disconnected();
   };
-  const dispose = (session: ClientSession, close: boolean) => {
+  const disposeSession = (session: ClientSession, close: boolean) => {
     if (current !== session) return;
     current = undefined;
     session.open();
@@ -130,7 +130,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     if (current !== session) return;
     strategy.failed();
     store.trigger.closed({ session, error });
-    dispose(session, true);
+    disposeSession(session, true);
   };
   const enqueueRpc = (session: ClientSession, run: () => Promise<void>) => {
     session.chain = session.chain.then(run).catch((cause: unknown) => {
@@ -195,7 +195,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     sync,
     connect: () => strategy.connect(),
     disconnect: () => strategy.disconnect(),
-    dispose: () => strategy.dispose(),
+    [Symbol.dispose]: () => strategy[Symbol.dispose](),
     store,
   };
 }

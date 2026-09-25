@@ -188,6 +188,7 @@ export function createTodoAppState() {
     },
     filters,
     connect,
+    [Symbol.dispose]: () => syncStore[Symbol.dispose](),
     disconnect,
     selectFilter,
     addTodo,
