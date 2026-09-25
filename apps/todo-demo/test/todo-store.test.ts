@@ -124,16 +124,12 @@ describe("TodoStore Capnweb WebSocket transport", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const client = createSyncStore<TodoQueries, TodoMutations>({
       url: "ws://example.com/api/todos",
-      autoconnect: false,
     });
+    const allTopic: Topics<TodoQueries> = { name: "allTodos", params: [] };
 
     try {
-      client.store.trigger.connect();
-      await waitForContext(client.store, ({ status }) => status === "ready");
-
-      const allTopic: Topics<TodoQueries> = { name: "allTodos", params: [] };
       client.subscribe(allTopic, "allTodos");
-      await waitForContext(client.store, ({ topics }) => Array.isArray(topics.allTodos));
+      await waitForContext(client.store, ({ status }) => status === "ready");
 
       const firstTitle = `store-${crypto.randomUUID()}`;
       expect(await client.sync("addTodo", [firstTitle])).toBeUndefined();
@@ -155,12 +151,21 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       expect(firstTodo).toBeDefined();
       if (firstTodo === undefined) throw new Error("Added todo was not returned");
 
-      client.unsubscribe(allTopic);
-      expect(client.store.getSnapshot().context.status).toBe("ready");
-      expect(client.store.getSnapshot().context.error).toBeNull();
       expect(await client.sync("deleteTodo", [firstTodo.id])).toBeUndefined();
+      await waitForContext(
+        client.store,
+        ({ topics }) =>
+          Array.isArray(topics.allTodos) &&
+          !topics.allTodos.some(
+            (todo) =>
+              typeof todo === "object" && todo !== null && "id" in todo && todo.id === firstTodo.id,
+          ),
+      );
+      client.unsubscribe(allTopic);
+      expect(client.store.getSnapshot().context.status).toBe("disconnected");
+      expect(await client.sync("deleteTodo", [firstTodo.id])).toBeInstanceOf(Error);
     } finally {
-      client.store.trigger.disconnect();
+      client.unsubscribe(allTopic);
       socket.close();
       vi.unstubAllGlobals();
     }

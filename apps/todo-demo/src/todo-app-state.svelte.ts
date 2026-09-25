@@ -1,6 +1,6 @@
 import { fromStore } from "svelte/store";
 import { useSelector } from "@xstate/store-svelte";
-import { createSyncStore } from "@do-sync-engine/xstate-store";
+import { createSyncStore, ManualConnectionStrategy } from "@do-sync-engine/xstate-store";
 import type { OpParams, StringKey, Topics } from "@do-sync-engine/core";
 import {
   TODO_WS_PATH,
@@ -21,7 +21,10 @@ type TodoListItem = TodoSummary & Pick<Todo, "completed">;
 
 export function createTodoAppState() {
   const url = `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`;
-  const syncStore = createSyncStore<TodoQueries, TodoMutations>({ url });
+  const syncStore = createSyncStore<TodoQueries, TodoMutations>({
+    url,
+    strategy: new ManualConnectionStrategy(),
+  });
   const { store } = syncStore;
   const context = fromStore(useSelector(store, (snapshot) => snapshot.context));
   const state = $state({
@@ -58,10 +61,13 @@ export function createTodoAppState() {
   }
 
   function activateFilter(filter: TodoFilter): void {
-    const topic = topicFor(filter);
     activeResult = context.current.topics[filter.query];
     state.resultStatus = "loading";
-    syncStore.subscribe(topic, filter.query);
+    const result = syncStore.subscribe(topicFor(filter), filter.query);
+    if (result instanceof Error) {
+      state.resultStatus = "idle";
+      state.mutationError = result.message;
+    }
   }
 
   $effect(() => {
@@ -69,12 +75,10 @@ export function createTodoAppState() {
     if (status !== previousStatus && (status === "ready" || status === "disconnected")) {
       connectionVersion++;
     }
-    if (status !== "ready") {
+    if (status === "disconnected") {
       state.resultStatus = "idle";
       state.mutationPending = false;
       state.mutationError = null;
-    } else if (previousStatus !== "ready") {
-      activateFilter(state.selectedFilter);
     } else if (state.resultStatus === "loading") {
       if (error !== null) {
         state.resultStatus = "idle";
@@ -85,12 +89,25 @@ export function createTodoAppState() {
     previousStatus = status;
   });
 
+  function connect(): void {
+    if (context.current.status !== "disconnected") return;
+    syncStore.connect();
+    activateFilter(state.selectedFilter);
+  }
+
+  function disconnect(): void {
+    syncStore.disconnect();
+  }
+
   function selectFilter(filter: TodoFilter): void {
     if (state.selectedFilter.query === filter.query) return;
-    if (context.current.status === "ready") syncStore.unsubscribe(topicFor(state.selectedFilter));
+    const previousTopic = topicFor(state.selectedFilter);
+    const ready = context.current.status === "ready";
     state.selectedFilter = filter;
     state.mutationError = null;
-    if (context.current.status === "ready") activateFilter(filter);
+    if (!ready) return;
+    activateFilter(filter);
+    syncStore.unsubscribe(previousTopic);
   }
 
   function mutate<Name extends StringKey<TodoMutations>>(
@@ -170,8 +187,8 @@ export function createTodoAppState() {
       return context.current.error?.message ?? state.mutationError;
     },
     filters,
-    connect: store.trigger.connect,
-    disconnect: store.trigger.disconnect,
+    connect,
+    disconnect,
     selectFilter,
     addTodo,
     toggleTodo,
