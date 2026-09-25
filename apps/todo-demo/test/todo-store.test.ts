@@ -126,6 +126,8 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       url: "ws://example.com/api/todos",
     });
     const allTopic: Topics<TodoQueries> = { name: "allTodos", params: [] };
+    const syncedEvents: Array<{ key: string; value: unknown }> = [];
+    client.store.on("synced", (event) => syncedEvents.push(event));
 
     try {
       client.subscribe(allTopic, "allTodos");
@@ -147,6 +149,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
             ),
         )
       ).topics.allTodos as TodoSummary[];
+      expect(syncedEvents).toContainEqual({ type: "synced", key: "allTodos", value: updatedAll });
       const firstTodo = updatedAll.find((todo) => todo.title === firstTitle);
       expect(firstTodo).toBeDefined();
       if (firstTodo === undefined) throw new Error("Added todo was not returned");

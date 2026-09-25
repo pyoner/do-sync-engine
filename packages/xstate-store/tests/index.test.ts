@@ -166,4 +166,53 @@ describe("createSyncStore connection strategies", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("emits lifecycle events and ignores stale socket failures", () => {
+    const sockets = installFakeWebSocket();
+    const client = createSyncStore<Queries, Mutations>({
+      url: "ws://localhost",
+      strategy: new ManualConnectionStrategy(),
+    });
+    const types: string[] = [];
+    const errors: Error[] = [];
+    client.store.on("*", (event) => types.push(event.type));
+    client.store.on("closed", ({ error }) => errors.push(error));
+    try {
+      client.connect();
+      client.disconnect();
+      client.connect();
+      sockets[0]?.dispatchEvent(new Event("error"));
+      expect(types).toEqual(["connecting", "disconnected", "connecting"]);
+
+      sockets[1]?.dispatchEvent(new Event("error"));
+      expect(types).toEqual(["connecting", "disconnected", "connecting", "closed"]);
+      expect(errors[0]?.message).toBe("WebSocket connection failed");
+    } finally {
+      client[Symbol.dispose]();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not open a socket when a connecting listener disposes the store", () => {
+    const sockets = installFakeWebSocket();
+    const client = createSyncStore<Queries, Mutations>({
+      url: "ws://localhost",
+      strategy: new ManualConnectionStrategy(),
+    });
+    const types: string[] = [];
+    client.store.on("connecting", () => {
+      types.push("connecting");
+      client[Symbol.dispose]();
+    });
+    client.store.on("disconnected", () => types.push("disconnected"));
+    try {
+      client.connect();
+      expect(sockets).toHaveLength(0);
+      expect(client.store.getSnapshot().context.status).toBe("disconnected");
+      expect(types).toEqual(["connecting", "disconnected"]);
+    } finally {
+      client[Symbol.dispose]();
+      vi.unstubAllGlobals();
+    }
+  });
 });

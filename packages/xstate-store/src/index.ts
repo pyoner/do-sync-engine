@@ -43,6 +43,14 @@ type Events<Q extends QueryRecord, M extends MutationRecord> = {
   synced: { session: Session<Q, M>; key: string; value: unknown };
   failed: { session: Session<Q, M> | undefined; error: Error | null };
 };
+type Emitted<Q extends QueryRecord> = {
+  connecting: {};
+  disconnected: {};
+  opened: {};
+  closed: { error: Error };
+  synced: { key: string; value: OpResult<Q[StringKey<Q>]> };
+  failed: { error: Error };
+};
 
 export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>({
   url,
@@ -54,28 +62,39 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
   type ClientSession = Session<Q, M>;
   let current: ClientSession | undefined;
 
-  const logic = createStoreLogic<Context<Q>, Events<Q, M>>({
+  const logic = createStoreLogic<Context<Q>, Events<Q, M>, Emitted<Q>>({
     context: (): Context<Q> => ({ status: "disconnected", topics: {}, error: null }),
     on: {
-      connecting: (context) => ({ ...context, status: "connecting", error: null }),
-      disconnected: (context) => ({
-        ...context,
-        status: "disconnected",
-        topics: {},
-        error: null,
-      }),
-      opened: (context, { session }) =>
-        current !== session ? context : { ...context, status: "ready" },
-      closed: (context, { error }) => ({ ...context, status: "disconnected", topics: {}, error }),
-      synced: (context, { session, key, value }) =>
-        current !== session
-          ? context
-          : {
-              ...context,
-              topics: { ...context.topics, [key]: value as OpResult<Q[StringKey<Q>]> },
-            },
-      failed: (context, { session, error }) =>
-        current !== session ? context : { ...context, error },
+      connecting: (context, _event, enqueue) => {
+        enqueue.emit.connecting();
+        return { ...context, status: "connecting", error: null };
+      },
+      disconnected: (context, _event, enqueue) => {
+        if (context.status === "disconnected" && context.error === null) return context;
+        enqueue.emit.disconnected();
+        return { ...context, status: "disconnected", topics: {}, error: null };
+      },
+      opened: (context, { session }, enqueue) => {
+        if (current !== session) return context;
+        enqueue.emit.opened();
+        return { ...context, status: "ready" };
+      },
+      closed: (context, { session, error }, enqueue) => {
+        if (current !== session) return context;
+        enqueue.emit.closed({ error });
+        return { ...context, status: "disconnected", topics: {}, error };
+      },
+      synced: (context, { session, key, value }, enqueue) => {
+        if (current !== session) return context;
+        const result = value as OpResult<Q[StringKey<Q>]>;
+        enqueue.emit.synced({ key, value: result });
+        return { ...context, topics: { ...context.topics, [key]: result } };
+      },
+      failed: (context, { session, error }, enqueue) => {
+        if (current !== session) return context;
+        if (error !== null) enqueue.emit.failed({ error });
+        return { ...context, error };
+      },
     },
   });
   const store = logic.createStore();
@@ -89,6 +108,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
     const session: ClientSession = { chain: Promise.resolve(), ready, open };
     current = session;
     store.trigger.connecting();
+    if (current !== session) return;
     try {
       const socket = new WebSocket(url);
       session.socket = socket;
