@@ -180,35 +180,58 @@ test("typed createTopic params and listener handle", async () => {
   expectOk(engine.unsubscribe(topic, listener));
 });
 
-test("uses topic identity for listener registration", async () => {
+test("uses structural topic equality for listener registration", () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: (filter: { page: number; search: string }) => filter.page,
-    } satisfies Query<[{ page: number; search: string }], number>,
+      run: (filter: { page: { current: number; total: number }; search: string }) =>
+        filter.page.current + filter.page.total,
+    } satisfies Query<[{ page: { current: number; total: number }; search: string }], number>,
   };
   const mutations = {
     noop: {
-      tables: toTables([]),
+      tables: toTables(["numbers"]),
       run: () => ({}),
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
-  const firstTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
-  const secondTopic = expectOk(engine.createTopic("numbers", [{ search: "one", page: 1 }]));
-  const emptyTopic = expectOk(engine.createTopic("numbers", [{ page: 1, search: "one" }]));
-  const listener: Listener = () => {};
+  const firstTopic = expectOk(
+    engine.createTopic("numbers", [{ page: { current: 1, total: 2 }, search: "one" }]),
+  );
+  const equivalentTopic = expectOk(
+    engine.createTopic("numbers", [{ search: "one", page: { total: 2, current: 1 } }]),
+  );
+  const distinctTopic = expectOk(
+    engine.createTopic("numbers", [{ page: { current: 2, total: 2 }, search: "one" }]),
+  );
+  const firstEvents: number[] = [];
+  const secondEvents: number[] = [];
+  const firstListener: Listener = ({ value }) => firstEvents.push(value);
+  const secondListener: Listener = ({ value }) => secondEvents.push(value);
 
-  const firstId = expectOk(engine.subscribe(firstTopic, listener));
-  const secondId = expectOk(engine.subscribe(secondTopic, listener));
+  const firstId = expectOk(engine.subscribe(firstTopic, firstListener));
+  const secondId = expectOk(engine.subscribe(equivalentTopic, secondListener));
   expect(secondId).not.toBe(firstId);
-  expect([...engine.subscriptions(firstTopic)]).toEqual([
-    { id: firstId, topic: firstTopic, listener },
+  expect([...engine.subscriptions(equivalentTopic)].map(({ id }) => id)).toEqual([
+    firstId,
+    secondId,
   ]);
-  expect([...engine.subscriptions(emptyTopic)]).toEqual([]);
-  engine.unsubscribe(firstTopic, listener);
-  expect([...engine.subscriptions(firstTopic)]).toEqual([]);
-  expect(engine.subscribe(secondTopic, listener)).toBe(secondId);
+  expect([...engine.subscriptions(distinctTopic)]).toEqual([]);
+
+  engine.sync("noop", []);
+  expect(firstEvents).toEqual([3, 3]);
+  expect(secondEvents).toEqual([3, 3]);
+
+  engine.unsubscribe(distinctTopic, firstListener);
+  expect([...engine.subscriptions(firstTopic)]).toHaveLength(2);
+  engine.unsubscribe(equivalentTopic, firstListener);
+  expect([...engine.subscriptions(firstTopic)].map(({ id }) => id)).toEqual([secondId]);
+  engine.sync("noop", []);
+  expect(firstEvents).toEqual([3, 3]);
+  expect(secondEvents).toEqual([3, 3, 3]);
+
+  engine.unsubscribe(firstTopic, secondListener);
+  expect([...engine.subscriptions()]).toEqual([]);
 });
 
 test("supports explicit IDs and every unsubscribe form", () => {

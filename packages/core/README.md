@@ -39,7 +39,7 @@ engine.sync("addTodo", ["Buy milk"]);
 engine.unsubscribe(topic, listener);
 ```
 
-A `Topic` contains the query `name` and query `params`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs. Structurally equal topics share listeners; `subscribe` and `unsubscribe` use the same Topic/listener pair.
+A `Topic` contains the query `name` and `params`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs. Structurally equivalent topic objects share listeners, including across serialization boundaries; subscribing with a different topic object with equivalent parameters addresses the same subscription.
 
 ## Development
 

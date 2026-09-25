@@ -18,9 +18,9 @@ catalog:
   better-sqlite3: 13.0.1
   "@types/better-sqlite3": 7.6.13
   errore: ^0.14.1
-  hashmap: ^3.0.1
   capnweb: ^0.12.0
   "@xstate/store-svelte": ^2.0.0
+  "@tykowale/ts-hash-map": ^1.2.0
 overrides:
   vite: "catalog:"
   vitest: "catalog:"

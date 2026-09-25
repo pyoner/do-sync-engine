@@ -113,7 +113,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("keeps separately serialized topics isolated by identity", async () => {
+  it("isolates equivalent topic subscriptions across sockets", async () => {
     const first = await connect();
     const second = await connect();
     try {
@@ -122,23 +122,21 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       if (topic instanceof Error) throw topic;
 
       const firstListener = createListener<{ value: { key: string; value: number } }>();
-      const secondListener = createListener<{ value: { key: string; value: number } }>();
       const otherSocketListener = createListener<{ value: { key: string; value: number } }>();
 
       expect(await subscribeWithStub(first.client, topic, firstListener.listener)).toBeUndefined();
       await firstListener.wait((e) => e.value.value === 0);
-      expect(await subscribeWithStub(first.client, topic, secondListener.listener)).toBeUndefined();
-      await secondListener.wait((e) => e.value.value === 0);
+      const equivalentTopic = await second.client.createTopic("counter", [key]);
+      if (equivalentTopic instanceof Error) throw equivalentTopic;
       expect(
-        await subscribeWithStub(second.client, topic, otherSocketListener.listener),
+        await subscribeWithStub(second.client, equivalentTopic, otherSocketListener.listener),
       ).toBeUndefined();
       await otherSocketListener.wait((e) => e.value.value === 0);
 
       await first.client.sync("increment", [key, 1]);
-      await secondListener.wait((e) => e.value.value === 1);
+      await firstListener.wait((e) => e.value.value === 1);
       await otherSocketListener.wait((e) => e.value.value === 1);
       expect(firstListener.record.events.length).toBe(2);
-      expect(secondListener.record.events.length).toBe(2);
       expect(otherSocketListener.record.events.length).toBe(2);
     } finally {
       first.client[Symbol.dispose]();
@@ -148,7 +146,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     }
   });
 
-  it("treats serialized topic unsubscription as identity-specific", async () => {
+  it("unsubscribes using separately serialized equivalent topics", async () => {
     const { client, socket } = await connect();
     try {
       const key1 = `unsub1-${crypto.randomUUID()}`;
@@ -170,12 +168,10 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       expect(await client.unsubscribe(topic1)).toBeUndefined();
       await client.sync("increment", [key1, 1]);
       await client.sync("increment", [key2, 5]);
-      await cb1.wait((e) => e.value.value === 1);
       await cb2.wait((e) => e.value.value === 5);
-      expect(cb1.record.events.length).toBe(3);
-      expect(cb2.record.events.length).toBe(3);
+      expect(cb1.record.events).toHaveLength(1);
+      expect(cb2.record.events).toHaveLength(3);
 
-      expect(await client.unsubscribe(topic1)).toBeUndefined();
       expect(await client.unsubscribe(topic2)).toBeUndefined();
       expect(await client.unsubscribe(unknownTopic)).toBeUndefined();
     } finally {
@@ -200,9 +196,8 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       await cb1.wait((e) => e.value.value === 0);
       expect(await first.client.unsubscribe(topic)).toBeUndefined();
       await first.client.sync("increment", [key, 4]);
-      await cb1.wait((e) => e.value.value === 4);
       await cb2.wait((e) => e.value.value === 4);
-      expect(cb1.record.events.length).toBe(2);
+      expect(cb1.record.events).toHaveLength(1);
 
       first.client[Symbol.dispose]();
       first.socket.close();

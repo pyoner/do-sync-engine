@@ -1,5 +1,5 @@
 import * as errore from "errore";
-import HashMap from "hashmap";
+import { HashMap } from "@tykowale/ts-hash-map";
 import {
   MissingSubscriptionIdError,
   MutationExecutionError,
@@ -215,7 +215,7 @@ export class SyncEngine<
       }
       return;
     }
-    for (const { key: registeredTopic, value } of this.registry) {
+    for (const [registeredTopic, value] of this.registry) {
       for (const [id, listener] of value) {
         yield { id, topic: registeredTopic, listener } as unknown as Readonly<
           Subscriptions<Id, Queries, ListenerProperties>

@@ -1,4 +1,4 @@
-import type { HashMap } from "hashmap";
+import type { HashMap } from "@tykowale/ts-hash-map";
 
 type Any = any; // oxlint-disable-line
 

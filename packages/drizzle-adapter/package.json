@@ -33,8 +33,5 @@
   },
   "peerDependencies": {
     "drizzle-orm": "catalog:"
-  },
-  "inlinedDependencies": {
-    "hashmap": "3.0.1"
   }
 }

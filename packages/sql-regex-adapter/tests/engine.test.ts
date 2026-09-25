@@ -34,7 +34,7 @@ class TestEngine<Queries extends QueryRecord, Mutations extends MutationRecord> 
   Mutations
 > {
   tests(input: Topic | ListenerEvent) {
-    if ("value" in input) return this.publish(input);
+    if ("value" in input) return this.publish(input as never);
     return this.query(input as Topics<Queries>);
   }
 }
