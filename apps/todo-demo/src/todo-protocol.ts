@@ -7,7 +7,7 @@ export type Todo = {
   completed: number;
   created_at: number;
 };
-export type TodoSummary = Pick<Todo, "id" | "title">;
+export type TodoSummary = Pick<Todo, "id" | "title" | "completed">;
 export type TodoQueries = {
   allTodos: Query<[], Todo[]>;
   incompleteTodos: Query<[], TodoSummary[]>;

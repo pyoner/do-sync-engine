@@ -126,11 +126,14 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       url: "ws://example.com/api/todos",
     });
     const allTopic: Topics<TodoQueries> = { name: "allTodos", params: [] };
+    const incompleteTopic: Topics<TodoQueries> = { name: "incompleteTodos", params: [] };
+    const completedTopic: Topics<TodoQueries> = { name: "completedTodos", params: [] };
+    const resultsKey = "todos";
     const syncedEvents: Array<{ key: string; value: unknown }> = [];
     client.store.on("synced", (event) => syncedEvents.push(event));
 
     try {
-      client.subscribe(allTopic, "allTodos");
+      client.subscribe(allTopic, resultsKey);
       await waitForContext(client.store, ({ status }) => status === "ready");
 
       const firstTitle = `store-${crypto.randomUUID()}`;
@@ -139,8 +142,8 @@ describe("TodoStore Capnweb WebSocket transport", () => {
         await waitForContext(
           client.store,
           ({ topics }) =>
-            Array.isArray(topics.allTodos) &&
-            topics.allTodos.some(
+            Array.isArray(topics[resultsKey]) &&
+            topics[resultsKey].some(
               (todo) =>
                 typeof todo === "object" &&
                 todo !== null &&
@@ -148,27 +151,71 @@ describe("TodoStore Capnweb WebSocket transport", () => {
                 todo.title === firstTitle,
             ),
         )
-      ).topics.allTodos as TodoSummary[];
-      expect(syncedEvents).toContainEqual({ type: "synced", key: "allTodos", value: updatedAll });
+      ).topics[resultsKey] as TodoSummary[];
+      expect(syncedEvents).toContainEqual({
+        type: "synced",
+        key: resultsKey,
+        value: updatedAll,
+      });
       const firstTodo = updatedAll.find((todo) => todo.title === firstTitle);
       expect(firstTodo).toBeDefined();
       if (firstTodo === undefined) throw new Error("Added todo was not returned");
 
-      expect(await client.sync("deleteTodo", [firstTodo.id])).toBeUndefined();
+      expect(await client.sync("toggleTodo", [firstTodo.id])).toBeUndefined();
       await waitForContext(
         client.store,
         ({ topics }) =>
-          Array.isArray(topics.allTodos) &&
-          !topics.allTodos.some(
+          Array.isArray(topics[resultsKey]) &&
+          topics[resultsKey].some(
+            (todo) =>
+              typeof todo === "object" &&
+              todo !== null &&
+              "id" in todo &&
+              todo.id === firstTodo.id &&
+              "completed" in todo &&
+              todo.completed === 1,
+          ),
+      );
+
+      client.subscribe(incompleteTopic, resultsKey);
+      await waitForContext(
+        client.store,
+        ({ topics }) =>
+          Array.isArray(topics[resultsKey]) &&
+          !topics[resultsKey].some(
             (todo) =>
               typeof todo === "object" && todo !== null && "id" in todo && todo.id === firstTodo.id,
           ),
       );
       client.unsubscribe(allTopic);
+
+      client.subscribe(completedTopic, resultsKey);
+      await waitForContext(
+        client.store,
+        ({ topics }) =>
+          Array.isArray(topics[resultsKey]) &&
+          topics[resultsKey].some(
+            (todo) =>
+              typeof todo === "object" && todo !== null && "id" in todo && todo.id === firstTodo.id,
+          ),
+      );
+      client.unsubscribe(incompleteTopic);
+
+      expect(await client.sync("deleteTodo", [firstTodo.id])).toBeUndefined();
+      await waitForContext(
+        client.store,
+        ({ topics }) =>
+          Array.isArray(topics[resultsKey]) &&
+          !topics[resultsKey].some(
+            (todo) =>
+              typeof todo === "object" && todo !== null && "id" in todo && todo.id === firstTodo.id,
+          ),
+      );
+      client.unsubscribe(completedTopic);
       expect(client.store.getSnapshot().context.status).toBe("disconnected");
       expect(await client.sync("deleteTodo", [firstTodo.id])).toBeInstanceOf(Error);
     } finally {
-      client.unsubscribe(allTopic);
+      client[Symbol.dispose]();
       socket.close();
       vi.unstubAllGlobals();
     }

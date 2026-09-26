@@ -14,8 +14,10 @@ const SCHEMA = `
 
 function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
   const allTodosSql = "SELECT id, title, completed, created_at FROM todos ORDER BY id";
-  const incompleteTodosSql = "SELECT id, title FROM todos WHERE completed = 0 ORDER BY id";
-  const completedTodosSql = "SELECT id, title FROM todos WHERE completed = 1 ORDER BY id";
+  const incompleteTodosSql =
+    "SELECT id, title, completed FROM todos WHERE completed = 0 ORDER BY id";
+  const completedTodosSql =
+    "SELECT id, title, completed FROM todos WHERE completed = 1 ORDER BY id";
 
   return {
     allTodos: {
@@ -31,16 +33,20 @@ function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
     incompleteTodos: {
       tables: storage.tables(incompleteTodosSql),
       run: () =>
-        storage
-          .query(incompleteTodosSql)
-          .map((row) => ({ id: Number(row.id), title: String(row.title) })),
+        storage.query(incompleteTodosSql).map((row) => ({
+          id: Number(row.id),
+          title: String(row.title),
+          completed: Number(row.completed),
+        })),
     },
     completedTodos: {
       tables: storage.tables(completedTodosSql),
       run: () =>
-        storage
-          .query(completedTodosSql)
-          .map((row) => ({ id: Number(row.id), title: String(row.title) })),
+        storage.query(completedTodosSql).map((row) => ({
+          id: Number(row.id),
+          title: String(row.title),
+          completed: Number(row.completed),
+        })),
     },
   };
 }

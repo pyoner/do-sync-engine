@@ -1,92 +1,84 @@
+<svelte:options runes={true} />
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createTodoAppState } from "./todo-app-state.svelte";
+  import { createTodoSync, filters } from "./todo-sync.svelte.ts";
 
-  const app = createTodoAppState();
-  const {
-    connect,
-    disconnect,
-    selectFilter,
-    addTodo,
-    toggleTodo,
-    deleteTodo,
-    clearCompleted,
-  } = app;
+  const todoSync = createTodoSync();
 
-  onMount(() => app[Symbol.dispose]);
+  onMount(() => () => todoSync.dispose());
 </script>
-
 <main>
   <h1>
-      <a href="/">
-      TODO Demo
-      </a>
+    <a href="/">TODO Demo</a>
   </h1>
   <p class="subtitle">Powered by <code>@do-sync-engine/core</code> + Cloudflare Durable Objects</p>
 
   <div class="connection-control">
     <button
       type="button"
-      onclick={app.connected ? disconnect : connect}
-      aria-label={app.connected ? "Disconnect WebSocket" : "Connect WebSocket"}
+      onclick={todoSync.status.current === "ready" ? todoSync.disconnect : todoSync.connect}
+      aria-label={todoSync.status.current === "ready" ? "Disconnect WebSocket" : "Connect WebSocket"}
+      disabled={todoSync.status.current === "connecting"}
     >
-      {app.connected ? "Disconnect" : "Connect"}
+      {todoSync.status.current === "ready" ? "Disconnect" : "Connect"}
     </button>
-    <p class="status" aria-live="polite">{app.connecting ? "Connecting" : app.connected ? "Connected" : "Disconnected"}</p>
+    <p class="status" aria-live="polite">
+      {todoSync.status.current === "connecting" ? "Connecting" : todoSync.status.current === "ready" ? "Connected" : "Disconnected"}
+    </p>
   </div>
 
-  {#if app.errorMessage}
-    <p class="status error">{app.errorMessage}</p>
+  {#if todoSync.error.current || todoSync.mutationError}
+    <p class="status error">{todoSync.error.current?.message ?? todoSync.mutationError}</p>
   {/if}
 
-  <form onsubmit={(e) => { e.preventDefault(); addTodo(); }}>
+  <form onsubmit={(event) => { event.preventDefault(); todoSync.addTodo(); }}>
     <input
       type="text"
-      bind:value={app.newTitle}
+      bind:value={todoSync.newTitle}
       placeholder="What needs doing?"
-      disabled={app.loading || !app.connected}
+      disabled={todoSync.pending || todoSync.status.current !== "ready"}
     />
-    <button type="submit" disabled={app.loading || !app.connected || !app.newTitle.trim()}>Add</button>
+    <button type="submit" disabled={todoSync.pending || todoSync.status.current !== "ready" || !todoSync.newTitle.trim()}>Add</button>
   </form>
 
   <div class="filters" role="group" aria-label="Todo filters">
-    {#each app.filters as filter}
+    {#each filters as filter}
       <button
         type="button"
-        class:active={app.selectedFilter.query === filter.query}
-        aria-pressed={app.selectedFilter.query === filter.query}
-        onclick={() => selectFilter(filter)}
-        disabled={!app.connected}
+        class:active={todoSync.selectedFilter === filter}
+        aria-pressed={todoSync.selectedFilter === filter}
+        onclick={() => todoSync.selectFilter(filter)}
+        disabled={todoSync.status.current !== "ready"}
       >
         {filter.label}
       </button>
     {/each}
   </div>
 
-  {#if app.filterLoading}
-    <p class="status" aria-live="polite">Loading {app.selectedFilter.label.toLowerCase()} todos…</p>
-  {:else if app.todos.length === 0}
+  {#if todoSync.status.current === "ready" && todoSync.items.current === undefined && todoSync.error.current === null}
+    <p class="status" aria-live="polite">Loading {todoSync.selectedFilter.label.toLowerCase()} todos…</p>
+  {:else if !todoSync.items.current?.length}
     <p class="empty">No todos yet. Add one above!</p>
   {:else}
     <ul class="todo-list">
-      {#each app.todos as todo (todo.id)}
+      {#each todoSync.items.current as todo (todo.id)}
         <li class:completed={todo.completed}>
           <label>
             <input
               type="checkbox"
               checked={!!todo.completed}
-              onchange={() => toggleTodo(todo.id)}
-              disabled={app.loading || !app.connected}
+              onchange={() => todoSync.toggleTodo(todo.id)}
+              disabled={todoSync.pending || todoSync.status.current !== "ready"}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => deleteTodo(todo.id)} disabled={app.loading || !app.connected}>×</button>
+          <button class="delete" onclick={() => todoSync.deleteTodo(todo.id)} disabled={todoSync.pending || todoSync.status.current !== "ready"}>×</button>
         </li>
       {/each}
     </ul>
 
-    {#if app.todos.some(t => t.completed)}
-      <button class="clear" onclick={clearCompleted} disabled={app.loading || !app.connected}>Clear completed</button>
+    {#if todoSync.items.current?.some((todo) => todo.completed)}
+      <button class="clear" onclick={todoSync.clearCompleted} disabled={todoSync.pending || todoSync.status.current !== "ready"}>Clear completed</button>
     {/if}
   {/if}
 
@@ -94,13 +86,13 @@
     <h2>Subscribed query</h2>
     <ul class="query-list">
       <li>
-        <code>{app.selectedFilter.query}</code>
-        <span class="row-count">({app.queryResult?.length ?? 0} rows)</span>
+        <code>{todoSync.selectedFilter.topic.name}</code>
+        <span class="row-count">({todoSync.items.current?.length ?? 0} rows)</span>
       </li>
     </ul>
     <details>
       <summary>Latest query result (JSON)</summary>
-      <pre>{JSON.stringify(app.queryResult, null, 2)}</pre>
+      <pre>{JSON.stringify(todoSync.items.current, null, 2)}</pre>
     </details>
   </div>
 </main>
