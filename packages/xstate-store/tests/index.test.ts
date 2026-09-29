@@ -237,4 +237,50 @@ describe("createSyncStore connection strategies", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("guards subscribe, unsubscribe, and sync events", () => {
+    const sockets = installFakeWebSocket();
+    const client = createSyncStore<Queries, Mutations>({
+      url: "ws://localhost",
+      strategy: new ManualConnectionStrategy(),
+    });
+    try {
+      expect(client.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(false);
+      expect(client.store.can.unsubscribe({ topic: countTopic })).toBe(false);
+      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(false);
+      expect(client.sync("increment", [])).toMatchObject({
+        message: "WebSocket RPC session is not ready",
+      });
+      expect(sockets).toHaveLength(0);
+
+      client.connect();
+      expect(client.store.getSnapshot().context.status).toBe("connecting");
+      expect(client.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(true);
+      expect(client.store.can.unsubscribe({ topic: countTopic })).toBe(true);
+      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(false);
+
+      sockets[0]?.dispatchEvent(new Event("open"));
+      expect(client.store.getSnapshot().context.status).toBe("ready");
+      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(true);
+    } finally {
+      client[Symbol.dispose]();
+      vi.unstubAllGlobals();
+    }
+
+    const strategySockets = installFakeWebSocket();
+    const subscriptionClient = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
+    try {
+      expect(subscriptionClient.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(
+        true,
+      );
+      subscriptionClient.store.trigger.subscribe({ topic: countTopic, key: "count" });
+      expect(strategySockets).toHaveLength(1);
+      expect(subscriptionClient.store.getSnapshot().context.status).toBe("connecting");
+      subscriptionClient.store.trigger.unsubscribe({ topic: countTopic });
+      expect(strategySockets[0]?.closed).toBe(true);
+      expect(subscriptionClient.store.getSnapshot().context.status).toBe("disconnected");
+    } finally {
+      subscriptionClient[Symbol.dispose]();
+      vi.unstubAllGlobals();
+    }
+  });
 });

@@ -25,35 +25,20 @@ export function createTodoSync() {
   );
   let selectedFilter = $state.raw<TodoFilter>(filters[0]!);
   let newTitle = $state("");
-  let pending = $state(false);
   let mutationError = $state<string | null>(null);
-  let mutationVersion = 0;
-
-  function resetMutation(): void {
-    mutationVersion++;
-    pending = false;
-    mutationError = null;
-  }
 
   function mutate<Name extends StringKey<TodoMutations>>(
     name: Name,
     params: OpParams<TodoMutations[Name]>,
     onSuccess?: () => void,
   ): void {
-    if (status.current !== "ready" || pending) return;
-    const version = mutationVersion;
-    pending = true;
-    mutationError = null;
-    void syncStore
-      .sync(name, params)
-      .then((result) => {
-        if (version !== mutationVersion) return;
-        if (result instanceof Error) mutationError = result.message;
-        else onSuccess?.();
-      })
-      .finally(() => {
-        if (version === mutationVersion) pending = false;
-      });
+    if (status.current !== "ready") return;
+    const result = syncStore.sync(name, params);
+    if (result instanceof Error) mutationError = result.message;
+    else {
+      mutationError = null;
+      onSuccess?.();
+    }
   }
 
   function addTodo(): void {
@@ -74,7 +59,7 @@ export function createTodoSync() {
   }
 
   const disconnectReset = syncStore.store.subscribe(({ context }) => {
-    if (context.status === "disconnected") resetMutation();
+    if (context.status === "disconnected") mutationError = null;
   });
 
   return {
@@ -89,9 +74,6 @@ export function createTodoSync() {
     },
     set newTitle(value: string) {
       newTitle = value;
-    },
-    get pending() {
-      return pending;
     },
     get mutationError() {
       return mutationError;

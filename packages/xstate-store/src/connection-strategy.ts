@@ -22,6 +22,9 @@ export abstract class ConnectionStrategy {
   }
 
   subscribed(): void {}
+  get connectsOnSubscribe(): boolean {
+    return false;
+  }
   unsubscribed(): void {}
   failed(): void {}
 
@@ -47,6 +50,9 @@ export class AppLifetimeConnectionStrategy extends ConnectionStrategy {
 export class SubscriptionOwnedConnectionStrategy extends ConnectionStrategy {
   protected count = 0;
 
+  override get connectsOnSubscribe(): boolean {
+    return true;
+  }
   override subscribed(): void {
     if (++this.count === 1) this.connectSocket();
   }

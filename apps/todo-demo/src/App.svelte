@@ -36,9 +36,9 @@
       type="text"
       bind:value={todoSync.newTitle}
       placeholder="What needs doing?"
-      disabled={todoSync.pending || todoSync.status.current !== "ready"}
+      disabled={todoSync.status.current !== "ready"}
     />
-    <button type="submit" disabled={todoSync.pending || todoSync.status.current !== "ready" || !todoSync.newTitle.trim()}>Add</button>
+    <button type="submit" disabled={todoSync.status.current !== "ready" || !todoSync.newTitle.trim()}>Add</button>
   </form>
 
   <div class="filters" role="group" aria-label="Todo filters">
@@ -68,17 +68,17 @@
               type="checkbox"
               checked={!!todo.completed}
               onchange={() => todoSync.toggleTodo(todo.id)}
-              disabled={todoSync.pending || todoSync.status.current !== "ready"}
+              disabled={todoSync.status.current !== "ready"}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => todoSync.deleteTodo(todo.id)} disabled={todoSync.pending || todoSync.status.current !== "ready"}>×</button>
+          <button class="delete" onclick={() => todoSync.deleteTodo(todo.id)} disabled={todoSync.status.current !== "ready"}>×</button>
         </li>
       {/each}
     </ul>
 
     {#if todoSync.items.current?.some((todo) => todo.completed)}
-      <button class="clear" onclick={todoSync.clearCompleted} disabled={todoSync.pending || todoSync.status.current !== "ready"}>Clear completed</button>
+      <button class="clear" onclick={todoSync.clearCompleted} disabled={todoSync.status.current !== "ready"}>Clear completed</button>
     {/if}
   {/if}
 

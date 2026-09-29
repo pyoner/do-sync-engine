@@ -36,6 +36,10 @@ type Session<Q extends QueryRecord, M extends MutationRecord> = {
   open: () => void;
   disposed: boolean;
 };
+type SyncRequest<M extends MutationRecord> = {
+  mutation: StringKey<M>;
+  params: OpParams<M[StringKey<M>]>;
+};
 type Events<Q extends QueryRecord, M extends MutationRecord> = {
   connecting: {};
   disconnected: {};
@@ -43,6 +47,9 @@ type Events<Q extends QueryRecord, M extends MutationRecord> = {
   closed: { session: Session<Q, M>; error: Error };
   synced: { session: Session<Q, M>; key: string; value: unknown };
   failed: { session: Session<Q, M> | undefined; error: Error | null };
+  subscribe: { topic: Topics<Q>; key: string };
+  unsubscribe: { topic: Topics<Q> };
+  sync: SyncRequest<M>;
 };
 type Emitted<Q extends QueryRecord> = {
   connecting: {};
@@ -52,6 +59,10 @@ type Emitted<Q extends QueryRecord> = {
   synced: { key: string; value: OpResult<Q[StringKey<Q>]> };
   failed: { error: Error };
 };
+
+const toError = (cause: unknown) =>
+  new Error(cause instanceof Error ? cause.message : String(cause), { cause });
+const notReady = () => new Error("WebSocket RPC session is not ready");
 
 export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>({
   url,
@@ -95,6 +106,44 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
         if (current !== session) return context;
         if (error !== null) enqueue.emit.failed({ error });
         return { ...context, error };
+      },
+      subscribe: (_context, { topic, key }, enqueue) => {
+        if (current === undefined && !strategy.connectsOnSubscribe) return;
+        enqueue.effect(() => {
+          strategy.subscribed();
+          const session = current;
+          if (session === undefined) return;
+          store.trigger.failed({ session, error: null });
+          subscribeRpc(session, topic, key);
+        });
+      },
+      unsubscribe: (_context, { topic }, enqueue) => {
+        if (current === undefined) return;
+        enqueue.effect(() => {
+          strategy.unsubscribed();
+          const session = current;
+          if (session === undefined) return;
+          enqueueRpc(session, async () => {
+            await session.ready;
+            if (current !== session || session.root === undefined) return;
+            const result = await session.root.unsubscribe(topic);
+            if (result instanceof Error) store.trigger.failed({ session, error: result });
+          });
+        });
+      },
+      sync: (context, { mutation, params }, enqueue) => {
+        const session = current;
+        const root = session?.root;
+        if (context.status !== "ready" || session === undefined || root === undefined) return;
+        enqueue.effect(() => {
+          void root
+            .sync(mutation as never, params as never)
+            .catch(toError)
+            .then((result) => {
+              if (current === session && result instanceof Error)
+                store.trigger.failed({ session, error: result });
+            });
+        });
       },
     },
   });
@@ -156,8 +205,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
   };
   const enqueueRpc = (session: ClientSession, run: () => Promise<void>) => {
     session.chain = session.chain.then(run).catch((cause: unknown) => {
-      const error = new Error(cause instanceof Error ? cause.message : String(cause), { cause });
-      store.trigger.failed({ session, error });
+      store.trigger.failed({ session, error: toError(cause) });
     });
   };
   const subscribeRpc = (session: ClientSession, topic: Topics<Q>, key: string) => {
@@ -173,48 +221,22 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
       if (result instanceof Error) store.trigger.failed({ session, error: result });
     });
   };
-  const subscribe = (topic: Topics<Q>, key: string): void | Error => {
-    strategy.subscribed();
-    const session = current;
-    if (session === undefined) return new Error("WebSocket RPC session is not ready");
-    store.trigger.failed({ session, error: null });
-    subscribeRpc(session, topic, key);
-  };
-  const unsubscribe = (topic: Topics<Q>) => {
-    strategy.unsubscribed();
-    const session = current;
-    if (session === undefined) return;
-    enqueueRpc(session, async () => {
-      await session.ready;
-      if (current !== session || session.root === undefined) return;
-      const result = await session.root.unsubscribe(topic);
-      if (result instanceof Error) store.trigger.failed({ session, error: result });
-    });
-  };
-  const sync = async <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
-    mutation: Name,
-    params: Params,
-  ): Promise<void | Error> => {
-    const session = current;
-    if (store.getSnapshot().context.status !== "ready" || session?.root === undefined) {
-      return new Error("WebSocket RPC session is not ready");
-    }
-    const result = await session.root
-      .sync(mutation as never, params as never)
-      .catch(
-        (cause: unknown) =>
-          new Error(cause instanceof Error ? cause.message : String(cause), { cause }),
-      );
-    if (current === session && result instanceof Error)
-      store.trigger.failed({ session, error: result });
-    return result;
-  };
 
   strategy.attach({ connect: connectSocket, disconnect: disconnectSocket });
   return {
-    subscribe,
-    unsubscribe,
-    sync,
+    subscribe: (topic: Topics<Q>, key: string): void | Error => {
+      store.trigger.subscribe({ topic, key });
+      if (current === undefined) return notReady();
+    },
+    unsubscribe: (topic: Topics<Q>): void => store.trigger.unsubscribe({ topic }),
+    sync: <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
+      mutation: Name,
+      params: Params,
+    ): void | Error => {
+      const request = { mutation, params } as SyncRequest<M>;
+      if (!store.can.sync(request)) return notReady();
+      store.trigger.sync(request);
+    },
     connect: () => strategy.connect(),
     disconnect: () => strategy.disconnect(),
     [Symbol.dispose]: () => strategy[Symbol.dispose](),
