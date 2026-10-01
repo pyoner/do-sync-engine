@@ -20,7 +20,7 @@
   const error = useSelector(syncStore.store, (state) => state.context.error);
   const items = useSelector(syncStore.store, (state) => state.context.topics[RESULTS_KEY]);
 
-  const selectedFilter = $state.raw<(typeof filters)[number]>(filters[0]);
+  let selectedFilter = $state.raw<(typeof filters)[number]>(filters[0]);
   let newTitle = $state("");
 
   // Subscribe whenever the socket is ready; re-runs on filter change and reconnect.

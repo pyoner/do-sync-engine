@@ -156,6 +156,11 @@ export default defineConfig({
         },
         plugins: ["typescript"],
       },
+      {
+        // The linter cannot see reassignments inside Svelte templates.
+        files: ["**/*.svelte"],
+        rules: { "prefer-const": "off" },
+      },
     ],
   },
   test: {
