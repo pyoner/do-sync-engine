@@ -63,8 +63,7 @@ vp run todo-demo#deploy
 
 ## Project layout
 
-- [`src/App.svelte`](./src/App.svelte) — Todo UI and layout.
-- [`src/todo-sync.svelte.ts`](./src/todo-sync.svelte.ts) — Sync-store selectors, UI state, filters, and actions.
+- [`src/App.svelte`](./src/App.svelte) — Todo UI, layout, and sync-store wiring.
 - [`src/main.ts`](./src/main.ts) — Client entry point.
 - [`src/worker/index.ts`](./src/worker/index.ts) — Worker fetch handler and Durable Object export.
 - [`src/worker/todo-store.ts`](./src/worker/todo-store.ts) — Durable Object todo state and mutations.

@@ -99,7 +99,7 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ["**/*.ts", "**/*.tsx"],
+        files: ["**/*.ts", "**/*.tsx", "**/*.svelte"],
         rules: {
           "constructor-super": "off",
           "getter-return": "off",

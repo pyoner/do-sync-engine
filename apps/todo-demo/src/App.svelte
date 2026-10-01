@@ -1,11 +1,42 @@
 <svelte:options runes={true} />
 <script lang="ts">
   import { onMount } from "svelte";
-  import { createTodoSync, filters } from "./todo-sync.svelte.ts";
+  import { useSelector } from "@xstate/store-svelte";
+  import type { Topics } from "@do-sync-engine/core";
+  import { createSyncStore } from "@do-sync-engine/xstate-store";
+  import { TODO_WS_PATH, type TodoMutations, type TodoQueries } from "./todo-protocol";
 
-  const todoSync = createTodoSync();
+  const RESULTS_KEY = "todos";
+  const filters = [
+    { label: "All", topic: { name: "allTodos", params: [] } },
+    { label: "Active", topic: { name: "incompleteTodos", params: [] } },
+    { label: "Completed", topic: { name: "completedTodos", params: [] } },
+  ] as const satisfies ReadonlyArray<{ label: string; topic: Topics<TodoQueries> }>;
 
-  onMount(() => () => todoSync.dispose());
+  const syncStore = createSyncStore<TodoQueries, TodoMutations>({
+    url: `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}${TODO_WS_PATH}`,
+  });
+  const status = useSelector(syncStore.store, (state) => state.context.status);
+  const error = useSelector(syncStore.store, (state) => state.context.error);
+  const items = useSelector(syncStore.store, (state) => state.context.topics[RESULTS_KEY]);
+
+  const selectedFilter = $state.raw<(typeof filters)[number]>(filters[0]);
+  let newTitle = $state("");
+
+  // Subscribe whenever the socket is ready; re-runs on filter change and reconnect.
+  $effect(() => {
+    if ($status !== "ready") return;
+    const topic = selectedFilter.topic;
+    syncStore.subscribe(topic, RESULTS_KEY);
+    return () => void syncStore.unsubscribe(topic, RESULTS_KEY);
+  });
+
+  onMount(() => () => syncStore[Symbol.dispose]());
+
+  function addTodo(): void {
+    const title = newTitle.trim();
+    if (title && syncStore.sync("addTodo", [title]) === undefined) newTitle = "";
+  }
 </script>
 <main>
   <h1>
@@ -16,69 +47,69 @@
   <div class="connection-control">
     <button
       type="button"
-      onclick={todoSync.status.current === "ready" ? todoSync.disconnect : todoSync.connect}
-      aria-label={todoSync.status.current === "ready" ? "Disconnect WebSocket" : "Connect WebSocket"}
-      disabled={todoSync.status.current === "connecting"}
+      onclick={$status === "ready" ? syncStore.disconnect : syncStore.connect}
+      aria-label={$status === "ready" ? "Disconnect WebSocket" : "Connect WebSocket"}
+      disabled={$status === "connecting"}
     >
-      {todoSync.status.current === "ready" ? "Disconnect" : "Connect"}
+      {$status === "ready" ? "Disconnect" : "Connect"}
     </button>
     <p class="status" aria-live="polite">
-      {todoSync.status.current === "connecting" ? "Connecting" : todoSync.status.current === "ready" ? "Connected" : "Disconnected"}
+      {$status === "connecting" ? "Connecting" : $status === "ready" ? "Connected" : "Disconnected"}
     </p>
   </div>
 
-  {#if todoSync.error.current || todoSync.mutationError}
-    <p class="status error">{todoSync.error.current?.message ?? todoSync.mutationError}</p>
+  {#if $error}
+    <p class="status error">{$error.message}</p>
   {/if}
 
-  <form onsubmit={(event) => { event.preventDefault(); todoSync.addTodo(); }}>
+  <form onsubmit={(event) => { event.preventDefault(); addTodo(); }}>
     <input
       type="text"
-      bind:value={todoSync.newTitle}
+      bind:value={newTitle}
       placeholder="What needs doing?"
-      disabled={todoSync.status.current !== "ready"}
+      disabled={$status !== "ready"}
     />
-    <button type="submit" disabled={todoSync.status.current !== "ready" || !todoSync.newTitle.trim()}>Add</button>
+    <button type="submit" disabled={$status !== "ready" || !newTitle.trim()}>Add</button>
   </form>
 
   <div class="filters" role="group" aria-label="Todo filters">
     {#each filters as filter}
       <button
         type="button"
-        class:active={todoSync.selectedFilter === filter}
-        aria-pressed={todoSync.selectedFilter === filter}
-        onclick={() => todoSync.selectFilter(filter)}
-        disabled={todoSync.status.current !== "ready"}
+        class:active={selectedFilter === filter}
+        aria-pressed={selectedFilter === filter}
+        onclick={() => (selectedFilter = filter)}
+        disabled={$status !== "ready"}
       >
         {filter.label}
       </button>
     {/each}
   </div>
 
-  {#if todoSync.status.current === "ready" && todoSync.items.current === undefined && todoSync.error.current === null}
-    <p class="status" aria-live="polite">Loading {todoSync.selectedFilter.label.toLowerCase()} todos…</p>
-  {:else if !todoSync.items.current?.length}
+  {#if $status === "ready" && $items === undefined && $error === null}
+    <p class="status" aria-live="polite">Loading {selectedFilter.label.toLowerCase()} todos…</p>
+  {:else if !$items?.length}
     <p class="empty">No todos yet. Add one above!</p>
   {:else}
     <ul class="todo-list">
-      {#each todoSync.items.current as todo (todo.id)}
+      {#each $items as todo (todo.id)}
         <li class:completed={todo.completed}>
           <label>
             <input
               type="checkbox"
               checked={!!todo.completed}
-              onchange={() => todoSync.toggleTodo(todo.id)}
-              disabled={todoSync.status.current !== "ready"}
+              onchange={() => syncStore.sync("toggleTodo", [todo.id])}
+              disabled={$status !== "ready"}
             />
             <span>{todo.title}</span>
           </label>
-          <button class="delete" onclick={() => todoSync.deleteTodo(todo.id)} disabled={todoSync.status.current !== "ready"}>×</button>
+          <button class="delete" onclick={() => syncStore.sync("deleteTodo", [todo.id])} disabled={$status !== "ready"}>×</button>
         </li>
       {/each}
     </ul>
 
-    {#if todoSync.items.current?.some((todo) => todo.completed)}
-      <button class="clear" onclick={todoSync.clearCompleted} disabled={todoSync.status.current !== "ready"}>Clear completed</button>
+    {#if $items?.some((todo) => todo.completed)}
+      <button class="clear" onclick={() => syncStore.sync("clearCompleted", [])} disabled={$status !== "ready"}>Clear completed</button>
     {/if}
   {/if}
 
@@ -86,13 +117,13 @@
     <h2>Subscribed query</h2>
     <ul class="query-list">
       <li>
-        <code>{todoSync.selectedFilter.topic.name}</code>
-        <span class="row-count">({todoSync.items.current?.length ?? 0} rows)</span>
+        <code>{selectedFilter.topic.name}</code>
+        <span class="row-count">({$items?.length ?? 0} rows)</span>
       </li>
     </ul>
     <details>
       <summary>Latest query result (JSON)</summary>
-      <pre>{JSON.stringify(todoSync.items.current, null, 2)}</pre>
+      <pre>{JSON.stringify($items, null, 2)}</pre>
     </details>
   </div>
 </main>
