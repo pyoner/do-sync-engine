@@ -66,7 +66,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
 }): SyncStore<Q, M> {
   // Live socket + its RPC stub. Commands only run in `ready`, where these are current.
   let socket: WebSocket | undefined;
-  let engine: RpcStub<Service<Q, M>> | undefined;
+  let engine: RpcStub<Service> | undefined;
 
   const logic = createStoreLogic<Context<Q>, Events<Q, M>, Emitted<Q>>({
     context: (): Context<Q> => ({ status: "idle", error: null, transport: null, topics: {} }),
@@ -148,7 +148,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
           const current = engine;
           if (current === undefined) return;
           void current
-            .sync(mutation as never, params as never)
+            .sync(mutation, params)
             .catch(toError)
             .then((result) => {
               if (engine === current && result instanceof Error) {
@@ -171,7 +171,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
       ws.addEventListener("open", () => {
         if (socket !== ws) return;
         try {
-          const current = newWebSocketRpcSession<Service<Q, M>>(ws);
+          const current = newWebSocketRpcSession<Service>(ws);
           engine = current;
           current.onRpcBroken((error) => fail(ws, error));
           store.trigger.opened({ transport: ws });
