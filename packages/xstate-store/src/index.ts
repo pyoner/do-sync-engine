@@ -45,19 +45,18 @@ export interface SyncStore<Q extends QueryRecord, M extends MutationRecord> {
   connect: () => void;
   disconnect: () => void;
   /** `key` defaults to `topic.name` and points at `store.context.topics[key]`. */
-  subscribe: (topic: Topics<Q>, key?: string) => Error | undefined;
-  unsubscribe: (topic: Topics<Q>, key?: string) => Error | undefined;
+  subscribe: (topic: Topics<Q>, key?: string) => void;
+  unsubscribe: (topic: Topics<Q>, key?: string) => void;
   sync: <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
     mutation: Name,
     params: Params,
-  ) => Error | undefined;
+  ) => void;
   store: Store<Context<Q>, Events<Q, M>, ExtractEvents<Emitted<Q>>>;
   [Symbol.dispose]: () => void;
 }
 
 const toError = (cause: unknown) =>
   new Error(cause instanceof Error ? cause.message : String(cause), { cause });
-const notReady = () => new Error("WebSocket RPC session is not ready");
 
 export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>({
   url,
@@ -196,27 +195,14 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
   return {
     connect: (): void => store.trigger.connect(),
     disconnect: (): void => store.trigger.disconnect(),
-    subscribe: (topic: Topics<Q>, key: string = topic.name) => {
-      const event = { topic, key };
-      if (!store.can.subscribe(event)) return notReady();
-      store.trigger.subscribe(event);
-      return undefined;
-    },
-    unsubscribe: (topic: Topics<Q>, key: string = topic.name) => {
-      const event = { topic, key };
-      if (!store.can.unsubscribe(event)) return notReady();
-      store.trigger.unsubscribe(event);
-      return undefined;
-    },
+    subscribe: (topic: Topics<Q>, key: string = topic.name) =>
+      store.trigger.subscribe({ topic, key }),
+    unsubscribe: (topic: Topics<Q>, key: string = topic.name) =>
+      store.trigger.unsubscribe({ topic, key }),
     sync: <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
       mutation: Name,
       params: Params,
-    ) => {
-      const event = { mutation, params } as SyncRequest<M>;
-      if (!store.can.sync(event)) return notReady();
-      store.trigger.sync(event);
-      return undefined;
-    },
+    ) => store.trigger.sync({ mutation, params } as SyncRequest<M>),
     store,
     [Symbol.dispose]: (): void => store.trigger.disconnect(),
   };

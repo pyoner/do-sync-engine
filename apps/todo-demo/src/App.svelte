@@ -35,7 +35,9 @@
 
   function addTodo(): void {
     const title = newTitle.trim();
-    if (title && syncStore.sync("addTodo", [title]) === undefined) newTitle = "";
+    if (!title) return;
+    syncStore.sync("addTodo", [title]);
+    newTitle = "";
   }
 </script>
 <main>

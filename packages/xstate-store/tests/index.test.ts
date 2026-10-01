@@ -67,8 +67,9 @@ describe("createSyncStore", () => {
     ];
 
     expect(can()).toEqual([false, false, false]);
-    expect(client.subscribe(countTopic)).toMatchObject({ message: expect.any(String) });
-    expect(client.sync("increment", [])).toBeInstanceOf(Error);
+    expect(client.subscribe(countTopic)).toBeUndefined();
+    expect(client.sync("increment", [])).toBeUndefined();
+    expect(client.store.getSnapshot().context).toMatchObject({ status: "idle", error: null });
 
     client.connect();
     expect(can()).toEqual([false, false, false]);

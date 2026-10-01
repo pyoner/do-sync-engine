@@ -138,7 +138,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       client.subscribe(allTopic, resultsKey);
       const firstTitle = `store-${crypto.randomUUID()}`;
       expect(client.store.can.sync({ mutation: "addTodo", params: [firstTitle] })).toBe(true);
-      expect(client.sync("addTodo", [firstTitle])).toBeUndefined();
+      client.sync("addTodo", [firstTitle]);
       const updatedAll = (
         await waitForContext(
           client.store,
@@ -162,7 +162,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       expect(firstTodo).toBeDefined();
       if (firstTodo === undefined) throw new Error("Added todo was not returned");
 
-      expect(client.sync("toggleTodo", [firstTodo.id])).toBeUndefined();
+      client.sync("toggleTodo", [firstTodo.id]);
       await waitForContext(
         client.store,
         ({ topics }) =>
@@ -202,7 +202,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       );
       client.unsubscribe(incompleteTopic);
 
-      expect(client.sync("deleteTodo", [firstTodo.id])).toBeUndefined();
+      client.sync("deleteTodo", [firstTodo.id]);
       await waitForContext(
         client.store,
         ({ topics }) =>
@@ -216,7 +216,6 @@ describe("TodoStore Capnweb WebSocket transport", () => {
       client.disconnect();
       expect(client.store.getSnapshot().context.status).toBe("disconnected");
       expect(client.store.can.sync({ mutation: "deleteTodo", params: [firstTodo.id] })).toBe(false);
-      expect(client.sync("deleteTodo", [firstTodo.id])).toBeInstanceOf(Error);
     } finally {
       client[Symbol.dispose]();
       socket.close();
