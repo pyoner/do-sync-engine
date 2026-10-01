@@ -31,7 +31,10 @@
     return () => void syncStore.unsubscribe(topic, RESULTS_KEY);
   });
 
-  onMount(() => () => syncStore[Symbol.dispose]());
+  onMount(() => {
+    syncStore.connect();
+    return () => syncStore[Symbol.dispose]();
+  });
 
   function addTodo(): void {
     const title = newTitle.trim();
