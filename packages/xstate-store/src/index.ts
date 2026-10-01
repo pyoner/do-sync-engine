@@ -1,4 +1,4 @@
-import { createStoreLogic } from "@xstate/store";
+import { createStoreLogic, type ExtractEvents, type Store } from "@xstate/store";
 import { RpcStub, newWebSocketRpcSession } from "capnweb";
 import type {
   MutationRecord,
@@ -9,46 +9,27 @@ import type {
   Topics,
 } from "@do-sync-engine/core";
 import type { Service } from "@do-sync-engine/durable-object-websocket";
-import {
-  SubscriptionOwnedConnectionStrategy,
-  type ConnectionStrategy,
-} from "./connection-strategy.ts";
-export {
-  AppLifetimeConnectionStrategy,
-  ConnectionStrategy,
-  IdleTimeoutConnectionStrategy,
-  ManualConnectionStrategy,
-  SubscriptionOwnedConnectionStrategy,
-  type ConnectionController,
-} from "./connection-strategy.ts";
 
-type Status = "connecting" | "ready" | "disconnected";
+type Status = "idle" | "connecting" | "ready" | "disconnected";
 type Context<Q extends QueryRecord> = {
   status: Status;
-  topics: Record<string, OpResult<Q[StringKey<Q>]> | undefined>;
   error: Error | null;
-};
-type Session<Q extends QueryRecord, M extends MutationRecord> = {
-  socket?: WebSocket;
-  root?: RpcStub<Service<Q, M>>;
-  chain: Promise<void>;
-  ready: Promise<void>;
-  open: () => void;
-  disposed: boolean;
+  transport: WebSocket | null;
+  topics: Record<string, OpResult<Q[StringKey<Q>]> | undefined>;
 };
 type SyncRequest<M extends MutationRecord> = {
   mutation: StringKey<M>;
   params: OpParams<M[StringKey<M>]>;
 };
 type Events<Q extends QueryRecord, M extends MutationRecord> = {
-  connecting: {};
-  disconnected: {};
-  opened: { session: Session<Q, M> };
-  closed: { session: Session<Q, M>; error: Error };
-  synced: { session: Session<Q, M>; key: string; value: unknown };
-  failed: { session: Session<Q, M> | undefined; error: Error | null };
+  connect: {};
+  disconnect: {};
+  opened: { transport: WebSocket };
+  closed: { error: Error };
+  failed: { error: Error };
+  synced: { key: string; value: unknown };
   subscribe: { topic: Topics<Q>; key: string };
-  unsubscribe: { topic: Topics<Q> };
+  unsubscribe: { topic: Topics<Q>; key: string };
   sync: SyncRequest<M>;
 };
 type Emitted<Q extends QueryRecord> = {
@@ -56,9 +37,23 @@ type Emitted<Q extends QueryRecord> = {
   disconnected: {};
   opened: {};
   closed: { error: Error };
-  synced: { key: string; value: OpResult<Q[StringKey<Q>]> };
   failed: { error: Error };
+  synced: { key: string; value: OpResult<Q[StringKey<Q>]> };
 };
+
+export interface SyncStore<Q extends QueryRecord, M extends MutationRecord> {
+  connect: () => void;
+  disconnect: () => void;
+  /** `key` defaults to `topic.name` and points at `store.context.topics[key]`. */
+  subscribe: (topic: Topics<Q>, key?: string) => Error | undefined;
+  unsubscribe: (topic: Topics<Q>, key?: string) => Error | undefined;
+  sync: <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
+    mutation: Name,
+    params: Params,
+  ) => Error | undefined;
+  store: Store<Context<Q>, Events<Q, M>, ExtractEvents<Emitted<Q>>>;
+  [Symbol.dispose]: () => void;
+}
 
 const toError = (cause: unknown) =>
   new Error(cause instanceof Error ? cause.message : String(cause), { cause });
@@ -66,82 +61,99 @@ const notReady = () => new Error("WebSocket RPC session is not ready");
 
 export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>({
   url,
-  strategy = new SubscriptionOwnedConnectionStrategy(),
 }: {
   url: string;
-  strategy?: ConnectionStrategy;
-}) {
-  type ClientSession = Session<Q, M>;
-  let current: ClientSession | undefined;
+}): SyncStore<Q, M> {
+  // Live socket + its RPC stub. Commands only run in `ready`, where these are current.
+  let socket: WebSocket | undefined;
+  let engine: RpcStub<Service<Q, M>> | undefined;
 
   const logic = createStoreLogic<Context<Q>, Events<Q, M>, Emitted<Q>>({
-    context: (): Context<Q> => ({ status: "disconnected", topics: {}, error: null }),
+    context: (): Context<Q> => ({ status: "idle", error: null, transport: null, topics: {} }),
     on: {
-      connecting: (context, _event, enqueue) => {
+      connect: (context, _event, enqueue) => {
+        if (context.status !== "idle" && context.status !== "disconnected") return;
         enqueue.emit.connecting();
+        enqueue.effect(open);
         return { ...context, status: "connecting", error: null };
       },
-      disconnected: (context, _event, enqueue) => {
-        if (context.status === "disconnected" && context.error === null) return context;
+      disconnect: (context, _event, enqueue) => {
+        if (context.status !== "connecting" && context.status !== "ready") return;
+        enqueue.effect(release);
         enqueue.emit.disconnected();
-        return { ...context, status: "disconnected", topics: {}, error: null };
+        return { ...context, status: "disconnected", transport: null, topics: {}, error: null };
       },
-      opened: (context, { session }, enqueue) => {
-        if (current !== session) return context;
+      opened: (context, { transport }, enqueue) => {
+        if (context.status !== "connecting") return;
         enqueue.emit.opened();
-        return { ...context, status: "ready" };
+        return { ...context, status: "ready", transport };
       },
-      closed: (context, { session, error }, enqueue) => {
-        if (current !== session) return context;
+      closed: (context, { error }, enqueue) => {
+        if (context.status !== "connecting" && context.status !== "ready") return;
+        enqueue.effect(release);
         enqueue.emit.closed({ error });
-        return { ...context, status: "disconnected", topics: {}, error };
+        return { ...context, status: "disconnected", transport: null, topics: {}, error };
       },
-      synced: (context, { session, key, value }, enqueue) => {
-        if (current !== session) return context;
+      failed: (context, { error }, enqueue) => {
+        if (context.status !== "ready") return;
+        enqueue.emit.failed({ error });
+        return { ...context, error };
+      },
+      synced: (context, { key, value }, enqueue) => {
+        if (context.status !== "ready") return;
         const result = value as OpResult<Q[StringKey<Q>]>;
         enqueue.emit.synced({ key, value: result });
         return { ...context, topics: { ...context.topics, [key]: result } };
       },
-      failed: (context, { session, error }, enqueue) => {
-        if (current !== session) return context;
-        if (error !== null) enqueue.emit.failed({ error });
-        return { ...context, error };
-      },
-      subscribe: (_context, { topic, key }, enqueue) => {
-        if (current === undefined && !strategy.connectsOnSubscribe) return;
+      subscribe: (context, { topic, key }, enqueue) => {
+        if (context.status !== "ready") return;
         enqueue.effect(() => {
-          strategy.subscribed();
-          const session = current;
-          if (session === undefined) return;
-          store.trigger.failed({ session, error: null });
-          subscribeRpc(session, topic, key);
-        });
-      },
-      unsubscribe: (_context, { topic }, enqueue) => {
-        if (current === undefined) return;
-        enqueue.effect(() => {
-          strategy.unsubscribed();
-          const session = current;
-          if (session === undefined) return;
-          enqueueRpc(session, async () => {
-            await session.ready;
-            if (current !== session || session.root === undefined) return;
-            const result = await session.root.unsubscribe(topic);
-            if (result instanceof Error) store.trigger.failed({ session, error: result });
+          const current = engine;
+          if (current === undefined) return;
+          const listener = new RpcStub((event: { value: unknown }) => {
+            if (engine === current) store.trigger.synced({ key, value: event.value });
           });
+          void current
+            .subscribe(topic, listener)
+            .catch(toError)
+            .finally(() => listener[Symbol.dispose]())
+            .then((result) => {
+              if (engine === current && result instanceof Error) {
+                store.trigger.failed({ error: result });
+              }
+            });
         });
+        return { ...context, error: null };
+      },
+      unsubscribe: (context, { topic, key }, enqueue) => {
+        if (context.status !== "ready") return;
+        enqueue.effect(() => {
+          const current = engine;
+          if (current === undefined) return;
+          void current
+            .unsubscribe(topic)
+            .catch(toError)
+            .then((result) => {
+              if (engine === current && result instanceof Error) {
+                store.trigger.failed({ error: result });
+              }
+            });
+        });
+        const { [key]: _removed, ...topics } = context.topics;
+        return { ...context, topics };
       },
       sync: (context, { mutation, params }, enqueue) => {
-        const session = current;
-        const root = session?.root;
-        if (context.status !== "ready" || session === undefined || root === undefined) return;
+        if (context.status !== "ready") return;
         enqueue.effect(() => {
-          void root
+          const current = engine;
+          if (current === undefined) return;
+          void current
             .sync(mutation as never, params as never)
             .catch(toError)
             .then((result) => {
-              if (current === session && result instanceof Error)
-                store.trigger.failed({ session, error: result });
+              if (engine === current && result instanceof Error) {
+                store.trigger.failed({ error: result });
+              }
             });
         });
       },
@@ -149,97 +161,63 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
   });
   const store = logic.createStore();
 
-  const connectSocket = () => {
-    if (store.getSnapshot().context.status !== "disconnected") return;
-    let open = () => {};
-    const ready = new Promise<void>((resolve) => {
-      open = resolve;
-    });
-    const session: ClientSession = { chain: Promise.resolve(), ready, open, disposed: false };
-    current = session;
-    store.trigger.connecting();
-    if (current !== session) return;
+  const fail = (ws: WebSocket, cause: unknown) => {
+    if (socket === ws) store.trigger.closed({ error: toError(cause) });
+  };
+  function open() {
     try {
-      const socket = new WebSocket(url);
-      session.socket = socket;
-      socket.addEventListener("open", () => {
-        if (current !== session) return;
+      const ws = new WebSocket(url);
+      socket = ws;
+      ws.addEventListener("open", () => {
+        if (socket !== ws) return;
         try {
-          session.root = newWebSocketRpcSession<Service<Q, M>>(socket);
-          session.root.onRpcBroken((error) => fail(session, error));
-          session.open();
-          store.trigger.opened({ session });
+          const current = newWebSocketRpcSession<Service<Q, M>>(ws);
+          engine = current;
+          current.onRpcBroken((error) => fail(ws, error));
+          store.trigger.opened({ transport: ws });
         } catch (cause) {
-          fail(session, cause instanceof Error ? cause : new Error(String(cause), { cause }));
+          fail(ws, cause);
         }
       });
-      socket.addEventListener("error", () =>
-        fail(session, new Error("WebSocket connection failed")),
-      );
-      socket.addEventListener("close", () =>
-        fail(session, new Error("WebSocket connection closed")),
-      );
+      ws.addEventListener("error", () => fail(ws, new Error("WebSocket connection failed")));
+      ws.addEventListener("close", () => fail(ws, new Error("WebSocket connection closed")));
     } catch (cause) {
-      fail(session, cause instanceof Error ? cause : new Error(String(cause), { cause }));
+      store.trigger.closed({ error: toError(cause) });
     }
-  };
-  const disconnectSocket = () => {
-    if (current !== undefined) disposeSession(current, true);
-    store.trigger.disconnected();
-  };
-  const disposeSession = (session: ClientSession, close: boolean) => {
-    if (session.disposed) return;
-    session.disposed = true;
-    if (current === session) current = undefined;
-    session.open();
-    session.root?.[Symbol.dispose]();
-    if (close && session.socket !== undefined && session.socket.readyState < WebSocket.CLOSING) {
-      session.socket.close();
-    }
-  };
-  const fail = (session: ClientSession, error: Error) => {
-    if (current !== session) return;
-    strategy.failed();
-    store.trigger.closed({ session, error });
-    disposeSession(session, true);
-  };
-  const enqueueRpc = (session: ClientSession, run: () => Promise<void>) => {
-    session.chain = session.chain.then(run).catch((cause: unknown) => {
-      store.trigger.failed({ session, error: toError(cause) });
-    });
-  };
-  const subscribeRpc = (session: ClientSession, topic: Topics<Q>, key: string) => {
-    enqueueRpc(session, async () => {
-      await session.ready;
-      if (current !== session || session.root === undefined) return;
-      const listener = new RpcStub((event: { value: unknown }) => {
-        if (current === session) store.trigger.synced({ session, key, value: event.value });
-      });
-      const result = await session.root
-        .subscribe(topic, listener)
-        .finally(() => listener[Symbol.dispose]());
-      if (result instanceof Error) store.trigger.failed({ session, error: result });
-    });
-  };
+  }
+  function release() {
+    const ws = socket;
+    socket = undefined;
+    engine?.[Symbol.dispose]();
+    engine = undefined;
+    if (ws !== undefined && ws.readyState < WebSocket.CLOSING) ws.close();
+  }
 
-  strategy.attach({ connect: connectSocket, disconnect: disconnectSocket });
   return {
-    subscribe: (topic: Topics<Q>, key: string): void | Error => {
-      store.trigger.subscribe({ topic, key });
-      if (current === undefined) return notReady();
+    connect: (): void => store.trigger.connect(),
+    disconnect: (): void => store.trigger.disconnect(),
+    subscribe: (topic: Topics<Q>, key: string = topic.name) => {
+      const event = { topic, key };
+      if (!store.can.subscribe(event)) return notReady();
+      store.trigger.subscribe(event);
+      return undefined;
     },
-    unsubscribe: (topic: Topics<Q>): void => store.trigger.unsubscribe({ topic }),
+    unsubscribe: (topic: Topics<Q>, key: string = topic.name) => {
+      const event = { topic, key };
+      if (!store.can.unsubscribe(event)) return notReady();
+      store.trigger.unsubscribe(event);
+      return undefined;
+    },
     sync: <Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
       mutation: Name,
       params: Params,
-    ): void | Error => {
-      const request = { mutation, params } as SyncRequest<M>;
-      if (!store.can.sync(request)) return notReady();
-      store.trigger.sync(request);
+    ) => {
+      const event = { mutation, params } as SyncRequest<M>;
+      if (!store.can.sync(event)) return notReady();
+      store.trigger.sync(event);
+      return undefined;
     },
-    connect: () => strategy.connect(),
-    disconnect: () => strategy.disconnect(),
-    [Symbol.dispose]: () => strategy[Symbol.dispose](),
     store,
+    [Symbol.dispose]: (): void => store.trigger.disconnect(),
   };
 }

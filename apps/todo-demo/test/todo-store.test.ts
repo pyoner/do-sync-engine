@@ -133,8 +133,9 @@ describe("TodoStore Capnweb WebSocket transport", () => {
     client.store.on("synced", (event) => syncedEvents.push(event));
 
     try {
-      client.subscribe(allTopic, resultsKey);
+      client.connect();
       await waitForContext(client.store, ({ status }) => status === "ready");
+      client.subscribe(allTopic, resultsKey);
       const firstTitle = `store-${crypto.randomUUID()}`;
       expect(client.store.can.sync({ mutation: "addTodo", params: [firstTitle] })).toBe(true);
       expect(client.sync("addTodo", [firstTitle])).toBeUndefined();
@@ -212,6 +213,7 @@ describe("TodoStore Capnweb WebSocket transport", () => {
           ),
       );
       client.unsubscribe(completedTopic);
+      client.disconnect();
       expect(client.store.getSnapshot().context.status).toBe("disconnected");
       expect(client.store.can.sync({ mutation: "deleteTodo", params: [firstTodo.id] })).toBe(false);
       expect(client.sync("deleteTodo", [firstTodo.id])).toBeInstanceOf(Error);

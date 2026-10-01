@@ -1,6 +1,6 @@
 import { useSelector } from "@xstate/store-svelte";
 import type { OpParams, StringKey, Topics } from "@do-sync-engine/core";
-import { createSyncStore, ManualConnectionStrategy } from "@do-sync-engine/xstate-store";
+import { createSyncStore } from "@do-sync-engine/xstate-store";
 import { fromStore } from "svelte/store";
 import { TODO_WS_PATH, type TodoMutations, type TodoQueries } from "./todo-protocol";
 
@@ -14,10 +14,7 @@ export type TodoFilter = (typeof filters)[number];
 
 export function createTodoSync() {
   const url = `${globalThis.location.protocol === "https:" ? "wss:" : "ws:"}//${globalThis.location.host}${TODO_WS_PATH}`;
-  const syncStore = createSyncStore<TodoQueries, TodoMutations>({
-    url,
-    strategy: new ManualConnectionStrategy(),
-  });
+  const syncStore = createSyncStore<TodoQueries, TodoMutations>({ url });
   const status = fromStore(useSelector(syncStore.store, (state) => state.context.status));
   const error = fromStore(useSelector(syncStore.store, (state) => state.context.error));
   const items = fromStore(
@@ -61,6 +58,10 @@ export function createTodoSync() {
   const disconnectReset = syncStore.store.subscribe(({ context }) => {
     if (context.status === "disconnected") mutationError = null;
   });
+  const subscribeOnOpen = syncStore.store.on("opened", () => {
+    const result = syncStore.subscribe(selectedFilter.topic, RESULTS_KEY);
+    if (result instanceof Error) mutationError = result.message;
+  });
 
   return {
     status,
@@ -78,19 +79,14 @@ export function createTodoSync() {
     get mutationError() {
       return mutationError;
     },
-    connect(): void {
-      if (status.current !== "disconnected") return;
-      syncStore.connect();
-      const result = syncStore.subscribe(selectedFilter.topic, RESULTS_KEY);
-      if (result instanceof Error) mutationError = result.message;
-    },
+    connect: syncStore.connect,
     selectFilter(filter: TodoFilter): void {
       if (filter === selectedFilter) return;
       const previous = selectedFilter;
       selectedFilter = filter;
       mutationError = null;
       if (status.current !== "ready") return;
-      syncStore.unsubscribe(previous.topic);
+      syncStore.unsubscribe(previous.topic, RESULTS_KEY);
       const result = syncStore.subscribe(filter.topic, RESULTS_KEY);
       if (result instanceof Error) mutationError = result.message;
     },
@@ -101,6 +97,7 @@ export function createTodoSync() {
     clearCompleted,
     dispose(): void {
       disconnectReset.unsubscribe();
+      subscribeOnOpen.unsubscribe();
       syncStore[Symbol.dispose]();
     },
   };

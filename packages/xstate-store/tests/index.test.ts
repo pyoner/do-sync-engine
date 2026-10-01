@@ -1,11 +1,6 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { Mutation, Query, Topics } from "@do-sync-engine/core";
-import {
-  AppLifetimeConnectionStrategy,
-  createSyncStore,
-  IdleTimeoutConnectionStrategy,
-  ManualConnectionStrategy,
-} from "../src/index.ts";
+import { createSyncStore } from "../src/index.ts";
 
 type Queries = { count: Query<[], number>; other: Query<[], number> };
 type Mutations = { increment: Mutation<[], void> };
@@ -17,270 +12,113 @@ function installFakeWebSocket() {
     readyState = 1;
     closed = false;
 
+    constructor() {
+      super();
+      sockets.push(this);
+    }
+
     close() {
       this.closed = true;
       this.readyState = 3;
     }
   }
   const sockets: FakeWebSocket[] = [];
-  class TrackedWebSocket extends FakeWebSocket {
-    constructor() {
-      super();
-      sockets.push(this);
-    }
-  }
-  vi.stubGlobal("WebSocket", TrackedWebSocket);
+  vi.stubGlobal("WebSocket", FakeWebSocket);
   return sockets;
 }
 
 const countTopic: Topics<Queries> = { name: "count", params: [] };
-const otherTopic: Topics<Queries> = { name: "other", params: [] };
+const status = (client: { store: { getSnapshot: () => { context: { status: string } } } }) =>
+  client.store.getSnapshot().context.status;
 
-describe("createSyncStore connection strategies", () => {
-  it("connects for subscriptions and disconnects after the last one", () => {
+afterEach(() => vi.unstubAllGlobals());
+
+describe("createSyncStore", () => {
+  it("walks idle -> connecting -> ready -> disconnected", () => {
     const sockets = installFakeWebSocket();
-    try {
-      const client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
-
-      expect(sockets).toHaveLength(0);
-      client.subscribe(countTopic, "count");
-      expect(client.store.getSnapshot().context.status).toBe("connecting");
-      expect(sockets).toHaveLength(1);
-
-      client.subscribe(otherTopic, "other");
-      client.subscribe(otherTopic, "other");
-      client.unsubscribe(countTopic);
-      expect(client.store.getSnapshot().context.status).toBe("connecting");
-      expect(sockets[0]?.closed).toBe(false);
-      client.unsubscribe(otherTopic);
-      expect(sockets[0]?.closed).toBe(false);
-      client.unsubscribe(otherTopic);
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets[0]?.closed).toBe(true);
-
-      client.subscribe(countTopic, "count");
-      sockets[1]?.dispatchEvent(new Event("error"));
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets[1]?.closed).toBe(true);
-      client.unsubscribe(countTopic);
-      client.subscribe(countTopic, "count");
-      expect(sockets).toHaveLength(3);
-      client.unsubscribe(countTopic);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("connects and disconnects only when explicitly requested", () => {
-    const sockets = installFakeWebSocket();
-    try {
-      const client = createSyncStore<Queries, Mutations>({
-        url: "ws://localhost",
-        strategy: new ManualConnectionStrategy(),
-      });
-
-      expect(sockets).toHaveLength(0);
-      expect(client.subscribe(countTopic, "count")).toMatchObject({
-        message: "WebSocket RPC session is not ready",
-      });
-      expect(sockets).toHaveLength(0);
-      client.connect();
-      expect(sockets).toHaveLength(1);
-      client.subscribe(countTopic, "count");
-      client.unsubscribe(countTopic);
-      expect(sockets[0]?.closed).toBe(false);
-      client.disconnect();
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets[0]?.closed).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("connects for the store lifetime and closes on disposal", () => {
-    const sockets = installFakeWebSocket();
-    try {
-      const client = createSyncStore<Queries, Mutations>({
-        url: "ws://localhost",
-        strategy: new AppLifetimeConnectionStrategy(),
-      });
-      expect(sockets).toHaveLength(1);
-      client.subscribe(countTopic, "count");
-      client.unsubscribe(countTopic);
-      expect(sockets[0]?.closed).toBe(false);
-      client[Symbol.dispose]();
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets[0]?.closed).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("holds the connection through the idle timeout and cancels it on resubscribe", () => {
-    vi.useFakeTimers();
-    const sockets = installFakeWebSocket();
-    try {
-      const client = createSyncStore<Queries, Mutations>({
-        url: "ws://localhost",
-        strategy: new IdleTimeoutConnectionStrategy(100),
-      });
-      client.subscribe(countTopic, "count");
-      client.unsubscribe(countTopic);
-      vi.advanceTimersByTime(50);
-      client.subscribe(countTopic, "count");
-      vi.advanceTimersByTime(100);
-      expect(sockets).toHaveLength(1);
-      expect(sockets[0]?.closed).toBe(false);
-
-      client.unsubscribe(countTopic);
-      vi.advanceTimersByTime(100);
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets[0]?.closed).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("clears the idle timer and detaches the controller on disposal", () => {
-    vi.useFakeTimers();
-    const sockets = installFakeWebSocket();
-    const strategy = new IdleTimeoutConnectionStrategy(100);
-    try {
-      const client = createSyncStore<Queries, Mutations>({
-        url: "ws://localhost",
-        strategy,
-      });
-      client.subscribe(countTopic, "count");
-      client.unsubscribe(countTopic);
-      client[Symbol.dispose]();
-      expect(vi.getTimerCount()).toBe(0);
-      client[Symbol.dispose]();
-      vi.advanceTimersByTime(100);
-      strategy.connect();
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(sockets).toHaveLength(1);
-      expect(sockets[0]?.closed).toBe(true);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("emits lifecycle events and ignores stale socket failures", () => {
-    const sockets = installFakeWebSocket();
-    const client = createSyncStore<Queries, Mutations>({
-      url: "ws://localhost",
-      strategy: new ManualConnectionStrategy(),
-    });
+    using client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
     const types: string[] = [];
-    const errors: Error[] = [];
     client.store.on("*", (event) => types.push(event.type));
+
+    expect(status(client)).toBe("idle");
+    expect(client.store.can.disconnect()).toBe(false);
+    client.connect();
+    expect(status(client)).toBe("connecting");
+    expect(client.store.can.connect()).toBe(false);
+
+    sockets[0]?.dispatchEvent(new Event("open"));
+    expect(status(client)).toBe("ready");
+    expect(client.store.getSnapshot().context.transport).toBe(sockets[0]);
+
+    client.disconnect();
+    expect(status(client)).toBe("disconnected");
+    expect(sockets[0]?.closed).toBe(true);
+    expect(client.store.getSnapshot().context.transport).toBeNull();
+    expect(types).toEqual(["connecting", "opened", "disconnected"]);
+  });
+
+  it("only allows subscribe, unsubscribe and sync when ready", () => {
+    const sockets = installFakeWebSocket();
+    using client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
+    const can = () => [
+      client.store.can.subscribe({ topic: countTopic, key: "count" }),
+      client.store.can.unsubscribe({ topic: countTopic, key: "count" }),
+      client.store.can.sync({ mutation: "increment", params: [] }),
+    ];
+
+    expect(can()).toEqual([false, false, false]);
+    expect(client.subscribe(countTopic)).toMatchObject({ message: expect.any(String) });
+    expect(client.sync("increment", [])).toBeInstanceOf(Error);
+
+    client.connect();
+    expect(can()).toEqual([false, false, false]);
+    sockets[0]?.dispatchEvent(new Event("open"));
+    expect(can()).toEqual([true, true, true]);
+
+    sockets[0]?.dispatchEvent(new Event("error"));
+    expect(can()).toEqual([false, false, false]);
+  });
+
+  it("fails the connection, clears topics, and ignores stale socket events", () => {
+    const sockets = installFakeWebSocket();
+    using client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
+    const errors: Error[] = [];
     client.store.on("closed", ({ error }) => errors.push(error));
-    try {
-      client.connect();
-      client.disconnect();
-      client.connect();
-      sockets[0]?.dispatchEvent(new Event("error"));
-      expect(types).toEqual(["connecting", "disconnected", "connecting"]);
 
-      sockets[1]?.dispatchEvent(new Event("error"));
-      expect(types).toEqual(["connecting", "disconnected", "connecting", "closed"]);
-      expect(errors[0]?.message).toBe("WebSocket connection failed");
-    } finally {
-      client[Symbol.dispose]();
-      vi.unstubAllGlobals();
-    }
+    client.connect();
+    client.disconnect();
+    client.connect();
+    sockets[0]?.dispatchEvent(new Event("error"));
+    expect(status(client)).toBe("connecting");
+    expect(errors).toHaveLength(0);
+
+    sockets[1]?.dispatchEvent(new Event("error"));
+    expect(status(client)).toBe("disconnected");
+    expect(errors[0]?.message).toBe("WebSocket connection failed");
+    expect(client.store.getSnapshot().context.error).toBe(errors[0]);
+    expect(sockets[1]?.closed).toBe(true);
+    expect(client.store.getSnapshot().context.topics).toEqual({});
   });
 
-  it("does not open a socket when a connecting listener disposes the store", () => {
+  it("closes the failed socket before a closed listener reconnects", () => {
     const sockets = installFakeWebSocket();
-    const client = createSyncStore<Queries, Mutations>({
-      url: "ws://localhost",
-      strategy: new ManualConnectionStrategy(),
-    });
-    const types: string[] = [];
-    client.store.on("connecting", () => {
-      types.push("connecting");
-      client[Symbol.dispose]();
-    });
-    client.store.on("disconnected", () => types.push("disconnected"));
-    try {
-      client.connect();
-      expect(sockets).toHaveLength(0);
-      expect(client.store.getSnapshot().context.status).toBe("disconnected");
-      expect(types).toEqual(["connecting", "disconnected"]);
-    } finally {
-      client[Symbol.dispose]();
-      vi.unstubAllGlobals();
-    }
-  });
-  it("closes a failed session when a closed listener reconnects", () => {
-    const sockets = installFakeWebSocket();
-    const client = createSyncStore<Queries, Mutations>({
-      url: "ws://localhost",
-      strategy: new ManualConnectionStrategy(),
-    });
+    using client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
     client.store.on("closed", () => client.connect());
-    try {
-      client.connect();
-      sockets[0]?.dispatchEvent(new Event("error"));
-      expect(sockets).toHaveLength(2);
-      expect(sockets[0]?.closed).toBe(true);
-      expect(sockets[1]?.closed).toBe(false);
-      expect(client.store.getSnapshot().context.status).toBe("connecting");
 
-      client.disconnect();
-      expect(sockets[1]?.closed).toBe(true);
-    } finally {
-      client[Symbol.dispose]();
-      vi.unstubAllGlobals();
-    }
+    client.connect();
+    sockets[0]?.dispatchEvent(new Event("error"));
+    expect(sockets).toHaveLength(2);
+    expect(sockets[0]?.closed).toBe(true);
+    expect(sockets[1]?.closed).toBe(false);
+    expect(status(client)).toBe("connecting");
   });
-  it("guards subscribe, unsubscribe, and sync events", () => {
+
+  it("disposal disconnects", () => {
     const sockets = installFakeWebSocket();
-    const client = createSyncStore<Queries, Mutations>({
-      url: "ws://localhost",
-      strategy: new ManualConnectionStrategy(),
-    });
-    try {
-      expect(client.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(false);
-      expect(client.store.can.unsubscribe({ topic: countTopic })).toBe(false);
-      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(false);
-      expect(client.sync("increment", [])).toMatchObject({
-        message: "WebSocket RPC session is not ready",
-      });
-      expect(sockets).toHaveLength(0);
-
-      client.connect();
-      expect(client.store.getSnapshot().context.status).toBe("connecting");
-      expect(client.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(true);
-      expect(client.store.can.unsubscribe({ topic: countTopic })).toBe(true);
-      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(false);
-
-      sockets[0]?.dispatchEvent(new Event("open"));
-      expect(client.store.getSnapshot().context.status).toBe("ready");
-      expect(client.store.can.sync({ mutation: "increment", params: [] })).toBe(true);
-    } finally {
-      client[Symbol.dispose]();
-      vi.unstubAllGlobals();
-    }
-
-    const strategySockets = installFakeWebSocket();
-    const subscriptionClient = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
-    try {
-      expect(subscriptionClient.store.can.subscribe({ topic: countTopic, key: "count" })).toBe(
-        true,
-      );
-      subscriptionClient.store.trigger.subscribe({ topic: countTopic, key: "count" });
-      expect(strategySockets).toHaveLength(1);
-      expect(subscriptionClient.store.getSnapshot().context.status).toBe("connecting");
-      subscriptionClient.store.trigger.unsubscribe({ topic: countTopic });
-      expect(strategySockets[0]?.closed).toBe(true);
-      expect(subscriptionClient.store.getSnapshot().context.status).toBe("disconnected");
-    } finally {
-      subscriptionClient[Symbol.dispose]();
-      vi.unstubAllGlobals();
-    }
+    const client = createSyncStore<Queries, Mutations>({ url: "ws://localhost" });
+    client.connect();
+    client[Symbol.dispose]();
+    expect(sockets[0]?.closed).toBe(true);
+    expect(status(client)).toBe("disconnected");
   });
 });
