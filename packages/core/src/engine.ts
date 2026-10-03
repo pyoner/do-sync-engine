@@ -1,5 +1,6 @@
 import * as errore from "errore";
 import { HashMap } from "@tykowale/ts-hash-map";
+import { hash } from "ohash";
 import {
   MissingSubscriptionIdError,
   MutationExecutionError,
@@ -9,6 +10,7 @@ import {
 } from "./errors";
 import { assertKnownQuery, createTopic } from "./helpers";
 import type {
+  Delivery,
   Listener,
   ListenerEvent,
   MutationRecord,
@@ -46,6 +48,8 @@ export class SyncEngine<
     Id,
     Listener<ListenerEvents<Queries>, ListenerProperties>
   > = new HashMap();
+  private readonly delivery: Delivery<Listener<ListenerEvents<Queries>, ListenerProperties>> =
+    new WeakMap();
 
   constructor(options: SyncEngineOptions<Id, Queries, Mutations, ListenerProperties>) {
     this.createId = options.createId;
@@ -109,11 +113,11 @@ export class SyncEngine<
         this.registry.set(topic, created);
         return created;
       })();
-    registeredListeners.set(
-      listenerId,
-      listener as Listener<ListenerEvents<Queries>, ListenerProperties>,
-    );
-    listener({ topic, value });
+    const registered = listener as Listener<ListenerEvents<Queries>, ListenerProperties>;
+    registeredListeners.set(listenerId, registered);
+    const event = { topic, value };
+    this.delivery.set(registered, hash(event));
+    listener(event);
     return listenerId;
   }
 
@@ -186,10 +190,14 @@ export class SyncEngine<
   protected publish<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     event: ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
   ): void {
-    const registeredEvent = event;
-    const listeners = this.registry.get(registeredEvent.topic);
+    const listeners = this.registry.get(event.topic);
     if (listeners === undefined) return;
-    for (const listener of listeners.values()) void listener(registeredEvent);
+    const eventHash = hash(event);
+    for (const listener of listeners.values()) {
+      if (this.delivery.get(listener) === eventHash) continue;
+      this.delivery.set(listener, eventHash);
+      void listener(event);
+    }
   }
 
   subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>;

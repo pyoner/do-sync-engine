@@ -123,10 +123,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   };
   expectOk(engine.subscribe(topic, listener));
   expectOk(engine.sync("noop", []));
-  expect(events).toEqual([
-    { topic, value: [1, 2, 3] },
-    { topic, value: [1, 2, 3] },
-  ]);
+  expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
     // @ts-expect-error — unknown topic names are rejected
@@ -149,6 +146,43 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     // @ts-expect-error — ListenerEvent properties are readonly
     event.value = [];
   }
+});
+
+test("delivers each listener only events it has not already received", () => {
+  let rows = ["a"];
+  const queries = {
+    rows: {
+      tables: toTables(["rows"]),
+      run: () => [...rows],
+    } satisfies Query<[], string[]>,
+  };
+  const mutations = {
+    set: {
+      tables: toTables(["rows"]),
+      run: (next: string[]) => {
+        rows = next;
+      },
+    } satisfies Mutation<[string[]], void>,
+  };
+  const engine = new SyncEngine<string, typeof queries, typeof mutations>({ queries, mutations });
+  const topic = expectOk(engine.createTopic("rows", []));
+  const first: string[][] = [];
+  const late: string[][] = [];
+
+  expectOk(engine.subscribe(topic, ({ value }) => first.push(value), "first"));
+  expectOk(engine.sync("set", [["a"]]));
+  expect(first).toEqual([["a"]]);
+
+  expectOk(engine.sync("set", [["b"]]));
+  const lateListener = ({ value }: ListenerEvent<Topic<"rows", []>, string[]>) => late.push(value);
+  expectOk(engine.subscribe(topic, lateListener, "late"));
+  expectOk(engine.sync("set", [["b"]]));
+  expectOk(engine.sync("set", [["a"]]));
+  expect(first).toEqual([["a"], ["b"], ["a"]]);
+  expect(late).toEqual([["b"], ["a"]]);
+
+  expectOk(engine.subscribe(topic, lateListener, "late"));
+  expect(late).toEqual([["b"], ["a"], ["a"]]);
 });
 test("typed createTopic params and listener handle", async () => {
   const queries = {
@@ -181,17 +215,21 @@ test("typed createTopic params and listener handle", async () => {
 });
 
 test("uses structural topic equality for listener registration", () => {
+  let offset = 0;
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
       run: (filter: { page: { current: number; total: number }; search: string }) =>
-        filter.page.current + filter.page.total,
+        filter.page.current + filter.page.total + offset,
     } satisfies Query<[{ page: { current: number; total: number }; search: string }], number>,
   };
   const mutations = {
     noop: {
       tables: toTables(["numbers"]),
-      run: () => ({}),
+      run: () => {
+        offset++;
+        return {};
+      },
     } satisfies Mutation<[], Record<string, never>>,
   };
   const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
@@ -219,35 +257,36 @@ test("uses structural topic equality for listener registration", () => {
   expect([...engine.subscriptions(distinctTopic)]).toEqual([]);
 
   engine.sync("noop", []);
-  expect(firstEvents).toEqual([3, 3]);
-  expect(secondEvents).toEqual([3, 3]);
+  expect(firstEvents).toEqual([3, 4]);
+  expect(secondEvents).toEqual([3, 4]);
 
   engine.unsubscribe(distinctTopic, firstListener);
   expect([...engine.subscriptions(firstTopic)]).toHaveLength(2);
   engine.unsubscribe(equivalentTopic, firstListener);
   expect([...engine.subscriptions(firstTopic)].map(({ id }) => id)).toEqual([secondId]);
   engine.sync("noop", []);
-  expect(firstEvents).toEqual([3, 3]);
-  expect(secondEvents).toEqual([3, 3, 3]);
+  expect(firstEvents).toEqual([3, 4]);
+  expect(secondEvents).toEqual([3, 4, 5]);
 
   engine.unsubscribe(firstTopic, secondListener);
   expect([...engine.subscriptions()]).toEqual([]);
 });
 
 test("supports explicit IDs and every unsubscribe form", () => {
+  let n = 0;
   const queries = {
-    value: { tables: toTables(["value"]), run: () => 1 } satisfies Query<[], number>,
+    value: { tables: toTables(["value"]), run: () => n } satisfies Query<[], number>,
   };
   const engine = new SyncEngine({
     queries,
-    mutations: { noop: { tables: toTables(["value"]), run: () => null } },
+    mutations: { noop: { tables: toTables(["value"]), run: () => void n++ } },
   });
   const topic = expectOk(engine.createTopic("value", []));
   const isolatedTopic = expectOk(engine.createTopic("value", []));
   const first: number[] = [];
   const second: number[] = [];
-  const firstListener: Listener = () => first.push(1);
-  const secondListener: Listener = () => second.push(1);
+  const firstListener: Listener = ({ value }) => first.push(value);
+  const secondListener: Listener = ({ value }) => second.push(value);
 
   expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
   expect(engine.subscribe(topic, secondListener, "second")).toBe("second");
@@ -261,12 +300,13 @@ test("supports explicit IDs and every unsubscribe form", () => {
   expect(engine.subscribe(isolatedTopic, () => {}, "isolated")).toBe("isolated");
   engine.unsubscribe("isolated");
   engine.sync("noop", []);
-  expect(first).toEqual([1, 1, 1]);
-  expect(second).toEqual([1, 1, 1, 1]);
+  expect(first).toEqual([0, 1, 2]);
+  expect(second).toEqual([0, 1, 2, 3]);
 });
 
 test("preserves an explicit listener when replacement query fails", () => {
   let shouldFail = false;
+  let n = 0;
   const originalEvents: number[] = [];
   const replacementEvents: number[] = [];
   type ListenerProperties = { source: string };
@@ -275,11 +315,11 @@ test("preserves an explicit listener when replacement query fails", () => {
       tables: toTables(["value"]),
       run: () => {
         if (shouldFail) throw new Error("query failed");
-        return 1;
+        return n;
       },
     },
   };
-  const mutations = { touch: { tables: toTables(["value"]), run: () => undefined } };
+  const mutations = { touch: { tables: toTables(["value"]), run: () => void n++ } };
   const engine = new SyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
     queries,
     mutations,

@@ -75,6 +75,12 @@ export type Registry<
   L extends Listener<ListenerEvents<Q>> = Listener<ListenerEvents<Q>>,
 > = HashMap<Topics<Q>, Map<Id, L>>;
 
+/** `hash(event)` from `ohash` of the last event delivered to a listener. */
+export type EventHash = string;
+
+/** Last event delivered to each listener; one slot per listener object. */
+export type Delivery<L extends object = Listener> = WeakMap<L, EventHash>;
+
 export type Subscription<
   Id,
   T extends Topic<string, BaseParams>,

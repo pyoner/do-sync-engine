@@ -40,7 +40,8 @@
   },
   "dependencies": {
     "@tykowale/ts-hash-map": "catalog:",
-    "errore": "catalog:"
+    "errore": "catalog:",
+    "ohash": "catalog:"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

@@ -33,6 +33,7 @@ const listener = ({ topic, value }) => {
 engine.subscribe(topic, listener);
 
 // Sync runs the mutation and publishes results for subscribed topics whose tables overlap.
+// Listeners only receive events that differ from the last one delivered to them.
 engine.sync("addTodo", ["Buy milk"]);
 
 // Unsubscribe one listener without removing the topic binding.
@@ -40,6 +41,10 @@ engine.unsubscribe(topic, listener);
 ```
 
 A `Topic` contains the query `name` and `params`. Topic inputs are cloned when the topic is created, so later caller mutation cannot change the query inputs. Structurally equivalent topic objects share listeners, including across serialization boundaries; subscribing with a different topic object with equivalent parameters addresses the same subscription.
+
+Delivery is deduplicated per listener object: the engine stores `hash(event)` (from [`ohash`](https://github.com/unjs/ohash)) of the last event sent to each listener in a `WeakMap`, and `sync` skips listeners whose last event hashes equal to the new one. `subscribe` always delivers the current value and records it, so the next unchanged `sync` is not re-sent. Entries disappear when the listener is garbage-collected.
+
+For full deduplication, use one listener object per topic: a listener subscribed to several topics keeps a single hash, so alternating topics can cause re-sends (never missed updates). The same listener subscribed twice to one topic under different IDs receives each event once.
 
 ## Development
 

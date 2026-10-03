@@ -21,6 +21,7 @@ catalog:
   capnweb: ^0.12.0
   "@xstate/store-svelte": ^2.0.0
   "@tykowale/ts-hash-map": ^1.2.0
+  ohash: ^2.0.12
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
