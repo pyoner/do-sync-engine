@@ -220,9 +220,6 @@ catalogs:
     effect:
       specifier: ^4.0.0
       version: 4.0.0
-    errore:
-      specifier: ^0.14.1
-      version: 0.14.1
     ohash:
       specifier: ^2.0.12
       version: 2.0.12
@@ -348,9 +345,6 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0
-      errore:
-        specifier: 'catalog:'
-        version: 0.14.1
     devDependencies:
       '@types/node':
         specifier: ^26.1.1
@@ -407,9 +401,6 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.0
-      errore:
-        specifier: 'catalog:'
-        version: 0.14.1
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: latest
@@ -2429,10 +2420,6 @@ packages:
   error-stack-parser-es@1.0.5:
     resolution: {integrity: sha512-5qucVt2XcuGMcEGgWI7i+yZpmpByQ8J1lHhcL7PwqCwu9FPP3VUXzT4ltHe5i2z9dePwEHcDVOAfSnHsOlCXRA==}
 
-  errore@0.14.1:
-    resolution: {integrity: sha512-YCRAEH21ChhJYlzJkZJqfn5pwOB9B9HL5hROdTSm8KEQMiVUOiipJftwwBpfhwQsCAdVEvqAwsBeUBZQZ+ePTg==}
-    hasBin: true
-
   es-module-lexer@2.1.0:
     resolution: {integrity: sha512-n27zTYMjYu1aj4MjCWzSP7G9r75utsaoc8m61weK+W8JMBGGQybd43GstCXZ3WNmSFtGT9wi59qQTW6mhTR5LQ==}
 
@@ -4380,8 +4367,6 @@ snapshots:
   effect@4.0.0: {}
 
   error-stack-parser-es@1.0.5: {}
-
-  errore@0.14.1: {}
 
   es-module-lexer@2.1.0: {}
 

@@ -6,11 +6,6 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { Effect } from "effect";
 import { DrizzleAdapterError, adapter } from "../src/index.ts";
 
-function expectOk<T>(value: T): Exclude<T, Error> {
-  if (value instanceof Error) throw value;
-  return value as Exclude<T, Error>;
-}
-
 const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -32,7 +27,7 @@ describe("Drizzle SQLite adapter", () => {
   test("adapts and runs a real select builder", () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const query = expectOk(adapter(db.select().from(users).where(eq(users.name, "Ada"))));
+    const query = Effect.runSync(adapter(db.select().from(users).where(eq(users.name, "Ada"))));
 
     expect(query.tables).toEqual(new Set(["users"]));
     const result = Effect.runSync(query.run());
@@ -42,7 +37,9 @@ describe("Drizzle SQLite adapter", () => {
 
   test("adapts and runs a real insert builder", () => {
     const db = database();
-    const mutation = expectOk(adapter(db.insert(users).values({ name: sql.placeholder("name") })));
+    const mutation = Effect.runSync(
+      adapter(db.insert(users).values({ name: sql.placeholder("name") })),
+    );
 
     expect(mutation.tables).toEqual(new Set(["users"]));
     expect(Effect.runSync(mutation.run({ name: "Ada" })).changes).toBe(1);
@@ -52,7 +49,7 @@ describe("Drizzle SQLite adapter", () => {
   test("adapts and runs a real update builder", () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const mutation = expectOk(
+    const mutation = Effect.runSync(
       adapter(db.update(users).set({ name: "Grace" }).where(eq(users.id, 1))),
     );
     expect(mutation.tables).toEqual(new Set(["users"]));
@@ -63,7 +60,7 @@ describe("Drizzle SQLite adapter", () => {
   test("adapts and runs a real delete builder", () => {
     const db = database();
     db.insert(users).values({ name: "Ada" }).run();
-    const mutation = expectOk(adapter(db.delete(users).where(eq(users.id, 1))));
+    const mutation = Effect.runSync(adapter(db.delete(users).where(eq(users.id, 1))));
 
     expect(mutation.tables).toEqual(new Set(["users"]));
     expect(Effect.runSync(mutation.run()).changes).toBe(1);
@@ -83,7 +80,17 @@ describe("Drizzle SQLite adapter", () => {
         }),
       }),
     };
-    const query = expectOk(adapter(failingBuilder));
+    const query = Effect.runSync(adapter(failingBuilder));
     expect(Effect.runSync(Effect.flip(query.run()))).toBeInstanceOf(DrizzleAdapterError);
+  });
+
+  test("fails with DrizzleAdapterError for asynchronous builders", () => {
+    const asyncBuilder = {
+      _: { tableName: "users", result: [] as Array<{ id: number }> },
+      prepare: () => ({ resultKind: "async" as const }),
+    };
+    const error = Effect.runSync(Effect.flip(adapter(asyncBuilder)));
+    expect(error).toBeInstanceOf(DrizzleAdapterError);
+    expect(error.message).toBe("adapter() requires a synchronous Drizzle SQLite builder");
   });
 });

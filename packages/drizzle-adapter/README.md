@@ -6,24 +6,21 @@ Use [Drizzle ORM](https://orm.drizzle.team) SQLite queries and mutations with `@
 
 ```ts
 import { adapter } from "@do-sync-engine/drizzle-adapter";
+import { makeSyncEngine } from "@do-sync-engine/core";
+import { Effect } from "effect";
 import { eq } from "drizzle-orm";
 
 // Works with synchronous Drizzle SQLite builders (e.g. Durable Object SQLite, node:sqlite).
-const allTodos = adapter(db.select().from(todos));
-const addTodo = adapter(db.insert(todos).values({ title: "Buy milk" }));
-if (allTodos instanceof Error) throw allTodos;
-if (addTodo instanceof Error) throw addTodo;
+const program = Effect.gen(function* () {
+  const allTodos = yield* adapter(db.select().from(todos));
+  const addTodo = yield* adapter(db.insert(todos).values({ title: "Buy milk" }));
 
-// Pass them to makeSyncEngine like any other query or mutation.
-const engine = Effect.runSync(
-  makeSyncEngine({
-    queries: { allTodos },
-    mutations: { addTodo },
-  }),
-);
+  // Pass them to makeSyncEngine like any other query or mutation.
+  return yield* makeSyncEngine({ queries: { allTodos }, mutations: { addTodo } });
+});
 ```
 
-`run` returns an `Effect` that fails with `DrizzleAdapterError` when execution throws. Both calls return a `DrizzleAdapterError` instead of throwing when the builder is asynchronous or its tables cannot be read.
+`adapter()` returns an `Effect` that fails with `DrizzleAdapterError` (a `Schema.TaggedError`) when the builder is asynchronous or its tables cannot be read. The query or mutation's `run` returns an `Effect` that fails with the same error when execution throws.
 
 ## Development
 

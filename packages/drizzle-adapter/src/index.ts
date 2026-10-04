@@ -1,5 +1,4 @@
-import { Effect } from "effect";
-import * as errore from "errore";
+import { Effect, Schema } from "effect";
 import { toTables } from "@do-sync-engine/core";
 import type { BaseParams, Mutation, Query } from "@do-sync-engine/core";
 
@@ -17,52 +16,59 @@ type PreparedInternals = {
   execute(...params: unknown[]): { sync(): unknown };
 };
 
-export class DrizzleAdapterError extends errore.createTaggedError({
-  name: "DrizzleAdapterError",
-  message: "$reason",
-}) {}
+export class DrizzleAdapterError extends Schema.TaggedError<DrizzleAdapterError>()(
+  "DrizzleAdapterError",
+  {
+    reason: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  },
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+type AdapterResult<Operation> = Effect.Effect<Operation, DrizzleAdapterError>;
 
 export function adapter<Builder extends SelectBuilder>(
   builder: Builder,
-):
-  | Query<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder>, DrizzleAdapterError>
-  | DrizzleAdapterError;
+): AdapterResult<
+  Query<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder>, DrizzleAdapterError>
+>;
 export function adapter<Builder extends MutationBuilder>(
   builder: Builder,
-):
-  | Mutation<
-      PreparedExecuteParams<Builder> & BaseParams,
-      ExecuteResult<Builder>,
-      DrizzleAdapterError
-    >
-  | DrizzleAdapterError;
+): AdapterResult<
+  Mutation<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder>, DrizzleAdapterError>
+>;
 export function adapter(builder: { prepare(): unknown }) {
-  const prepared = errore.try({
-    try: () => builder.prepare() as PreparedInternals,
-    catch: (cause) =>
-      new DrizzleAdapterError({
-        reason: "adapter() could not prepare Drizzle SQLite builder",
-        cause,
-      }),
-  });
-  if (prepared instanceof Error) return prepared;
-  if (prepared.resultKind !== "sync")
-    return new DrizzleAdapterError({
-      reason: "adapter() requires a synchronous Drizzle SQLite builder",
+  return Effect.gen(function* () {
+    const prepared = yield* Effect.try({
+      try: () => builder.prepare() as PreparedInternals,
+      catch: (cause) =>
+        new DrizzleAdapterError({
+          reason: "adapter() could not prepare Drizzle SQLite builder",
+          cause,
+        }),
     });
-  const tables = prepared.queryMetadata?.tables;
-  if (
-    !Array.isArray(tables) ||
-    !tables.every((table): table is string => typeof table === "string")
-  )
-    return new DrizzleAdapterError({ reason: "adapter() could not read Drizzle table metadata" });
-  return {
-    tables: toTables(tables),
-    run(...params: unknown[]) {
-      return Effect.try({
-        try: () => prepared.execute(...params).sync(),
-        catch: (cause) => new DrizzleAdapterError({ reason: "Drizzle execution failed", cause }),
+    if (prepared.resultKind !== "sync")
+      return yield* new DrizzleAdapterError({
+        reason: "adapter() requires a synchronous Drizzle SQLite builder",
       });
-    },
-  };
+    const tables = prepared.queryMetadata?.tables;
+    if (
+      !Array.isArray(tables) ||
+      !tables.every((table): table is string => typeof table === "string")
+    )
+      return yield* new DrizzleAdapterError({
+        reason: "adapter() could not read Drizzle table metadata",
+      });
+    return {
+      tables: toTables(tables),
+      run: (...params: unknown[]) =>
+        Effect.try({
+          try: () => prepared.execute(...params).sync(),
+          catch: (cause) => new DrizzleAdapterError({ reason: "Drizzle execution failed", cause }),
+        }),
+    };
+  });
 }

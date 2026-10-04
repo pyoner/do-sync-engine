@@ -6,23 +6,21 @@ Turn plain SQL strings into `@do-sync-engine/core` queries and mutations. It rea
 
 ```ts
 import { makeSyncEngine } from "@do-sync-engine/core";
-import { Effect } from "effect";
 import { createAdapter } from "@do-sync-engine/sql-regex-adapter";
+import { Effect } from "effect";
 
 // `db` is a Node SQLite database or Cloudflare Durable Object `ctx.storage.sql`.
-const adapt = createAdapter(db);
-if (adapt instanceof Error) throw adapt;
+const program = Effect.gen(function* () {
+  const adapt = yield* createAdapter(db);
+  const allTodos = yield* adapt("SELECT * FROM todos ORDER BY id");
+  const addTodo = yield* adapt("INSERT INTO todos (title) VALUES (?)");
 
-const allTodos = adapt("SELECT * FROM todos ORDER BY id");
-const addTodo = adapt("INSERT INTO todos (title) VALUES (?)");
-if (allTodos instanceof Error) throw allTodos;
-if (addTodo instanceof Error) throw addTodo;
-
-// allTodos.tables is Set { "todos" }; pass both to makeSyncEngine.
-const engine = Effect.runSync(makeSyncEngine({ queries: { allTodos }, mutations: { addTodo } }));
+  // allTodos.tables is Set { "todos" }; pass both to makeSyncEngine.
+  return yield* makeSyncEngine({ queries: { allTodos }, mutations: { addTodo } });
+});
 ```
 
-`run` returns an `Effect` that fails with `SqlAdapterError` when execution throws. Unsupported SQL returns a `SqlAdapterError` instead of throwing.
+`createAdapter()` and the function it returns give an `Effect` that fails with `SqlAdapterError` (a `Schema.TaggedError`) for an unsupported database, unsupported SQL, or unreadable table metadata. `run` returns an `Effect` that fails with the same error when execution throws.
 
 ## Development
 

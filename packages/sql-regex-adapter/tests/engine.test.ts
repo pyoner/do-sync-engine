@@ -5,11 +5,6 @@ import { createAdapter, type SqlAdapterError, type SqlRow } from "../src/index.t
 import { makeSyncEngine, toTables } from "@do-sync-engine/core";
 import type { Listener, ListenerEvent, Mutation, Query, SyncEngine } from "@do-sync-engine/core";
 
-function expectOk<T>(value: T): Exclude<T, Error> {
-  if (value instanceof Error) throw value;
-  return value as Exclude<T, Error>;
-}
-
 function captureEvents() {
   const events: ListenerEvent[] = [];
   const listener: Listener = (event) => {
@@ -50,22 +45,19 @@ describe("SyncEngine topics and events", () => {
   beforeEach(() => {
     storage = new DatabaseSync(":memory:");
     setupDb(storage);
-    const sql = expectOk(createAdapter(storage));
+    const sql = (statement: string) =>
+      Effect.runSync(Effect.flatMap(createAdapter(storage), (adapt) => adapt(statement)));
 
     const allUsersSql = "SELECT * FROM users ORDER BY id";
-    allUsers = expectOk(sql(allUsersSql)) as unknown as Query<[], SqlRow[], SqlAdapterError>;
+    allUsers = sql(allUsersSql) as unknown as Query<[], SqlRow[], SqlAdapterError>;
     const userByIdSql = "SELECT * FROM users WHERE id = ?";
-    userById = expectOk(sql(userByIdSql)) as unknown as Query<[number], SqlRow[], SqlAdapterError>;
+    userById = sql(userByIdSql) as unknown as Query<[number], SqlRow[], SqlAdapterError>;
     const postsOnlySql = "SELECT * FROM posts ORDER BY id";
-    postsOnly = expectOk(sql(postsOnlySql)) as unknown as Query<[], SqlRow[], SqlAdapterError>;
+    postsOnly = sql(postsOnlySql) as unknown as Query<[], SqlRow[], SqlAdapterError>;
     const insertUserSql = "INSERT INTO users (name) VALUES (?)";
-    insertUser = expectOk(sql(insertUserSql)) as unknown as Mutation<
-      [string],
-      unknown,
-      SqlAdapterError
-    >;
+    insertUser = sql(insertUserSql) as unknown as Mutation<[string], unknown, SqlAdapterError>;
     const updateUserNameSql = "UPDATE users SET name = ? WHERE id = ?";
-    updateUserName = expectOk(sql(updateUserNameSql)) as unknown as Mutation<
+    updateUserName = sql(updateUserNameSql) as unknown as Mutation<
       [string, number],
       unknown,
       SqlAdapterError
@@ -220,8 +212,10 @@ describe("SyncEngine topics and events", () => {
           return version;
         }),
     };
-    const synchronousMutation = expectOk(
-      expectOk(createAdapter(storage))("INSERT INTO users (name) VALUES ('synchronous')"),
+    const synchronousMutation = Effect.runSync(
+      Effect.flatMap(createAdapter(storage), (adapt) =>
+        adapt("INSERT INTO users (name) VALUES ('synchronous')"),
+      ),
     ) as unknown as Mutation<[], unknown, SqlAdapterError>;
     const trackedSynchronousMutation: Mutation<[], unknown, SqlAdapterError> = {
       ...synchronousMutation,

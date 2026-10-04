@@ -6,10 +6,6 @@ import { createAdapter } from "../src/index.ts";
 import type { FixtureDatabase } from "./cloudflare-worker.ts";
 import { fixtures, operations } from "./fixture.ts";
 
-function expectOk<T>(value: T): Exclude<T, Error> {
-  if (value instanceof Error) throw value;
-  return value as Exclude<T, Error>;
-}
 const { FIXTURE_DATABASE } = env as {
   FIXTURE_DATABASE: DurableObjectNamespace<FixtureDatabase>;
 };
@@ -23,7 +19,9 @@ for (const operation of operations) {
         await runInDurableObject(stub, (_instance, state) => {
           for (const statement of fixture.setup.database) state.storage.sql.exec(statement);
           for (const statement of fixture.setup.seed) state.storage.sql.exec(statement);
-          const op = expectOk(expectOk(createAdapter(state.storage.sql))(testData.sql));
+          const op = Effect.runSync(
+            Effect.flatMap(createAdapter(state.storage.sql), (adapt) => adapt(testData.sql)),
+          );
           expect(op.tables).toEqual(new Set(testData.tables));
           const result = Effect.runSync(op.run(...(testData.params ?? []))) as {
             rowsWritten: number;

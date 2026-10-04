@@ -1,4 +1,5 @@
 import { toTables } from "@do-sync-engine/core";
+import { Effect } from "effect";
 import {
   createAdapter,
   type MutationMetadata,
@@ -15,11 +16,12 @@ export class DurableObjectSqlStorage implements SqlDatabase {
   }
 
   tables(statement: string) {
-    const adapter = createAdapter(this.sql);
-    if (adapter instanceof Error)
-      throw new Error("Invalid SQL storage configuration", { cause: adapter });
-    const operation = adapter(statement);
-    if (operation instanceof Error) throw new Error("Invalid static SQL", { cause: operation });
+    const operation = Effect.runSync(
+      createAdapter(this.sql).pipe(
+        Effect.flatMap((adapt) => adapt(statement)),
+        Effect.mapError((cause) => new Error("Invalid static SQL", { cause })),
+      ),
+    );
     return toTables([...operation.tables]);
   }
   query(sql: string, ...params: SqlValue[]): SqlRow[] {
