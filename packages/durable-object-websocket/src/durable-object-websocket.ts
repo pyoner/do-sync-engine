@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { Effect } from "effect";
 import type { MutationRecord, QueryRecord, SyncEngine } from "@do-sync-engine/core";
 import { newWebSocketRpcSession } from "capnweb";
 import { SocketService } from "./service";
@@ -13,10 +14,10 @@ export abstract class DurableObjectWebSocket<
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
-    initialize: () => SyncEngine<WebSocket, Q, M, Disposable>,
+    engine: Effect.Effect<SyncEngine<WebSocket, Q, M, Disposable>>,
   ) {
     super(ctx, env);
-    this.#engine = initialize();
+    this.#engine = Effect.runSync(engine);
   }
 
   fetch(request: Request): Response {

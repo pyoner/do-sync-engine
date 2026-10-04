@@ -84,15 +84,17 @@ function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
 }
 export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, () => {
-      ctx.storage.sql.exec(SCHEMA);
-      const storage = new DurableObjectSqlStorage(ctx.storage.sql);
-      return Effect.runSync(
-        makeSyncEngine<WebSocket, TodoQueries, TodoMutations, Disposable>({
+    super(
+      ctx,
+      env,
+      Effect.suspend(() => {
+        ctx.storage.sql.exec(SCHEMA);
+        const storage = new DurableObjectSqlStorage(ctx.storage.sql);
+        return makeSyncEngine<WebSocket, TodoQueries, TodoMutations, Disposable>({
           queries: createQueries(storage),
           mutations: createMutations(storage),
-        }),
-      );
-    });
+        });
+      }),
+    );
   }
 }

@@ -4,19 +4,18 @@ WebSocket transport that connects browsers to a Cloudflare Durable Object runnin
 
 ## Usage
 
-Extend `DurableObjectWebSocket` and pass it a function that returns a `SyncEngine` (see `makeSyncEngine`). Clients that open a WebSocket to the object can subscribe to queries and run mutations over RPC.
+Extend `DurableObjectWebSocket` and pass it an `Effect` that builds a `SyncEngine` (see `makeSyncEngine`). The effect runs once, synchronously, in the constructor, so any services it needs must already be provided. Arguments are evaluated before `super()` returns, but an `Effect` is lazy: wrap setup that touches storage (such as `CREATE TABLE`) in `Effect.suspend` or `Effect.gen` so it runs when the effect runs. Clients that open a WebSocket to the object can subscribe to queries and run mutations over RPC.
 
 ```ts
 import { makeSyncEngine } from "@do-sync-engine/core";
-import { Effect } from "effect";
 import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 
 export class TodoStore extends DurableObjectWebSocket<Env, Queries, Mutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env, () =>
-      Effect.runSync(
-        makeSyncEngine({ queries: createQueries(ctx), mutations: createMutations(ctx) }),
-      ),
+    super(
+      ctx,
+      env,
+      makeSyncEngine({ queries: createQueries(ctx), mutations: createMutations(ctx) }),
     );
   }
 }
@@ -27,7 +26,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 ```
 
-Engine failures reach clients as `Error` values; defects (throws inside `run`) are returned the same way.
+Engine failures reach clients as `Error` values; defects (throws inside `run`) are returned the same way. Queries and mutations run synchronously: an effect that suspends asynchronously is returned to the client as an `Error`.
 
 Bind the class as a Durable Object in `wrangler.jsonc`. Non-WebSocket requests to the object get a `400` response.
 

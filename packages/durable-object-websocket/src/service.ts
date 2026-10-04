@@ -1,5 +1,5 @@
 import { RpcStub, RpcTarget } from "capnweb";
-import { Cause, Effect, Exit, Predicate } from "effect";
+import { Cause, Effect, Exit, Predicate, Schema } from "effect";
 
 import type {
   Listener,
@@ -36,6 +36,16 @@ export interface Service<
   ): void | Error;
 }
 
+class SessionClosedError extends Schema.TaggedError<SessionClosedError>()(
+  "SessionClosedError",
+  {},
+) {
+  override get message(): string {
+    return "WebSocket RPC session is closed";
+  }
+}
+
+/** Edge between Effect and Cap'n Web: failures and defects become `Error` values. */
 function runToValue<A, E>(effect: Effect.Effect<A, E>): A | Error {
   const exit = Effect.runSyncExit(effect);
   if (Exit.isSuccess(exit)) return exit.value;
@@ -68,49 +78,58 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     topic: Topic<Name, Params>,
     listener: RpcListener<ListenerEvent<Topic<Name, Params>, OpResult<Q[Name]>>>,
   ): void | Error {
-    if (this.#disposed) return new Error("WebSocket RPC session is closed");
+    return runToValue(
+      Effect.gen({ self: this }, function* () {
+        if (this.#disposed) return yield* new SessionClosedError();
 
-    const previous = Effect.runSync(this.#engine.subscriptions(topic)).find(
-      ({ id }) => id === this.#socket,
+        const previous = (yield* this.#engine.subscriptions(topic)).find(
+          ({ id }) => id === this.#socket,
+        );
+        const ownedListener = listener.dup();
+
+        yield* this.#engine
+          .subscribe(topic, ownedListener, this.#socket)
+          .pipe(Effect.onError(() => Effect.sync(() => ownedListener[Symbol.dispose]())));
+        previous?.listener[Symbol.dispose]();
+      }),
     );
-    const ownedListener = listener.dup();
-
-    const result = runToValue(this.#engine.subscribe(topic, ownedListener, this.#socket));
-    if (result instanceof Error) {
-      ownedListener[Symbol.dispose]();
-      return result;
-    }
-    previous?.listener[Symbol.dispose]();
   }
 
   unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
   ): void | Error {
-    const previous = Effect.runSync(this.#engine.subscriptions(topic)).find(
-      ({ id }) => id === this.#socket,
+    return runToValue(
+      Effect.gen({ self: this }, function* () {
+        const previous = (yield* this.#engine.subscriptions(topic)).find(
+          ({ id }) => id === this.#socket,
+        );
+        if (previous === undefined) return;
+        yield* this.#engine.unsubscribe(topic, this.#socket);
+        previous.listener[Symbol.dispose]();
+      }),
     );
-    if (previous === undefined) return;
-    Effect.runSync(this.#engine.unsubscribe(topic, this.#socket));
-    previous.listener[Symbol.dispose]();
   }
 
   sync<Name extends StringKey<M>, Params extends OpParams<M[Name]>>(
     mutation: Name,
     params: Params,
   ): void | Error {
-    const result = runToValue(this.#engine.sync(mutation, params));
-    if (result instanceof Error) return result;
+    return runToValue(this.#engine.sync(mutation, params));
   }
 
   [Symbol.dispose](): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    const subscriptions = Effect.runSync(this.#engine.subscriptions()).filter(
-      ({ id }) => id === this.#socket,
+    Effect.runSync(
+      Effect.gen({ self: this }, function* () {
+        const subscriptions = (yield* this.#engine.subscriptions()).filter(
+          ({ id }) => id === this.#socket,
+        );
+        for (const { topic, listener } of subscriptions) {
+          yield* this.#engine.unsubscribe(topic, this.#socket);
+          listener[Symbol.dispose]();
+        }
+      }),
     );
-    for (const { topic, listener } of subscriptions) {
-      Effect.runSync(this.#engine.unsubscribe(topic, this.#socket));
-      listener[Symbol.dispose]();
-    }
   }
 }

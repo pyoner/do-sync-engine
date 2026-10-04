@@ -21,48 +21,50 @@ export class FixtureSyncObject extends DurableObjectWebSocket<
   FixtureMutations
 > {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
-    super(ctx, env, () => {
-      ctx.storage.sql.exec(
-        "CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, value INTEGER NOT NULL)",
-      );
-      const queries = {
-        counter: {
-          tables: toTables(["counters"]),
-          run: (key: string) =>
-            Effect.sync(() => ({
-              key,
-              value: Number(
-                ctx.storage.sql
-                  .exec<{ value: number }>("SELECT value FROM counters WHERE key = ?", key)
-                  .toArray()[0]?.value ?? 0,
-              ),
-            })),
-        },
-        echoParams: {
-          tables: new Set(),
-          run: (count: bigint, optional: undefined | null) => Effect.succeed({ count, optional }),
-        },
-      } satisfies FixtureQueries;
-      const mutations = {
-        increment: {
-          tables: toTables(["counters"]),
-          run: (key: string, amount: number) =>
-            Effect.sync(() => {
-              ctx.storage.sql.exec(
-                "INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
+    super(
+      ctx,
+      env,
+      Effect.suspend(() => {
+        ctx.storage.sql.exec(
+          "CREATE TABLE IF NOT EXISTS counters (key TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+        );
+        const queries = {
+          counter: {
+            tables: toTables(["counters"]),
+            run: (key: string) =>
+              Effect.sync(() => ({
                 key,
-                amount,
-              );
-            }),
-        },
-      } satisfies FixtureMutations;
-      return Effect.runSync(
-        makeSyncEngine<WebSocket, FixtureQueries, FixtureMutations, Disposable>({
+                value: Number(
+                  ctx.storage.sql
+                    .exec<{ value: number }>("SELECT value FROM counters WHERE key = ?", key)
+                    .toArray()[0]?.value ?? 0,
+                ),
+              })),
+          },
+          echoParams: {
+            tables: new Set(),
+            run: (count: bigint, optional: undefined | null) => Effect.succeed({ count, optional }),
+          },
+        } satisfies FixtureQueries;
+        const mutations = {
+          increment: {
+            tables: toTables(["counters"]),
+            run: (key: string, amount: number) =>
+              Effect.sync(() => {
+                ctx.storage.sql.exec(
+                  "INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = value + excluded.value",
+                  key,
+                  amount,
+                );
+              }),
+          },
+        } satisfies FixtureMutations;
+        return makeSyncEngine<WebSocket, FixtureQueries, FixtureMutations, Disposable>({
           queries,
           mutations,
-        }),
-      );
-    });
+        });
+      }),
+    );
   }
 }
 export default {
