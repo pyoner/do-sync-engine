@@ -466,3 +466,83 @@ test("fails with tagged errors for unknown names and missing ids", () => {
     MissingSubscriptionIdError,
   );
 });
+
+const dedupeCases: Array<[string, () => unknown, () => unknown]> = [
+  ["Date", () => new Date(1), () => new Date(2)],
+  ["Map", () => new Map([[1, { a: 1 }]]), () => new Map([[1, { a: 2 }]])],
+  ["Set", () => new Set([1, 2]), () => new Set([1, 3])],
+  ["bigint", () => 10n, () => 11n],
+  ["Uint8Array", () => new Uint8Array([1, 2]), () => new Uint8Array([1, 3])],
+  ["NaN", () => ({ n: NaN }), () => ({ n: 1 })],
+  ["undefined property", () => ({ a: undefined }), () => ({})],
+];
+
+test.each(dedupeCases)("dedupes %s values by structural equality", (_name, same, changed) => {
+  let next: () => unknown = same;
+  const queries = {
+    value: { tables: toTables(["value"]), run: () => Effect.sync(() => next()) },
+  };
+  const mutations = { touch: { tables: toTables(["value"]), run: () => Effect.void } };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
+  const topic = Effect.runSync(engine.createTopic("value", []));
+  const events: unknown[] = [];
+  Effect.runSync(engine.subscribe(topic, ({ value }) => events.push(value), "a"));
+
+  next = same; // a fresh, structurally equal instance
+  Effect.runSync(engine.sync("touch", []));
+  expect(events).toHaveLength(1);
+
+  next = changed;
+  Effect.runSync(engine.sync("touch", []));
+  expect(events).toHaveLength(2);
+});
+
+test("delivers an in-place mutated query result", () => {
+  const rows: number[] = [1];
+  const queries = {
+    rows: { tables: toTables(["rows"]), run: () => Effect.succeed(rows) },
+  };
+  const mutations = {
+    add: {
+      tables: toTables(["rows"]),
+      run: (n: number) => Effect.sync(() => void rows.push(n)),
+    },
+  };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
+  const topic = Effect.runSync(engine.createTopic("rows", []));
+  const seen: number[] = [];
+  Effect.runSync(engine.subscribe(topic, ({ value }) => seen.push(value.length), "a"));
+
+  Effect.runSync(engine.sync("add", [2]));
+  expect(seen).toEqual([1, 2]);
+});
+
+test("delivers again when the last event cannot be snapshotted", () => {
+  const n = 0;
+  const queries = {
+    fn: { tables: toTables(["fn"]), run: () => Effect.sync(() => ({ call: () => n })) },
+  };
+  const mutations = { touch: { tables: toTables(["fn"]), run: () => Effect.void } };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
+  const topic = Effect.runSync(engine.createTopic("fn", []));
+  const events: unknown[] = [];
+  Effect.runSync(engine.subscribe(topic, (event) => events.push(event), "a"));
+  Effect.runSync(engine.sync("touch", []));
+  expect(events).toHaveLength(2);
+});
+
+test("dedupes class instance values despite the clone losing the prototype", () => {
+  class Point {
+    constructor(readonly x: number) {}
+  }
+  const queries = {
+    point: { tables: toTables(["point"]), run: () => Effect.sync(() => new Point(1)) },
+  };
+  const mutations = { touch: { tables: toTables(["point"]), run: () => Effect.void } };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
+  const topic = Effect.runSync(engine.createTopic("point", []));
+  const events: unknown[] = [];
+  Effect.runSync(engine.subscribe(topic, (event) => events.push(event), "a"));
+  Effect.runSync(engine.sync("touch", []));
+  expect(events).toHaveLength(1);
+});

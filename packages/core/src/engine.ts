@@ -1,6 +1,5 @@
-import { Effect, Layer, MutableHashMap, Option } from "effect";
+import { Effect, Equal, Layer, MutableHashMap, Option } from "effect";
 import type { Context } from "effect";
-import { hash } from "ohash";
 import { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 import type {
   Delivery,
@@ -106,7 +105,7 @@ class SyncEngineImpl<
         listeners.set(listenerId, registered);
       }
       const event = { topic, value };
-      this.delivery.set(registered, hash(event));
+      this.remember(registered, this.snapshot(event));
       listener(event);
       return listenerId;
     });
@@ -230,13 +229,40 @@ class SyncEngineImpl<
     );
   }
 
+  /**
+   * Snapshot an event for later comparison: a query may return a live object that a later
+   * mutation changes in place, and comparing it with itself would drop the update. Values
+   * that cannot be cloned give `undefined`, so the next event is always delivered.
+   */
+  private snapshot(event: ListenerEvent): ListenerEvent | undefined {
+    try {
+      return structuredClone(event);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private remember(
+    listener: AnyListener<Queries, ListenerProperties>,
+    snapshot: ListenerEvent | undefined,
+  ): void {
+    if (snapshot === undefined) this.delivery.delete(listener);
+    else this.delivery.set(listener, snapshot);
+  }
+
   private publish(event: ListenerEvent<Topics<Queries>>): void {
     const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, event.topic));
     if (listeners === undefined) return;
-    const eventHash = hash(event);
+    let snapshot: ListenerEvent | undefined;
+    let cloned = false;
     for (const listener of Array.from(listeners.values())) {
-      if (this.delivery.get(listener) === eventHash) continue;
-      this.delivery.set(listener, eventHash);
+      const previous = this.delivery.get(listener);
+      if (previous !== undefined && Equal.equals(previous, event)) continue;
+      if (!cloned) {
+        snapshot = this.snapshot(event);
+        cloned = true;
+      }
+      this.remember(listener, snapshot);
       listener(event);
     }
   }

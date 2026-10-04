@@ -46,8 +46,7 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "effect": "catalog:",
-    "ohash": "catalog:"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
