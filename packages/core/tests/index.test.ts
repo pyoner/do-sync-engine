@@ -1,5 +1,13 @@
 import { expect, test } from "vite-plus/test";
-import { QueryExecutionError, SyncEngine, toTables } from "../src/index.js";
+import { Context, Effect, Layer, Schema } from "effect";
+import {
+  MissingSubscriptionIdError,
+  UnknownMutationError,
+  UnknownQueryError,
+  makeSyncEngine,
+  syncEngineLayer,
+  toTables,
+} from "../src/index.js";
 import type {
   BaseParams,
   Branded,
@@ -7,34 +15,31 @@ import type {
   Listener,
   ListenerEvent,
   Query,
-  SyncEngineInterface,
+  SyncEngine,
   Topic,
 } from "../src/index.js";
-
-function expectOk<T>(value: T): Exclude<T, Error> {
-  if (value instanceof Error) throw value;
-  return value as Exclude<T, Error>;
-}
 
 test("exports canonical topic and listener APIs", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: () => 1,
+      run: () => Effect.succeed(1),
     } satisfies Query<[], number>,
   };
   const mutations = {
     noop: {
       tables: toTables([]),
-      run: () => ({ ok: true }),
+      run: () => Effect.succeed({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
   type ListenerProperties = { marker: string };
-  const engine = new SyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
-    queries,
-    mutations,
-    createId: () => crypto.randomUUID(),
-  });
+  const engine = Effect.runSync(
+    makeSyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
+      queries,
+      mutations,
+      createId: () => crypto.randomUUID(),
+    }),
+  );
 
   if (false as boolean) {
     const brandedString = undefined as unknown as Branded<string, "TestString">;
@@ -59,7 +64,7 @@ test("exports canonical topic and listener APIs", async () => {
     void symbolValue;
   }
 
-  const topic = expectOk(engine.createTopic("numbers", []));
+  const topic = Effect.runSync(engine.createTopic("numbers", []));
 
   expect(topic).toEqual({
     name: "numbers",
@@ -70,49 +75,36 @@ test("exports canonical topic and listener APIs", async () => {
     ListenerEvent<Topic<"numbers", []>, number>,
     ListenerProperties
   > = Object.assign(() => {}, { marker: "numbers" });
-  const listenerId = expectOk(engine.subscribe(topic, listener));
-  const [subscription] = [...engine.subscriptions(topic)];
+  const listenerId = Effect.runSync(engine.subscribe(topic, listener));
+  const subscription = Effect.runSync(engine.subscriptions(topic))[0];
   expect(subscription?.listener).toBe(listener);
   expect(subscription?.listener.marker).toBe("numbers");
-  expect(Object.getOwnPropertyNames(SyncEngine.prototype).sort()).toEqual([
-    "constructor",
-    "createTopic",
-    "mutate",
-    "publish",
-    "query",
-    "subscribe",
-    "subscriptions",
-    "sync",
-    "unsubscribe",
-  ]);
   expect(listenerId).toBeDefined();
-  expectOk(engine.unsubscribe(topic, listener));
-  expectOk(engine.unsubscribe(topic, listener));
+  Effect.runSync(engine.unsubscribe(topic, listener));
+  Effect.runSync(engine.unsubscribe(topic, listener));
 });
 
 test("typed topic params, listener values, mutations, and sync", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: () => [1, 2, 3],
+      run: () => Effect.succeed([1, 2, 3]),
     } satisfies Query<[], number[]>,
   };
   const mutations = {
     noop: {
       tables: toTables(["numbers"]),
-      run: () => ({ ok: true }),
+      run: () => Effect.succeed({ ok: true }),
     } satisfies Mutation<[], { ok: boolean }>,
   };
-  const engine: SyncEngineInterface<string, typeof queries, typeof mutations> = new SyncEngine<
-    string,
-    typeof queries,
-    typeof mutations
-  >({
-    queries,
-    mutations,
-    createId: () => crypto.randomUUID(),
-  });
-  const topic: Topic<"numbers", []> = expectOk(engine.createTopic("numbers", []));
+  const engine: SyncEngine<string, typeof queries, typeof mutations> = Effect.runSync(
+    makeSyncEngine<string, typeof queries, typeof mutations>({
+      queries,
+      mutations,
+      createId: () => crypto.randomUUID(),
+    }),
+  );
+  const topic: Topic<"numbers", []> = Effect.runSync(engine.createTopic("numbers", []));
   const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
 
   const listener: Listener<ListenerEvent<Topic<"numbers", []>, number[]>> = ({
@@ -121,8 +113,8 @@ test("typed topic params, listener values, mutations, and sync", async () => {
   }) => {
     events.push({ topic: publishedTopic, value });
   };
-  expectOk(engine.subscribe(topic, listener));
-  expectOk(engine.sync("noop", []));
+  Effect.runSync(engine.subscribe(topic, listener));
+  Effect.runSync(engine.sync("noop", []));
   expect(events).toEqual([{ topic, value: [1, 2, 3] }]);
 
   if (false as boolean) {
@@ -133,7 +125,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     // @ts-expect-error — subscribe callback must receive a listener event
     void engine.subscribe(topic, (value: number) => value.toFixed());
     // @ts-expect-error — sync expects no params
-    engine.sync("noop", [1]);
+    Effect.runSync(engine.sync("noop", [1]));
     const name = topic.name;
     // @ts-expect-error — Topic properties are readonly
     topic.name = name;
@@ -153,52 +145,57 @@ test("delivers each listener only events it has not already received", () => {
   const queries = {
     rows: {
       tables: toTables(["rows"]),
-      run: () => [...rows],
+      run: () => Effect.sync(() => [...rows]),
     } satisfies Query<[], string[]>,
   };
   const mutations = {
     set: {
       tables: toTables(["rows"]),
-      run: (next: string[]) => {
-        rows = next;
-      },
+      run: (next: string[]) =>
+        Effect.sync(() => {
+          rows = next;
+        }),
     } satisfies Mutation<[string[]], void>,
   };
-  const engine = new SyncEngine<string, typeof queries, typeof mutations>({ queries, mutations });
-  const topic = expectOk(engine.createTopic("rows", []));
+  const engine = Effect.runSync(
+    makeSyncEngine<string, typeof queries, typeof mutations>({ queries, mutations }),
+  );
+  const topic = Effect.runSync(engine.createTopic("rows", []));
   const first: string[][] = [];
   const late: string[][] = [];
 
-  expectOk(engine.subscribe(topic, ({ value }) => first.push(value), "first"));
-  expectOk(engine.sync("set", [["a"]]));
+  Effect.runSync(engine.subscribe(topic, ({ value }) => first.push(value), "first"));
+  Effect.runSync(engine.sync("set", [["a"]]));
   expect(first).toEqual([["a"]]);
 
-  expectOk(engine.sync("set", [["b"]]));
+  Effect.runSync(engine.sync("set", [["b"]]));
   const lateListener = ({ value }: ListenerEvent<Topic<"rows", []>, string[]>) => late.push(value);
-  expectOk(engine.subscribe(topic, lateListener, "late"));
-  expectOk(engine.sync("set", [["b"]]));
-  expectOk(engine.sync("set", [["a"]]));
+  Effect.runSync(engine.subscribe(topic, lateListener, "late"));
+  Effect.runSync(engine.sync("set", [["b"]]));
+  Effect.runSync(engine.sync("set", [["a"]]));
   expect(first).toEqual([["a"], ["b"], ["a"]]);
   expect(late).toEqual([["b"], ["a"]]);
 
-  expectOk(engine.subscribe(topic, lateListener, "late"));
+  Effect.runSync(engine.subscribe(topic, lateListener, "late"));
   expect(late).toEqual([["b"], ["a"], ["a"]]);
 });
 test("typed createTopic params and listener handle", async () => {
   const queries = {
     numbers: {
       tables: toTables(["numbers"]),
-      run: (value: number) => value,
+      run: (value: number) => Effect.succeed(value),
     } satisfies Query<[number], number>,
   };
   const mutations = {
     noop: {
       tables: toTables([]),
-      run: () => ({}),
+      run: () => Effect.succeed({}),
     } satisfies Mutation<[], Record<string, never>>,
   };
-  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
-  const topic = expectOk(engine.createTopic("numbers", [42]));
+  const engine = Effect.runSync(
+    makeSyncEngine({ queries, mutations, createId: () => crypto.randomUUID() }),
+  );
+  const topic = Effect.runSync(engine.createTopic("numbers", [42]));
   const listener: Listener = () => {};
 
   if (false as boolean) {
@@ -210,8 +207,8 @@ test("typed createTopic params and listener handle", async () => {
     void engine.subscribe(topic, [42]);
   }
 
-  expectOk(engine.subscribe(topic, listener));
-  expectOk(engine.unsubscribe(topic, listener));
+  Effect.runSync(engine.subscribe(topic, listener));
+  Effect.runSync(engine.unsubscribe(topic, listener));
 });
 
 test("uses structural topic equality for listener registration", () => {
@@ -220,26 +217,29 @@ test("uses structural topic equality for listener registration", () => {
     numbers: {
       tables: toTables(["numbers"]),
       run: (filter: { page: { current: number; total: number }; search: string }) =>
-        filter.page.current + filter.page.total + offset,
+        Effect.sync(() => filter.page.current + filter.page.total + offset),
     } satisfies Query<[{ page: { current: number; total: number }; search: string }], number>,
   };
   const mutations = {
     noop: {
       tables: toTables(["numbers"]),
-      run: () => {
-        offset++;
-        return {};
-      },
+      run: () =>
+        Effect.sync(() => {
+          offset++;
+          return {};
+        }),
     } satisfies Mutation<[], Record<string, never>>,
   };
-  const engine = new SyncEngine({ queries, mutations, createId: () => crypto.randomUUID() });
-  const firstTopic = expectOk(
+  const engine = Effect.runSync(
+    makeSyncEngine({ queries, mutations, createId: () => crypto.randomUUID() }),
+  );
+  const firstTopic = Effect.runSync(
     engine.createTopic("numbers", [{ page: { current: 1, total: 2 }, search: "one" }]),
   );
-  const equivalentTopic = expectOk(
+  const equivalentTopic = Effect.runSync(
     engine.createTopic("numbers", [{ search: "one", page: { total: 2, current: 1 } }]),
   );
-  const distinctTopic = expectOk(
+  const distinctTopic = Effect.runSync(
     engine.createTopic("numbers", [{ page: { current: 2, total: 2 }, search: "one" }]),
   );
   const firstEvents: number[] = [];
@@ -247,62 +247,71 @@ test("uses structural topic equality for listener registration", () => {
   const firstListener: Listener = ({ value }) => firstEvents.push(value);
   const secondListener: Listener = ({ value }) => secondEvents.push(value);
 
-  const firstId = expectOk(engine.subscribe(firstTopic, firstListener));
-  const secondId = expectOk(engine.subscribe(equivalentTopic, secondListener));
+  const firstId = Effect.runSync(engine.subscribe(firstTopic, firstListener));
+  const secondId = Effect.runSync(engine.subscribe(equivalentTopic, secondListener));
   expect(secondId).not.toBe(firstId);
-  expect([...engine.subscriptions(equivalentTopic)].map(({ id }) => id)).toEqual([
+  expect(Effect.runSync(engine.subscriptions(equivalentTopic)).map(({ id }) => id)).toEqual([
     firstId,
     secondId,
   ]);
-  expect([...engine.subscriptions(distinctTopic)]).toEqual([]);
+  expect(Effect.runSync(engine.subscriptions(distinctTopic))).toEqual([]);
 
-  engine.sync("noop", []);
+  Effect.runSync(engine.sync("noop", []));
   expect(firstEvents).toEqual([3, 4]);
   expect(secondEvents).toEqual([3, 4]);
 
-  engine.unsubscribe(distinctTopic, firstListener);
-  expect([...engine.subscriptions(firstTopic)]).toHaveLength(2);
-  engine.unsubscribe(equivalentTopic, firstListener);
-  expect([...engine.subscriptions(firstTopic)].map(({ id }) => id)).toEqual([secondId]);
-  engine.sync("noop", []);
+  Effect.runSync(engine.unsubscribe(distinctTopic, firstListener));
+  expect(Effect.runSync(engine.subscriptions(firstTopic))).toHaveLength(2);
+  Effect.runSync(engine.unsubscribe(equivalentTopic, firstListener));
+  expect(Effect.runSync(engine.subscriptions(firstTopic)).map(({ id }) => id)).toEqual([secondId]);
+  Effect.runSync(engine.sync("noop", []));
   expect(firstEvents).toEqual([3, 4]);
   expect(secondEvents).toEqual([3, 4, 5]);
 
-  engine.unsubscribe(firstTopic, secondListener);
-  expect([...engine.subscriptions()]).toEqual([]);
+  Effect.runSync(engine.unsubscribe(firstTopic, secondListener));
+  expect(Effect.runSync(engine.subscriptions())).toEqual([]);
 });
 
 test("supports explicit IDs and every unsubscribe form", () => {
   let n = 0;
   const queries = {
-    value: { tables: toTables(["value"]), run: () => n } satisfies Query<[], number>,
+    value: { tables: toTables(["value"]), run: () => Effect.sync(() => n) } satisfies Query<
+      [],
+      number
+    >,
   };
-  const engine = new SyncEngine({
-    queries,
-    mutations: { noop: { tables: toTables(["value"]), run: () => void n++ } },
-  });
-  const topic = expectOk(engine.createTopic("value", []));
-  const isolatedTopic = expectOk(engine.createTopic("value", []));
+  const engine = Effect.runSync(
+    makeSyncEngine({
+      queries,
+      mutations: {
+        noop: { tables: toTables(["value"]), run: () => Effect.sync(() => void n++) },
+      },
+    }),
+  );
+  const topic = Effect.runSync(engine.createTopic("value", []));
+  const isolatedTopic = Effect.runSync(engine.createTopic("value", []));
   const first: number[] = [];
   const second: number[] = [];
   const firstListener: Listener = ({ value }) => first.push(value);
   const secondListener: Listener = ({ value }) => second.push(value);
 
-  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
-  expect(engine.subscribe(topic, secondListener, "second")).toBe("second");
-  engine.unsubscribe(topic, firstListener);
-  engine.sync("noop", []);
-  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
-  engine.sync("noop", []);
-  engine.unsubscribe("first");
-  engine.sync("noop", []);
-  engine.unsubscribe(topic, "second");
-  expect(engine.subscribe(isolatedTopic, () => {}, "isolated")).toBe("isolated");
-  engine.unsubscribe("isolated");
-  engine.sync("noop", []);
+  expect(Effect.runSync(engine.subscribe(topic, firstListener, "first"))).toBe("first");
+  expect(Effect.runSync(engine.subscribe(topic, secondListener, "second"))).toBe("second");
+  Effect.runSync(engine.unsubscribe(topic, firstListener));
+  Effect.runSync(engine.sync("noop", []));
+  expect(Effect.runSync(engine.subscribe(topic, firstListener, "first"))).toBe("first");
+  Effect.runSync(engine.sync("noop", []));
+  Effect.runSync(engine.unsubscribe("first"));
+  Effect.runSync(engine.sync("noop", []));
+  Effect.runSync(engine.unsubscribe(topic, "second"));
+  expect(Effect.runSync(engine.subscribe(isolatedTopic, () => {}, "isolated"))).toBe("isolated");
+  Effect.runSync(engine.unsubscribe("isolated"));
+  Effect.runSync(engine.sync("noop", []));
   expect(first).toEqual([0, 1, 2]);
   expect(second).toEqual([0, 1, 2, 3]);
 });
+
+class QueryFailed extends Schema.TaggedError<QueryFailed>()("QueryFailed", {}) {}
 
 test("preserves an explicit listener when replacement query fails", () => {
   let shouldFail = false;
@@ -313,68 +322,147 @@ test("preserves an explicit listener when replacement query fails", () => {
   const queries = {
     value: {
       tables: toTables(["value"]),
-      run: () => {
-        if (shouldFail) throw new Error("query failed");
-        return n;
-      },
+      run: () => (shouldFail ? Effect.fail(new QueryFailed()) : Effect.sync(() => n)),
     },
   };
-  const mutations = { touch: { tables: toTables(["value"]), run: () => void n++ } };
-  const engine = new SyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
-    queries,
-    mutations,
-  });
-  const topic = expectOk(engine.createTopic("value", []));
+  const mutations = {
+    touch: { tables: toTables(["value"]), run: () => Effect.sync(() => void n++) },
+  };
+  const engine = Effect.runSync(
+    makeSyncEngine<string, typeof queries, typeof mutations, ListenerProperties>({
+      queries,
+      mutations,
+    }),
+  );
+  const topic = Effect.runSync(engine.createTopic("value", []));
   const original = Object.assign(() => originalEvents.push(1), { source: "original" });
   const replacement = Object.assign(() => replacementEvents.push(1), { source: "replacement" });
 
-  expect(engine.subscribe(topic, original, "same")).toBe("same");
+  expect(Effect.runSync(engine.subscribe(topic, original, "same"))).toBe("same");
   shouldFail = true;
-  const replacementResult = engine.subscribe(topic, replacement, "same");
-  expect(replacementResult).toBeInstanceOf(QueryExecutionError);
-  expect((replacementResult as Error).message).toBe("Query execution failed");
-  const [subscription] = [...engine.subscriptions(topic)];
+  expect(Effect.runSync(Effect.flip(engine.subscribe(topic, replacement, "same")))).toBeInstanceOf(
+    QueryFailed,
+  );
+  const subscription = Effect.runSync(engine.subscriptions(topic))[0];
   expect(subscription?.listener).toBe(original);
   expect(subscription?.listener.source).toBe("original");
 
   shouldFail = false;
-  expect(engine.sync("touch", [])).toBeUndefined();
+  expect(Effect.runSync(engine.sync("touch", []))).toBeUndefined();
   expect(originalEvents).toEqual([1, 1]);
   expect(replacementEvents).toEqual([]);
 });
 
 test("enumerates active subscriptions", () => {
-  const engine = new SyncEngine({
-    queries: { value: { tables: toTables(["value"]), run: () => 1 } },
-    mutations: {},
-  });
-  const topic = expectOk(engine.createTopic("value", []));
+  const engine = Effect.runSync(
+    makeSyncEngine({
+      queries: { value: { tables: toTables(["value"]), run: () => Effect.succeed(1) } },
+      mutations: {},
+    }),
+  );
+  const topic = Effect.runSync(engine.createTopic("value", []));
   const firstListener: Listener = () => undefined;
   const secondListener: Listener = () => undefined;
-  expect(engine.subscribe(topic, firstListener, "first")).toBe("first");
-  expect(engine.subscribe(topic, secondListener, "second")).toBe("second");
+  expect(Effect.runSync(engine.subscribe(topic, firstListener, "first"))).toBe("first");
+  expect(Effect.runSync(engine.subscribe(topic, secondListener, "second"))).toBe("second");
 
-  expect([...engine.subscriptions()]).toEqual([
+  expect(Effect.runSync(engine.subscriptions())).toEqual([
     { id: "first", topic, listener: firstListener },
     { id: "second", topic, listener: secondListener },
   ]);
-  engine.unsubscribe("first");
-  expect([...engine.subscriptions()]).toEqual([{ id: "second", topic, listener: secondListener }]);
+  Effect.runSync(engine.unsubscribe("first"));
+  expect(Effect.runSync(engine.subscriptions())).toEqual([
+    { id: "second", topic, listener: secondListener },
+  ]);
 });
 
 test("passes subscription arguments to numeric ID factories", () => {
   const received: unknown[][] = [];
-  const engine = new SyncEngine<number, { value: Query<[], number> }, {}, { marker: string }>({
-    queries: { value: { tables: toTables([]), run: () => 1 } },
-    mutations: {},
-    createId: (topic, listener) => {
-      expect(listener.marker).toBe("value");
-      received.push([topic, listener]);
-      return 7;
-    },
-  });
-  const topic = expectOk(engine.createTopic("value", []));
+  const engine = Effect.runSync(
+    makeSyncEngine<number, { value: Query<[], number> }, {}, { marker: string }>({
+      queries: { value: { tables: toTables([]), run: () => Effect.succeed(1) } },
+      mutations: {},
+      createId: (topic, listener) => {
+        expect(listener.marker).toBe("value");
+        received.push([topic, listener]);
+        return 7;
+      },
+    }),
+  );
+  const topic = Effect.runSync(engine.createTopic("value", []));
   const listener = Object.assign(() => undefined, { marker: "value" });
-  expect(engine.subscribe(topic, listener)).toBe(7);
+  expect(Effect.runSync(engine.subscribe(topic, listener))).toBe(7);
   expect(received).toEqual([[topic, listener]]);
+});
+
+test("builds the engine from a Context.Service layer with query services", () => {
+  class Db extends Context.Service<Db, { rows: number[] }>()("test/Db") {}
+  const queries = {
+    rows: {
+      tables: toTables(["rows"]),
+      run: () => Db.useSync((db) => [...db.rows]),
+    } satisfies Query<[], number[], never, Db>,
+  };
+  const mutations = {
+    add: {
+      tables: toTables(["rows"]),
+      run: (n: number) => Db.useSync((db) => void db.rows.push(n)),
+    } satisfies Mutation<[number], void, never, Db>,
+  };
+  class Engine extends Context.Service<
+    Engine,
+    SyncEngine<string, typeof queries, typeof mutations>
+  >()("test/Engine") {}
+
+  const events: number[][] = [];
+  const program = Effect.gen(function* () {
+    const engine = yield* Engine;
+    const topic = yield* engine.createTopic("rows", []);
+    yield* engine.subscribe(topic, ({ value }) => events.push(value), "a");
+    yield* engine.sync("add", [2]);
+  });
+
+  Effect.runSync(
+    program.pipe(
+      Effect.provide(
+        syncEngineLayer(Engine, { queries, mutations }).pipe(
+          Layer.provide(Layer.succeed(Db, { rows: [1] })),
+        ),
+      ),
+    ),
+  );
+  expect(events).toEqual([[1], [1, 2]]);
+
+  if (false as boolean) {
+    // @ts-expect-error — Db must be provided
+    Effect.runSync(program.pipe(Effect.provide(syncEngineLayer(Engine, { queries, mutations }))));
+  }
+});
+
+test("fails with tagged errors for unknown names and missing ids", () => {
+  const queries = {
+    value: { tables: toTables(["value"]), run: () => Effect.succeed(1) } satisfies Query<
+      [],
+      number
+    >,
+  };
+  const mutations = {
+    noop: { tables: toTables([]), run: () => Effect.void } satisfies Mutation<[], void>,
+  };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
+
+  const unknownQuery = Effect.runSync(
+    Effect.flip(engine.createTopic("missing" as never, [] as never)),
+  );
+  expect(unknownQuery).toBeInstanceOf(UnknownQueryError);
+  expect(unknownQuery.message).toBe("Unknown query: missing");
+
+  const unknownMutation = Effect.runSync(Effect.flip(engine.sync("missing" as never, [] as never)));
+  expect(unknownMutation).toBeInstanceOf(UnknownMutationError);
+  expect(unknownMutation.message).toBe("Unknown mutation: missing");
+
+  const topic = Effect.runSync(engine.createTopic("value", []));
+  expect(Effect.runSync(Effect.flip(engine.subscribe(topic, () => {})))).toBeInstanceOf(
+    MissingSubscriptionIdError,
+  );
 });

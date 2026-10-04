@@ -46,8 +46,7 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "@tykowale/ts-hash-map": "catalog:",
-    "errore": "catalog:",
+    "effect": "catalog:",
     "ohash": "catalog:"
   },
   "devDependencies": {

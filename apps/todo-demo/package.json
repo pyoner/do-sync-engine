@@ -15,7 +15,8 @@
     "@do-sync-engine/durable-object-websocket": "workspace:*",
     "@do-sync-engine/sql-regex-adapter": "workspace:*",
     "@do-sync-engine/xstate-store": "workspace:*",
-    "@xstate/store-svelte": "catalog:"
+    "@xstate/store-svelte": "catalog:",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "latest",

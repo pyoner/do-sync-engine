@@ -35,3 +35,13 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
   - [packages/sql-regex-adapter](./packages/sql-regex-adapter/README.md)
   - [packages/xstate-store](./packages/xstate-store/README.md)
 - MUST update the matching `README.md` whenever a package or app changes (public API, behavior, commands, config, layout, dependencies). Update the list above when adding or removing a package or app.
+
+## Learning more about Effect
+
+This repository uses the Effect Typescript library.
+
+Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
+**completely**, and follow the links in the file when required.
+
+If you need to learn more about particular Effect apis and concepts that the
+guide doesn't cover, search through the source code in `node_modules/effect/src`.

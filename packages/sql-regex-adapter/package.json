@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
+    "effect": "catalog:",
     "errore": "catalog:"
   },
   "devDependencies": {

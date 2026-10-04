@@ -5,7 +5,8 @@ Turn plain SQL strings into `@do-sync-engine/core` queries and mutations. It rea
 ## Usage
 
 ```ts
-import { SyncEngine } from "@do-sync-engine/core";
+import { makeSyncEngine } from "@do-sync-engine/core";
+import { Effect } from "effect";
 import { createAdapter } from "@do-sync-engine/sql-regex-adapter";
 
 // `db` is a Node SQLite database or Cloudflare Durable Object `ctx.storage.sql`.
@@ -17,11 +18,11 @@ const addTodo = adapt("INSERT INTO todos (title) VALUES (?)");
 if (allTodos instanceof Error) throw allTodos;
 if (addTodo instanceof Error) throw addTodo;
 
-// allTodos.tables is Set { "todos" }; pass both to SyncEngine.
-const engine = new SyncEngine({ queries: { allTodos }, mutations: { addTodo } });
+// allTodos.tables is Set { "todos" }; pass both to makeSyncEngine.
+const engine = Effect.runSync(makeSyncEngine({ queries: { allTodos }, mutations: { addTodo } }));
 ```
 
-Unsupported SQL returns a `SqlAdapterError` instead of throwing.
+`run` returns an `Effect` that fails with `SqlAdapterError` when execution throws. Unsupported SQL returns a `SqlAdapterError` instead of throwing.
 
 ## Development
 

@@ -4,18 +4,19 @@ WebSocket transport that connects browsers to a Cloudflare Durable Object runnin
 
 ## Usage
 
-Extend `DurableObjectWebSocket` and pass it a `SyncEngine`. Clients that open a WebSocket to the object can subscribe to queries and run mutations over RPC.
+Extend `DurableObjectWebSocket` and pass it a function that returns a `SyncEngine` (see `makeSyncEngine`). Clients that open a WebSocket to the object can subscribe to queries and run mutations over RPC.
 
 ```ts
-import { SyncEngine } from "@do-sync-engine/core";
+import { makeSyncEngine } from "@do-sync-engine/core";
+import { Effect } from "effect";
 import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 
 export class TodoStore extends DurableObjectWebSocket<Env, Queries, Mutations> {
   constructor(ctx: DurableObjectState, env: Env) {
-    super(
-      ctx,
-      env,
-      () => new SyncEngine({ queries: createQueries(ctx), mutations: createMutations(ctx) }),
+    super(ctx, env, () =>
+      Effect.runSync(
+        makeSyncEngine({ queries: createQueries(ctx), mutations: createMutations(ctx) }),
+      ),
     );
   }
 }
@@ -25,6 +26,8 @@ export default {
   fetch: (request, env) => env.TODO_STORE.getByName("default").fetch(request),
 } satisfies ExportedHandler<Env>;
 ```
+
+Engine failures reach clients as `Error` values; defects (throws inside `run`) are returned the same way.
 
 Bind the class as a Durable Object in `wrangler.jsonc`. Non-WebSocket requests to the object get a `400` response.
 

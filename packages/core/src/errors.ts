@@ -1,26 +1,28 @@
-import * as errore from "errore";
+import { Schema } from "effect";
 
-export class UnknownQueryError extends errore.createTaggedError({
-  name: "UnknownQueryError",
-  message: "Unknown query: $query",
-}) {}
+export class UnknownQueryError extends Schema.TaggedError<UnknownQueryError>()(
+  "UnknownQueryError",
+  { query: Schema.String },
+) {
+  override get message(): string {
+    return `Unknown query: ${this.query}`;
+  }
+}
 
-export class UnknownMutationError extends errore.createTaggedError({
-  name: "UnknownMutationError",
-  message: "Unknown mutation: $mutation",
-}) {}
+export class UnknownMutationError extends Schema.TaggedError<UnknownMutationError>()(
+  "UnknownMutationError",
+  { mutation: Schema.String },
+) {
+  override get message(): string {
+    return `Unknown mutation: ${this.mutation}`;
+  }
+}
 
-export class QueryExecutionError extends errore.createTaggedError({
-  name: "QueryExecutionError",
-  message: "Query execution failed",
-}) {}
-
-export class MutationExecutionError extends errore.createTaggedError({
-  name: "MutationExecutionError",
-  message: "Mutation execution failed",
-}) {}
-
-export class MissingSubscriptionIdError extends errore.createTaggedError({
-  name: "MissingSubscriptionIdError",
-  message: "Missing subscription id",
-}) {}
+export class MissingSubscriptionIdError extends Schema.TaggedError<MissingSubscriptionIdError>()(
+  "MissingSubscriptionIdError",
+  {},
+) {
+  override get message(): string {
+    return "Missing subscription id";
+  }
+}

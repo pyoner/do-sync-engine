@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import * as errore from "errore";
 import type { Mutation, Query, Table } from "@do-sync-engine/core";
 import { deleteTables } from "./delete.ts";
@@ -31,7 +32,9 @@ export type NodeSqliteDatabase = {
 };
 export type CloudflareSqlStorage = { exec(sql: string, ...params: SqlParameter[]): unknown };
 export type SqlAdapterDatabase = NodeSqliteDatabase | CloudflareSqlStorage;
-export type SqlOperation = Query<SqlParameter[], unknown> | Mutation<SqlParameter[], unknown>;
+export type SqlOperation =
+  | Query<SqlParameter[], unknown, SqlAdapterError>
+  | Mutation<SqlParameter[], unknown, SqlAdapterError>;
 export type SqlAdapter = (sql: string) => SqlOperation | SqlAdapterError;
 
 export function createAdapter(db: SqlAdapterDatabase): SqlAdapter | SqlAdapterError {
@@ -61,14 +64,14 @@ export function createAdapter(db: SqlAdapterDatabase): SqlAdapter | SqlAdapterEr
     return {
       tables: new Set(tables as Table[]),
       run(...params: SqlParameter[]) {
-        return errore.try({
+        return Effect.try({
           try: () => {
             if ("prepare" in db && typeof db.prepare === "function") {
               const statement = db.prepare(sql);
               return operation === "select" ? statement.all(...params) : statement.run(...params);
             }
             if ("exec" in db) return db.exec(sql, ...params);
-            return new SqlAdapterError({ reason: "Unsupported SQL database" });
+            throw new SqlAdapterError({ reason: "Unsupported SQL database" });
           },
           catch: (cause) => new SqlAdapterError({ reason: "SQL execution failed", cause }),
         });

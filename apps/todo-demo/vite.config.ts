@@ -4,6 +4,8 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import type { PluginOption } from "vite-plus";
 export default defineConfig(({ mode }) => ({
+  // First test cold-starts the Durable Object, which loads Effect module-by-module.
+  test: { testTimeout: 15_000 },
   plugins: [
     svelte(),
     ...(mode === "test"

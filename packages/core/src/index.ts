@@ -1,29 +1,28 @@
 export { toTables } from "./helpers";
-export { SyncEngine } from "./engine";
+export { makeSyncEngine, syncEngineLayer } from "./engine";
 
-export {
-  MutationExecutionError,
-  QueryExecutionError,
-  UnknownMutationError,
-  UnknownQueryError,
-} from "./errors";
+export { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 
 export type {
   BaseParams,
   Branded,
   Mutation,
   MutationRecord,
+  OpError,
   OpParams,
   OpResult,
+  OpServices,
   Listener,
   ListenerEvent,
+  ListenerEvents,
   Query,
   QueryRecord,
   StringKey,
   Table,
   Subscription,
-  SyncEngineInterface,
+  SyncEngine,
   SyncEngineOptions,
+  SyncEngineServices,
   Topic,
   Topics,
 } from "./types";

@@ -1,4 +1,5 @@
-import { SyncEngine } from "@do-sync-engine/core";
+import { makeSyncEngine } from "@do-sync-engine/core";
+import { Effect } from "effect";
 import { DurableObjectWebSocket } from "@do-sync-engine/durable-object-websocket";
 import type { TodoMutations, TodoQueries } from "../todo-protocol";
 import { DurableObjectSqlStorage } from "./storage";
@@ -23,30 +24,36 @@ function createQueries(storage: DurableObjectSqlStorage): TodoQueries {
     allTodos: {
       tables: storage.tables(allTodosSql),
       run: () =>
-        storage.query(allTodosSql).map((row) => ({
-          id: Number(row.id),
-          title: String(row.title),
-          completed: Number(row.completed),
-          created_at: Number(row.created_at),
-        })),
+        Effect.sync(() =>
+          storage.query(allTodosSql).map((row) => ({
+            id: Number(row.id),
+            title: String(row.title),
+            completed: Number(row.completed),
+            created_at: Number(row.created_at),
+          })),
+        ),
     },
     incompleteTodos: {
       tables: storage.tables(incompleteTodosSql),
       run: () =>
-        storage.query(incompleteTodosSql).map((row) => ({
-          id: Number(row.id),
-          title: String(row.title),
-          completed: Number(row.completed),
-        })),
+        Effect.sync(() =>
+          storage.query(incompleteTodosSql).map((row) => ({
+            id: Number(row.id),
+            title: String(row.title),
+            completed: Number(row.completed),
+          })),
+        ),
     },
     completedTodos: {
       tables: storage.tables(completedTodosSql),
       run: () =>
-        storage.query(completedTodosSql).map((row) => ({
-          id: Number(row.id),
-          title: String(row.title),
-          completed: Number(row.completed),
-        })),
+        Effect.sync(() =>
+          storage.query(completedTodosSql).map((row) => ({
+            id: Number(row.id),
+            title: String(row.title),
+            completed: Number(row.completed),
+          })),
+        ),
     },
   };
 }
@@ -59,19 +66,19 @@ function createMutations(storage: DurableObjectSqlStorage): TodoMutations {
   return {
     addTodo: {
       tables: storage.tables(addTodoSql),
-      run: (title) => storage.execute(addTodoSql, title),
+      run: (title) => Effect.sync(() => storage.execute(addTodoSql, title)),
     },
     toggleTodo: {
       tables: storage.tables(toggleTodoSql),
-      run: (id) => storage.execute(toggleTodoSql, id),
+      run: (id) => Effect.sync(() => storage.execute(toggleTodoSql, id)),
     },
     deleteTodo: {
       tables: storage.tables(deleteTodoSql),
-      run: (id) => storage.execute(deleteTodoSql, id),
+      run: (id) => Effect.sync(() => storage.execute(deleteTodoSql, id)),
     },
     clearCompleted: {
       tables: storage.tables(clearCompletedSql),
-      run: () => storage.execute(clearCompletedSql),
+      run: () => Effect.sync(() => storage.execute(clearCompletedSql)),
     },
   };
 }
@@ -80,10 +87,12 @@ export class TodoStore extends DurableObjectWebSocket<Env, TodoQueries, TodoMuta
     super(ctx, env, () => {
       ctx.storage.sql.exec(SCHEMA);
       const storage = new DurableObjectSqlStorage(ctx.storage.sql);
-      return new SyncEngine<WebSocket, TodoQueries, TodoMutations, Disposable>({
-        queries: createQueries(storage),
-        mutations: createMutations(storage),
-      });
+      return Effect.runSync(
+        makeSyncEngine<WebSocket, TodoQueries, TodoMutations, Disposable>({
+          queries: createQueries(storage),
+          mutations: createMutations(storage),
+        }),
+      );
     });
   }
 }

@@ -3,7 +3,8 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-sqlite";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { adapter } from "../src/index.ts";
+import { Effect } from "effect";
+import { DrizzleAdapterError, adapter } from "../src/index.ts";
 
 function expectOk<T>(value: T): Exclude<T, Error> {
   if (value instanceof Error) throw value;
@@ -34,7 +35,7 @@ describe("Drizzle SQLite adapter", () => {
     const query = expectOk(adapter(db.select().from(users).where(eq(users.name, "Ada"))));
 
     expect(query.tables).toEqual(new Set(["users"]));
-    const result = expectOk(query.run());
+    const result = Effect.runSync(query.run());
     expect(result).toEqual([{ id: 1, name: "Ada" }]);
     expect(result).not.toBeInstanceOf(Promise);
   });
@@ -44,7 +45,7 @@ describe("Drizzle SQLite adapter", () => {
     const mutation = expectOk(adapter(db.insert(users).values({ name: sql.placeholder("name") })));
 
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(expectOk(mutation.run({ name: "Ada" })).changes).toBe(1);
+    expect(Effect.runSync(mutation.run({ name: "Ada" })).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([{ id: 1, name: "Ada" }]);
   });
 
@@ -55,7 +56,7 @@ describe("Drizzle SQLite adapter", () => {
       adapter(db.update(users).set({ name: "Grace" }).where(eq(users.id, 1))),
     );
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(expectOk(mutation.run()).changes).toBe(1);
+    expect(Effect.runSync(mutation.run()).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([{ id: 1, name: "Grace" }]);
   });
 
@@ -65,7 +66,7 @@ describe("Drizzle SQLite adapter", () => {
     const mutation = expectOk(adapter(db.delete(users).where(eq(users.id, 1))));
 
     expect(mutation.tables).toEqual(new Set(["users"]));
-    expect(expectOk(mutation.run()).changes).toBe(1);
+    expect(Effect.runSync(mutation.run()).changes).toBe(1);
     expect(db.select().from(users).all()).toEqual([]);
   });
 
@@ -83,6 +84,6 @@ describe("Drizzle SQLite adapter", () => {
       }),
     };
     const query = expectOk(adapter(failingBuilder));
-    expect(query.run()).toBeInstanceOf(Error);
+    expect(Effect.runSync(Effect.flip(query.run()))).toBeInstanceOf(DrizzleAdapterError);
   });
 });

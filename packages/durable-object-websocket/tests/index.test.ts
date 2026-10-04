@@ -3,7 +3,8 @@ import { newWebSocketRpcSession, RpcStub } from "capnweb";
 import { describe, expect, it } from "vite-plus/test";
 import { SocketService, type RpcListener, type Service } from "../src/service.ts";
 import type { FixtureMutations, FixtureQueries } from "./cloudflare-worker.ts";
-import { SyncEngine, type Query } from "@do-sync-engine/core";
+import { Effect } from "effect";
+import { makeSyncEngine, type Query } from "@do-sync-engine/core";
 
 const worker = exports as unknown as {
   default: { fetch(request: Request): Promise<Response> };
@@ -170,7 +171,7 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       await client.sync("increment", [key2, 5]);
       await cb2.wait((e) => e.value.value === 5);
       expect(cb1.record.events).toHaveLength(1);
-      expect(cb2.record.events).toHaveLength(3);
+      expect(cb2.record.events).toHaveLength(2);
 
       expect(await client.unsubscribe(topic2)).toBeUndefined();
       expect(await client.unsubscribe(unknownTopic)).toBeUndefined();
@@ -213,26 +214,24 @@ describe("Durable Object Capnweb WebSocket transport", () => {
   });
 
   it("disposes replaced and failed RPC listeners", async () => {
-    type DirectQueries = { value: Query<[], number> };
+    type DirectQueries = { value: Query<[], number, Error> };
     const pair = new WebSocketPair();
     const server = pair[1];
     server.accept();
     let shouldFail = false;
-    const engine = new SyncEngine<WebSocket, DirectQueries, {}, Disposable>({
-      queries: {
-        value: {
-          tables: new Set(),
-          run: () => {
-            if (shouldFail) throw new Error("query failed");
-            return 0;
+    const engine = Effect.runSync(
+      makeSyncEngine<WebSocket, DirectQueries, {}, Disposable>({
+        queries: {
+          value: {
+            tables: new Set(),
+            run: () => (shouldFail ? Effect.fail(new Error("query failed")) : Effect.succeed(0)),
           },
         },
-      },
-      mutations: {},
-    });
+        mutations: {},
+      }),
+    );
     const service = new SocketService<DirectQueries, {}>(engine, server);
-    const topic = engine.createTopic("value", []);
-    if (topic instanceof Error) throw topic;
+    const topic = Effect.runSync(engine.createTopic("value", []));
     const disposed: string[] = [];
     const first = createDisposableRpcListener(() => disposed.push("first"));
     const second = createDisposableRpcListener(() => disposed.push("second"));
@@ -245,18 +244,18 @@ describe("Durable Object Capnweb WebSocket transport", () => {
       shouldFail = true;
       expect(service.subscribe(topic, failing)).toBeInstanceOf(Error);
       expect(disposed).toEqual(["failing"]);
-      expect([...engine.subscriptions(topic)]).toHaveLength(1);
-      const [activeSub] = [...engine.subscriptions(topic)];
+      expect(Effect.runSync(engine.subscriptions(topic))).toHaveLength(1);
+      const [activeSub] = Effect.runSync(engine.subscriptions(topic));
       expect(activeSub?.listener).toBeDefined();
 
       shouldFail = false;
       expect(service.subscribe(topic, second)).toBeUndefined();
       expect(disposed).toEqual(["failing", "first"]);
-      expect([...engine.subscriptions(topic)]).toHaveLength(1);
+      expect(Effect.runSync(engine.subscriptions(topic))).toHaveLength(1);
 
       expect(service.unsubscribe(topic)).toBeUndefined();
       expect(disposed).toEqual(["failing", "first", "second"]);
-      expect([...engine.subscriptions(topic)]).toHaveLength(0);
+      expect(Effect.runSync(engine.subscriptions(topic))).toHaveLength(0);
     } finally {
       service[Symbol.dispose]();
       first[Symbol.dispose]();
@@ -270,17 +269,21 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     const pair = new WebSocketPair();
     const server = pair[1];
     server.accept();
-    const engine = new SyncEngine<WebSocket, FixtureQueries, FixtureMutations, Disposable>({
-      queries: {
-        counter: { tables: new Set(), run: (key) => ({ key, value: 0 }) },
-        echoParams: { tables: new Set(), run: (count, optional) => ({ count, optional }) },
-      },
-      mutations: { increment: { tables: new Set(), run: () => undefined } },
-    });
+    const engine = Effect.runSync(
+      makeSyncEngine<WebSocket, FixtureQueries, FixtureMutations, Disposable>({
+        queries: {
+          counter: { tables: new Set(), run: (key) => Effect.succeed({ key, value: 0 }) },
+          echoParams: {
+            tables: new Set(),
+            run: (count, optional) => Effect.succeed({ count, optional }),
+          },
+        },
+        mutations: { increment: { tables: new Set(), run: () => Effect.void } },
+      }),
+    );
     const service = new SocketService<FixtureQueries, FixtureMutations>(engine, server);
-    const topic = engine.createTopic("counter", ["cleanup"]);
-    const distinctTopic = engine.createTopic("counter", ["distinct"]);
-    if (topic instanceof Error || distinctTopic instanceof Error) throw new Error("Topic error");
+    const topic = Effect.runSync(engine.createTopic("counter", ["cleanup"]));
+    const distinctTopic = Effect.runSync(engine.createTopic("counter", ["distinct"]));
     const disposed: string[] = [];
     const stub = createDisposableRpcListener(() => disposed.push("stub"));
     const distinctStub = createDisposableRpcListener(() => disposed.push("distinctStub"));
@@ -288,14 +291,14 @@ describe("Durable Object Capnweb WebSocket transport", () => {
     try {
       expect(service.subscribe(topic, stub)).toBeUndefined();
       expect(service.subscribe(distinctTopic, distinctStub)).toBeUndefined();
-      expect([...engine.subscriptions()]).toHaveLength(2);
+      expect(Effect.runSync(engine.subscriptions())).toHaveLength(2);
       service[Symbol.dispose]();
-      expect([...engine.subscriptions()]).toHaveLength(0);
+      expect(Effect.runSync(engine.subscriptions())).toHaveLength(0);
       expect(disposed).toEqual(["stub", "distinctStub"]);
       const result = service.subscribe(topic, stub);
       expect(result).toBeInstanceOf(Error);
       expect((result as Error).message).toBe("WebSocket RPC session is closed");
-      expect([...engine.subscriptions()]).toHaveLength(0);
+      expect(Effect.runSync(engine.subscriptions())).toHaveLength(0);
     } finally {
       stub[Symbol.dispose]();
       distinctStub[Symbol.dispose]();

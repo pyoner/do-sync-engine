@@ -1,4 +1,5 @@
-import type { HashMap } from "@tykowale/ts-hash-map";
+import type { Effect, MutableHashMap } from "effect";
+import type { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 
 type Any = any; // oxlint-disable-line
 
@@ -16,14 +17,24 @@ export type BaseParams = ReadonlyArray<
   string | number | boolean | bigint | null | undefined | object
 >;
 
-type Operation<Params extends BaseParams, Result> = {
+type Operation<Params extends BaseParams, A, E, R> = {
   tables: Set<Table>;
-  run(...params: Params): Result;
+  run(...params: Params): Effect.Effect<A, E, R>;
 };
 
-export type Query<Params extends BaseParams, Result> = Operation<Params, Result>;
+export type Query<Params extends BaseParams, Result, E = never, R = never> = Operation<
+  Params,
+  Result,
+  E,
+  R
+>;
 
-export type Mutation<Params extends BaseParams, Metadata> = Operation<Params, Metadata>;
+export type Mutation<Params extends BaseParams, Metadata, E = never, R = never> = Operation<
+  Params,
+  Metadata,
+  E,
+  R
+>;
 
 type ValidParams<Params> = [Params] extends [never]
   ? BaseParams
@@ -37,11 +48,13 @@ export type OpParams<OperationDef> = OperationDef extends {
   ? ValidParams<Params>
   : never;
 
-export type OpResult<OperationDef> = OperationDef extends {
-  run(...params: unknown[]): infer Result;
-}
-  ? Result
+type OpEffect<OperationDef> = OperationDef extends { run(...params: unknown[]): infer Eff }
+  ? Eff
   : never;
+
+export type OpResult<OperationDef> = Effect.Success<OpEffect<OperationDef>>;
+export type OpError<OperationDef> = Effect.Error<OpEffect<OperationDef>>;
+export type OpServices<OperationDef> = Effect.Services<OpEffect<OperationDef>>;
 
 export type Topic<Name extends string = string, Params extends BaseParams = BaseParams> = {
   readonly name: Name;
@@ -66,14 +79,18 @@ export type ListenerEvents<Q extends QueryRecord> = {
   [Name in StringKey<Q>]: ListenerEvent<Topic<Name, OpParams<Q[Name]>>, OpResult<Q[Name]>>;
 }[StringKey<Q>];
 
-export type QueryRecord = Record<string, Query<BaseParams, Any>>;
-export type MutationRecord = Record<string, Mutation<BaseParams, Any>>;
+export type QueryRecord = Record<string, Query<BaseParams, Any, Any, Any>>;
+export type MutationRecord = Record<string, Mutation<BaseParams, Any, Any, Any>>;
+
+export type SyncEngineServices<Q extends QueryRecord, M extends MutationRecord> =
+  | OpServices<Q[StringKey<Q>]>
+  | OpServices<M[StringKey<M>]>;
 
 export type Registry<
   Q extends QueryRecord = QueryRecord,
   Id = string,
   L extends Listener<ListenerEvents<Q>> = Listener<ListenerEvents<Q>>,
-> = HashMap<Topics<Q>, Map<Id, L>>;
+> = MutableHashMap.MutableHashMap<Topics<Q>, Map<Id, L>>;
 
 /** `hash(event)` from `ohash` of the last event delivered to a listener. */
 export type EventHash = string;
@@ -116,7 +133,7 @@ export type SyncEngineOptions<
   ) => Id;
 };
 
-export interface SyncEngineInterface<
+export interface SyncEngine<
   Id,
   Queries extends QueryRecord = QueryRecord,
   Mutations extends MutationRecord = MutationRecord,
@@ -125,7 +142,7 @@ export interface SyncEngineInterface<
   createTopic<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     name: Name,
     params: Params,
-  ): Topic<Name, Params> | Error;
+  ): Effect.Effect<Topic<Name, Params>, UnknownQueryError>;
 
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
@@ -133,7 +150,7 @@ export interface SyncEngineInterface<
       ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
       ListenerProperties
     >,
-  ): Id | Error;
+  ): Effect.Effect<Id, UnknownQueryError | MissingSubscriptionIdError | OpError<Queries[Name]>>;
   subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     listener: Listener<
@@ -141,35 +158,45 @@ export interface SyncEngineInterface<
       ListenerProperties
     >,
     id: Id,
-  ): Id | Error;
+  ): Effect.Effect<Id, UnknownQueryError | OpError<Queries[Name]>>;
 
-  unsubscribe(id: Id): void;
+  unsubscribe(id: Id): Effect.Effect<void>;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     id: Id,
-  ): void;
+  ): Effect.Effect<void>;
   unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     listener: Listener<
       ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
       ListenerProperties
     >,
-  ): void;
+  ): Effect.Effect<void>;
 
   sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
     mutation: Name,
     params: Params,
-  ): void | Error;
+  ): Effect.Effect<
+    void,
+    | UnknownMutationError
+    | UnknownQueryError
+    | OpError<Mutations[Name]>
+    | OpError<Queries[StringKey<Queries>]>
+  >;
 
-  subscriptions(): IterableIterator<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>;
+  subscriptions(): Effect.Effect<
+    ReadonlyArray<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>
+  >;
   subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
-  ): IterableIterator<
-    Readonly<
-      Subscription<
-        Id,
-        Topic<Name, Params>,
-        Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
+  ): Effect.Effect<
+    ReadonlyArray<
+      Readonly<
+        Subscription<
+          Id,
+          Topic<Name, Params>,
+          Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
+        >
       >
     >
   >;

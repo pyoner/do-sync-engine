@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { MutationRecord, QueryRecord, SyncEngineInterface } from "@do-sync-engine/core";
+import type { MutationRecord, QueryRecord, SyncEngine } from "@do-sync-engine/core";
 import { newWebSocketRpcSession } from "capnweb";
 import { SocketService } from "./service";
 
@@ -8,12 +8,12 @@ export abstract class DurableObjectWebSocket<
   Q extends QueryRecord,
   M extends MutationRecord,
 > extends DurableObject<Env> {
-  readonly #engine: SyncEngineInterface<WebSocket, Q, M, Disposable>;
+  readonly #engine: SyncEngine<WebSocket, Q, M, Disposable>;
 
   protected constructor(
     ctx: DurableObjectState,
     env: Env,
-    initialize: () => SyncEngineInterface<WebSocket, Q, M, Disposable>,
+    initialize: () => SyncEngine<WebSocket, Q, M, Disposable>,
   ) {
     super(ctx, env);
     this.#engine = initialize();

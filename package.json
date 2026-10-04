@@ -9,6 +9,7 @@
     "prepare": "vp config"
   },
   "devDependencies": {
+    "effect": "catalog:",
     "vite-plus": "catalog:"
   },
   "devEngines": {

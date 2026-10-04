@@ -14,14 +14,16 @@ const addTodo = adapter(db.insert(todos).values({ title: "Buy milk" }));
 if (allTodos instanceof Error) throw allTodos;
 if (addTodo instanceof Error) throw addTodo;
 
-// Pass them to SyncEngine like any other query or mutation.
-const engine = new SyncEngine({
-  queries: { allTodos },
-  mutations: { addTodo },
-});
+// Pass them to makeSyncEngine like any other query or mutation.
+const engine = Effect.runSync(
+  makeSyncEngine({
+    queries: { allTodos },
+    mutations: { addTodo },
+  }),
+);
 ```
 
-Both calls return a `DrizzleAdapterError` instead of throwing when the builder is asynchronous or its tables cannot be read.
+`run` returns an `Effect` that fails with `DrizzleAdapterError` when execution throws. Both calls return a `DrizzleAdapterError` instead of throwing when the builder is asynchronous or its tables cannot be read.
 
 ## Development
 

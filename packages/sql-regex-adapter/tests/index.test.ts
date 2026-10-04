@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
 import { DatabaseSync } from "node:sqlite";
+import { Effect } from "effect";
 import { createAdapter } from "../src/index.ts";
 import { fixtures, operations, type Fixture } from "./fixture.ts";
 
@@ -31,7 +32,7 @@ for (const operation of operations) {
         try {
           const op = expectOk(expectOk(createAdapter(db))(testData.sql));
           expect(op.tables).toEqual(new Set(testData.tables));
-          const result = op.run(...(testData.params ?? []));
+          const result = Effect.runSync(op.run(...(testData.params ?? [])));
           if (operation === "select") {
             expect(result).toBeInstanceOf(Array);
           } else if (typeof result === "object" && result !== null && "changes" in result) {
@@ -57,7 +58,9 @@ test("executes through Cloudflare SqlStorage", () => {
       },
     }),
   );
-  expect(expectOk(adapter("SELECT * FROM users")).run("Ada")).toEqual({ rowsWritten: 1 });
+  expect(Effect.runSync(expectOk(adapter("SELECT * FROM users")).run("Ada"))).toEqual({
+    rowsWritten: 1,
+  });
   expect(calls).toEqual([["SELECT * FROM users", "Ada"]]);
 });
 

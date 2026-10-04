@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import * as errore from "errore";
 import { toTables } from "@do-sync-engine/core";
 import type { BaseParams, Mutation, Query } from "@do-sync-engine/core";
@@ -24,14 +25,15 @@ export class DrizzleAdapterError extends errore.createTaggedError({
 export function adapter<Builder extends SelectBuilder>(
   builder: Builder,
 ):
-  | Query<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder> | DrizzleAdapterError>
+  | Query<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder>, DrizzleAdapterError>
   | DrizzleAdapterError;
 export function adapter<Builder extends MutationBuilder>(
   builder: Builder,
 ):
   | Mutation<
       PreparedExecuteParams<Builder> & BaseParams,
-      ExecuteResult<Builder> | DrizzleAdapterError
+      ExecuteResult<Builder>,
+      DrizzleAdapterError
     >
   | DrizzleAdapterError;
 export function adapter(builder: { prepare(): unknown }) {
@@ -57,7 +59,7 @@ export function adapter(builder: { prepare(): unknown }) {
   return {
     tables: toTables(tables),
     run(...params: unknown[]) {
-      return errore.try({
+      return Effect.try({
         try: () => prepared.execute(...params).sync(),
         catch: (cause) => new DrizzleAdapterError({ reason: "Drizzle execution failed", cause }),
       });

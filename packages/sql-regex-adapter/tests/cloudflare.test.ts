@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject } from "cloudflare:test";
+import { Effect } from "effect";
 import { describe, expect, test } from "vite-plus/test";
 import { createAdapter } from "../src/index.ts";
 import type { FixtureDatabase } from "./cloudflare-worker.ts";
@@ -24,7 +25,7 @@ for (const operation of operations) {
           for (const statement of fixture.setup.seed) state.storage.sql.exec(statement);
           const op = expectOk(expectOk(createAdapter(state.storage.sql))(testData.sql));
           expect(op.tables).toEqual(new Set(testData.tables));
-          const result = op.run(...(testData.params ?? [])) as {
+          const result = Effect.runSync(op.run(...(testData.params ?? []))) as {
             rowsWritten: number;
             toArray(): unknown[];
           };

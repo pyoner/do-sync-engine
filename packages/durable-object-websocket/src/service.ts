@@ -1,4 +1,5 @@
 import { RpcStub, RpcTarget } from "capnweb";
+import { Cause, Effect, Exit, Predicate } from "effect";
 
 import type {
   Listener,
@@ -8,7 +9,7 @@ import type {
   OpResult,
   QueryRecord,
   StringKey,
-  SyncEngineInterface,
+  SyncEngine,
   Topic,
 } from "@do-sync-engine/core";
 
@@ -35,15 +36,22 @@ export interface Service<
   ): void | Error;
 }
 
+function runToValue<A, E>(effect: Effect.Effect<A, E>): A | Error {
+  const exit = Effect.runSyncExit(effect);
+  if (Exit.isSuccess(exit)) return exit.value;
+  const error = Cause.squash(exit.cause);
+  return Predicate.isError(error) ? error : new Error(String(error), { cause: error });
+}
+
 export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   extends RpcTarget
   implements Service<Q, M>
 {
-  readonly #engine: SyncEngineInterface<WebSocket, Q, M, Disposable>;
+  readonly #engine: SyncEngine<WebSocket, Q, M, Disposable>;
   readonly #socket: WebSocket;
   #disposed = false;
 
-  constructor(engine: SyncEngineInterface<WebSocket, Q, M, Disposable>, socket: WebSocket) {
+  constructor(engine: SyncEngine<WebSocket, Q, M, Disposable>, socket: WebSocket) {
     super();
     this.#engine = engine;
     this.#socket = socket;
@@ -53,7 +61,7 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     name: Name,
     params: Params,
   ): Topic<Name, Params> | Error {
-    return this.#engine.createTopic(name, params);
+    return runToValue(this.#engine.createTopic(name, params));
   }
 
   subscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
@@ -62,10 +70,12 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   ): void | Error {
     if (this.#disposed) return new Error("WebSocket RPC session is closed");
 
-    const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
+    const previous = Effect.runSync(this.#engine.subscriptions(topic)).find(
+      ({ id }) => id === this.#socket,
+    );
     const ownedListener = listener.dup();
 
-    const result = this.#engine.subscribe(topic, ownedListener, this.#socket);
+    const result = runToValue(this.#engine.subscribe(topic, ownedListener, this.#socket));
     if (result instanceof Error) {
       ownedListener[Symbol.dispose]();
       return result;
@@ -76,9 +86,11 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   unsubscribe<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     topic: Topic<Name, Params>,
   ): void | Error {
-    const previous = [...this.#engine.subscriptions(topic)].find(({ id }) => id === this.#socket);
+    const previous = Effect.runSync(this.#engine.subscriptions(topic)).find(
+      ({ id }) => id === this.#socket,
+    );
     if (previous === undefined) return;
-    this.#engine.unsubscribe(topic, this.#socket);
+    Effect.runSync(this.#engine.unsubscribe(topic, this.#socket));
     previous.listener[Symbol.dispose]();
   }
 
@@ -86,15 +98,18 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     mutation: Name,
     params: Params,
   ): void | Error {
-    return this.#engine.sync(mutation, params);
+    const result = runToValue(this.#engine.sync(mutation, params));
+    if (result instanceof Error) return result;
   }
 
   [Symbol.dispose](): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    const subscriptions = [...this.#engine.subscriptions()].filter(({ id }) => id === this.#socket);
+    const subscriptions = Effect.runSync(this.#engine.subscriptions()).filter(
+      ({ id }) => id === this.#socket,
+    );
     for (const { topic, listener } of subscriptions) {
-      this.#engine.unsubscribe(topic, this.#socket);
+      Effect.runSync(this.#engine.unsubscribe(topic, this.#socket));
       listener[Symbol.dispose]();
     }
   }
