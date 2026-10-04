@@ -260,11 +260,12 @@ describe("SyncEngine topics and events", () => {
 
   test("runs mutation, query, and listener synchronously", async () => {
     const calls: string[] = [];
+    let version = 0;
     const synchronousQuery: Query<[], number> = {
       tables: toTables(["users"]),
       run: () => {
         calls.push("query");
-        return 1;
+        return version;
       },
     };
     const synchronousMutation = expectOk(
@@ -274,6 +275,7 @@ describe("SyncEngine topics and events", () => {
       ...synchronousMutation,
       run: () => {
         calls.push("mutation");
+        version += 1;
         return synchronousMutation.run();
       },
     };
