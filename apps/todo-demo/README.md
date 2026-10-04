@@ -2,6 +2,14 @@
 
 A real-time todo application built with Svelte, `@do-sync-engine/core`, and a Cloudflare Durable Object. The browser keeps a WebSocket connection to the Worker; the `TodoStore` Durable Object owns todo state and broadcasts query updates to connected clients.
 
+## Usage
+
+1. Run `vp run todo-demo#dev` and open the printed URL.
+2. Add todos with the input at the top; toggle or delete them from the list.
+3. Switch between **All**, **Active** and **Completed** to change the live query.
+4. Open the URL in a second tab: changes appear in both tabs without a reload.
+5. Use **Disconnect** / **Connect** to drop and restore the WebSocket.
+
 ## Prerequisites
 
 - Node.js `>=22.18.0`

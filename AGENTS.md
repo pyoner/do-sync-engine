@@ -22,3 +22,16 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - Use the errore skill by default for TypeScript errors-as-values conventions.
 - Use the typescript-advanced-types skill for advanced TypeScript type work.
 - Use the asd-ste100 skill by default for text that another agent or system parses: error messages, tool descriptions, and agent instructions.
+
+## Documentation
+
+- Project overview: [README.md](./README.md).
+- Each package and app has its own `README.md` with a short user-friendly description, referenced from its `AGENTS.md`:
+  - [apps/todo-demo](./apps/todo-demo/README.md)
+  - [apps/website](./apps/website/README.md)
+  - [packages/core](./packages/core/README.md)
+  - [packages/drizzle-adapter](./packages/drizzle-adapter/README.md)
+  - [packages/durable-object-websocket](./packages/durable-object-websocket/README.md)
+  - [packages/sql-regex-adapter](./packages/sql-regex-adapter/README.md)
+  - [packages/xstate-store](./packages/xstate-store/README.md)
+- MUST update the matching `README.md` whenever a package or app changes (public API, behavior, commands, config, layout, dependencies). Update the list above when adding or removing a package or app.
