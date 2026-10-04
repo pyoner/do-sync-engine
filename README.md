@@ -44,3 +44,5 @@ vp run -r build
 ```bash
 vp run dev
 ```
+
+Packages export `src/` during development and `dist/` when published (`publishConfig.exports`). Publish with `pnpm publish` only; `npm publish` ignores `publishConfig.exports`.

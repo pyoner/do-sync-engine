@@ -5,7 +5,20 @@ export default defineConfig({
     dts: {
       tsgo: true,
     },
-    exports: true,
+    exports: {
+      devExports: true,
+      customExports(exports, { isPublish }) {
+        if (!isPublish) return exports;
+        return Object.fromEntries(
+          Object.entries(exports).map(([key, value]) => [
+            key,
+            typeof value === "string" && value.endsWith(".mjs")
+              ? { types: value.replace(/\.mjs$/, ".d.mts"), default: value }
+              : value,
+          ]),
+        );
+      },
+    },
   },
   lint: {
     options: {

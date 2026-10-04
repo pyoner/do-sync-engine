@@ -339,13 +339,13 @@ importers:
 
   packages/drizzle-adapter:
     dependencies:
+      '@do-sync-engine/core':
+        specifier: workspace:*
+        version: link:../core
       errore:
         specifier: 'catalog:'
         version: 0.14.1
     devDependencies:
-      '@do-sync-engine/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/node':
         specifier: ^26.1.1
         version: 26.1.1
@@ -392,6 +392,9 @@ importers:
 
   packages/sql-regex-adapter:
     dependencies:
+      '@do-sync-engine/core':
+        specifier: workspace:*
+        version: link:../core
       errore:
         specifier: 'catalog:'
         version: 0.14.1
@@ -402,9 +405,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: latest
         version: 5.20260923.1
-      '@do-sync-engine/core':
-        specifier: workspace:*
-        version: link:../core
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.2

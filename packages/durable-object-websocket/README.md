@@ -38,3 +38,5 @@ vp test    # tests (Workers pool)
 vp check   # format, lint, types
 vp pack    # build package
 ```
+
+`exports` in `package.json` points at `src/` so workspace packages need no build. `vp pack` writes the `dist` paths into `publishConfig.exports`. Publish with `pnpm publish` only; `npm publish` ignores `publishConfig.exports` and would ship `src/` paths.

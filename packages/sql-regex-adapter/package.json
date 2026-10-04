@@ -8,10 +8,17 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./src/index.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./package.json": "./package.json"
+    },
     "access": "public"
   },
   "scripts": {
@@ -22,12 +29,12 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
+    "@do-sync-engine/core": "workspace:*",
     "errore": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "latest",
     "@cloudflare/workers-types": "latest",
-    "@do-sync-engine/core": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",

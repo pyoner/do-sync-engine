@@ -17,11 +17,22 @@
   ],
   "type": "module",
   "exports": {
-    ".": "./dist/index.mjs",
-    "./service": "./dist/service.mjs",
+    ".": "./src/index.ts",
+    "./service": "./src/service.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./service": {
+        "types": "./dist/service.d.mts",
+        "default": "./dist/service.mjs"
+      },
+      "./package.json": "./package.json"
+    },
     "access": "public"
   },
   "scripts": {
