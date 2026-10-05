@@ -1,18 +1,11 @@
-import type { Effect, MutableHashMap } from "effect";
+import type { Brand, Effect } from "effect";
 import type { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 
 type Any = any; // oxlint-disable-line
 
 export type StringKey<T> = Extract<keyof T, string>;
 
-declare const brand: unique symbol;
-
-export type Branded<
-  Primitive extends string | number | boolean | bigint | symbol,
-  Tag extends string,
-> = Primitive & { readonly [brand]: Tag };
-
-export type Table = Branded<string, "Table">;
+export type Table = Brand.Branded<string, "Table">;
 export type BaseParams = ReadonlyArray<
   string | number | boolean | bigint | null | undefined | object
 >;
@@ -85,15 +78,6 @@ export type MutationRecord = Record<string, Mutation<BaseParams, Any, Any, Any>>
 export type SyncEngineServices<Q extends QueryRecord, M extends MutationRecord> =
   | OpServices<Q[StringKey<Q>]>
   | OpServices<M[StringKey<M>]>;
-
-export type Registry<
-  Q extends QueryRecord = QueryRecord,
-  Id = string,
-  L extends Listener<ListenerEvents<Q>> = Listener<ListenerEvents<Q>>,
-> = MutableHashMap.MutableHashMap<Topics<Q>, Map<Id, L>>;
-
-/** Last event delivered to each listener; one slot per listener object. */
-export type Delivery<L extends object = Listener> = WeakMap<L, ListenerEvent>;
 
 export type Subscription<
   Id,

@@ -1,5 +1,5 @@
 import { RpcStub, RpcTarget } from "capnweb";
-import { Cause, Effect, Exit, Predicate, Schema } from "effect";
+import { Array as Arr, Cause, Effect, Exit, Option, Predicate, Schema } from "effect";
 
 import type {
   Listener,
@@ -47,10 +47,13 @@ class SessionClosedError extends Schema.TaggedError<SessionClosedError>()(
 
 /** Edge between Effect and Cap'n Web: failures and defects become `Error` values. */
 function runToValue<A, E>(effect: Effect.Effect<A, E>): A | Error {
-  const exit = Effect.runSyncExit(effect);
-  if (Exit.isSuccess(exit)) return exit.value;
-  const error = Cause.squash(exit.cause);
-  return Predicate.isError(error) ? error : new Error(String(error), { cause: error });
+  return Exit.match(Effect.runSyncExit(effect), {
+    onSuccess: (value) => value,
+    onFailure: (cause) => {
+      const error = Cause.squash(cause);
+      return Predicate.isError(error) ? error : new Error(String(error), { cause: error });
+    },
+  });
 }
 
 export class SocketService<Q extends QueryRecord, M extends MutationRecord>
@@ -67,6 +70,11 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
     this.#socket = socket;
   }
 
+  #owned<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(topic: Topic<Name, Params>) {
+    return Effect.map(this.#engine.subscriptions(topic), (subscriptions) =>
+      Arr.findFirst(subscriptions, ({ id }) => id === this.#socket),
+    );
+  }
   createTopic<Name extends StringKey<Q>, Params extends OpParams<Q[Name]>>(
     name: Name,
     params: Params,
@@ -82,15 +90,13 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
       Effect.gen({ self: this }, function* () {
         if (this.#disposed) return yield* new SessionClosedError();
 
-        const previous = (yield* this.#engine.subscriptions(topic)).find(
-          ({ id }) => id === this.#socket,
-        );
+        const previous = yield* this.#owned(topic);
         const ownedListener = listener.dup();
 
         yield* this.#engine
           .subscribe(topic, ownedListener, this.#socket)
           .pipe(Effect.onError(() => Effect.sync(() => ownedListener[Symbol.dispose]())));
-        previous?.listener[Symbol.dispose]();
+        if (Option.isSome(previous)) previous.value.listener[Symbol.dispose]();
       }),
     );
   }
@@ -100,12 +106,10 @@ export class SocketService<Q extends QueryRecord, M extends MutationRecord>
   ): void | Error {
     return runToValue(
       Effect.gen({ self: this }, function* () {
-        const previous = (yield* this.#engine.subscriptions(topic)).find(
-          ({ id }) => id === this.#socket,
-        );
-        if (previous === undefined) return;
+        const previous = yield* this.#owned(topic);
+        if (Option.isNone(previous)) return;
         yield* this.#engine.unsubscribe(topic, this.#socket);
-        previous.listener[Symbol.dispose]();
+        previous.value.listener[Symbol.dispose]();
       }),
     );
   }

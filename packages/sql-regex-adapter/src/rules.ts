@@ -1,3 +1,5 @@
+import { Option } from "effect";
+
 function withoutSqlNoise(sql: string): string {
   return sql.replace(/--[^\r\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'/g, (match) =>
     match.replace(/[^\r\n]/g, " "),
@@ -30,7 +32,9 @@ export function extractTables(sql: string, patterns: RegExp[]): string[] {
   return names;
 }
 
-export function operationOf(sql: string): "select" | "update" | "insert" | "delete" | undefined {
+export type Operation = "select" | "update" | "insert" | "delete";
+
+export function operationOf(sql: string): Option.Option<Operation> {
   const sanitized = withoutSqlNoise(sql);
   let depth = 0;
   let quote = "";
@@ -54,7 +58,8 @@ export function operationOf(sql: string): "select" | "update" | "insert" | "dele
     }
     if (depth === 0 && /[A-Za-z]/.test(char)) {
       const match = sanitized.slice(index).match(/^(select|update|insert|delete)\b/i);
-      if (match) return match[1].toLowerCase() as "select" | "update" | "insert" | "delete";
+      if (match) return Option.some(match[1].toLowerCase() as Operation);
     }
   }
+  return Option.none();
 }

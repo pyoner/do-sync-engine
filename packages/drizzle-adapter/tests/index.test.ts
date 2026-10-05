@@ -81,7 +81,11 @@ describe("Drizzle SQLite adapter", () => {
       }),
     };
     const query = Effect.runSync(adapter(failingBuilder));
-    expect(Effect.runSync(Effect.flip(query.run()))).toBeInstanceOf(DrizzleAdapterError);
+    const error = Effect.runSync(Effect.flip(query.run()));
+    expect(error).toBeInstanceOf(DrizzleAdapterError);
+    expect(error.message).toBe("Drizzle execution failed");
+    expect(error.cause).toBeInstanceOf(Error);
+    expect((error.cause as Error).message).toBe("database unavailable");
   });
 
   test("fails with DrizzleAdapterError for asynchronous builders", () => {
@@ -92,5 +96,15 @@ describe("Drizzle SQLite adapter", () => {
     const error = Effect.runSync(Effect.flip(adapter(asyncBuilder)));
     expect(error).toBeInstanceOf(DrizzleAdapterError);
     expect(error.message).toBe("adapter() requires a synchronous Drizzle SQLite builder");
+  });
+
+  test("fails with DrizzleAdapterError for invalid table metadata", () => {
+    const badBuilder = {
+      _: { tableName: "users", result: [] as Array<{ id: number }> },
+      prepare: () => ({ resultKind: "sync" as const, queryMetadata: { tables: [1] } }),
+    };
+    const error = Effect.runSync(Effect.flip(adapter(badBuilder)));
+    expect(error).toBeInstanceOf(DrizzleAdapterError);
+    expect(error.message).toBe("adapter() could not read Drizzle table metadata");
   });
 });

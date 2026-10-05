@@ -5,7 +5,6 @@ export { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } f
 
 export type {
   BaseParams,
-  Branded,
   Mutation,
   MutationRecord,
   OpError,

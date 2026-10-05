@@ -1,272 +1,166 @@
-import { Effect, Equal, Layer, MutableHashMap, Option } from "effect";
+import {
+  Array as Arr,
+  Effect,
+  Equal,
+  Iterable,
+  Layer,
+  MutableHashMap,
+  Option,
+  Predicate,
+  Record,
+} from "effect";
 import type { Context } from "effect";
 import { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 import type {
-  Delivery,
+  BaseParams,
   Listener,
   ListenerEvent,
-  ListenerEvents,
   MutationRecord,
-  OpError,
-  OpParams,
-  OpResult,
   QueryRecord,
-  Registry,
-  StringKey,
-  Subscription,
-  Subscriptions,
   SyncEngine,
   SyncEngineOptions,
   SyncEngineServices,
   Topic,
-  Topics,
 } from "./types";
 
-type AnyListener<Q extends QueryRecord, LP extends object> = Listener<ListenerEvents<Q>, LP>;
+type AnyListener = Listener<ListenerEvent, object>;
 
-class SyncEngineImpl<
+/**
+ * Snapshot an event for later comparison: a query may return a live object that a later
+ * mutation changes in place, and comparing it with itself would drop the update. Values
+ * that cannot be cloned give `None`, so the next event is always delivered.
+ */
+const snapshot = Option.liftThrowable(
+  (event: ListenerEvent): ListenerEvent => structuredClone(event),
+);
+
+const make = <
   Id,
   Queries extends QueryRecord,
   Mutations extends MutationRecord,
   ListenerProperties extends object,
-> implements SyncEngine<Id, Queries, Mutations, ListenerProperties> {
-  private readonly registry: Registry<Queries, Id, AnyListener<Queries, ListenerProperties>> =
-    MutableHashMap.empty();
-  private readonly delivery: Delivery<AnyListener<Queries, ListenerProperties>> = new WeakMap();
-  private readonly options: SyncEngineOptions<Id, Queries, Mutations, ListenerProperties>;
-  private readonly context: Context.Context<SyncEngineServices<Queries, Mutations>>;
+>(
+  options: SyncEngineOptions<Id, Queries, Mutations, ListenerProperties>,
+  context: Context.Context<SyncEngineServices<Queries, Mutations>>,
+): SyncEngine<Id, Queries, Mutations, ListenerProperties> => {
+  // Erased view of the options; the typed overloads come from `SyncEngine`.
+  const queries: QueryRecord = options.queries;
+  const mutations: MutationRecord = options.mutations;
+  const createId = options.createId as ((topic: Topic, listener: AnyListener) => Id) | undefined;
+  const registry = MutableHashMap.empty<Topic, Map<Id, AnyListener>>();
+  /** Last event delivered to each listener; one slot per listener object. */
+  const delivery = new WeakMap<AnyListener, ListenerEvent>();
 
-  constructor(
-    options: SyncEngineOptions<Id, Queries, Mutations, ListenerProperties>,
-    context: Context.Context<SyncEngineServices<Queries, Mutations>>,
-  ) {
-    this.options = options;
-    this.context = context;
-  }
+  const remember = (listener: AnyListener, event: Option.Option<ListenerEvent>): void => {
+    if (Option.isSome(event)) delivery.set(listener, event.value);
+    else delivery.delete(listener);
+  };
 
-  createTopic<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    name: Name,
-    params: Params,
-  ): Effect.Effect<Topic<Name, Params>, UnknownQueryError> {
-    if (!Object.hasOwn(this.options.queries, name)) {
-      return Effect.fail(new UnknownQueryError({ query: name }));
-    }
-    return Effect.succeed({ name, params });
-  }
+  const prune = (topic: Topic, listeners: Map<Id, AnyListener>): void => {
+    if (listeners.size === 0) MutableHashMap.remove(registry, topic);
+  };
 
-  subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-    listener: Listener<
-      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
-      ListenerProperties
-    >,
-  ): Effect.Effect<Id, UnknownQueryError | MissingSubscriptionIdError | OpError<Queries[Name]>>;
-  subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-    listener: Listener<
-      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
-      ListenerProperties
-    >,
-    id: Id,
-  ): Effect.Effect<Id, UnknownQueryError | OpError<Queries[Name]>>;
-  subscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-    listener: Listener<
-      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
-      ListenerProperties
-    >,
-    id?: Id,
-  ): Effect.Effect<Id, UnknownQueryError | MissingSubscriptionIdError | OpError<Queries[Name]>> {
-    return Effect.gen({ self: this }, function* () {
-      const listeners = Option.getOrUndefined(
-        MutableHashMap.get(this.registry, topic as unknown as Topics<Queries>),
-      );
-      let listenerId = id;
-      if (listenerId === undefined) {
-        for (const [registeredId, registered] of listeners ?? []) {
-          if (registered === (listener as unknown)) {
-            listenerId = registeredId;
-            break;
-          }
-        }
-      }
-      listenerId ??= this.options.createId?.(topic, listener);
-      if (listenerId === undefined) return yield* new MissingSubscriptionIdError();
+  const query = Effect.fnUntraced(function* (topic: Topic) {
+    const definition = Record.get(queries, topic.name);
+    if (Option.isNone(definition)) return yield* new UnknownQueryError({ query: topic.name });
+    return yield* Effect.provideContext(definition.value.run(...topic.params), context);
+  });
 
-      const value = yield* this.query(topic);
-      const registered = listener as unknown as AnyListener<Queries, ListenerProperties>;
-      if (listeners === undefined) {
-        MutableHashMap.set(
-          this.registry,
-          topic as unknown as Topics<Queries>,
-          new Map([[listenerId, registered]]),
-        );
-      } else {
-        listeners.set(listenerId, registered);
-      }
-      const event = { topic, value };
-      this.remember(registered, this.snapshot(event));
+  const publish = (event: ListenerEvent): void => {
+    const listeners = MutableHashMap.get(registry, event.topic);
+    if (Option.isNone(listeners)) return;
+    let snapshotted: Option.Option<ListenerEvent> | undefined;
+    for (const listener of Array.from(listeners.value.values())) {
+      const previous = delivery.get(listener);
+      if (previous !== undefined && Equal.equals(previous, event)) continue;
+      snapshotted ??= snapshot(event);
+      remember(listener, snapshotted);
       listener(event);
-      return listenerId;
-    });
-  }
+    }
+  };
 
-  unsubscribe(id: Id): Effect.Effect<void>;
-  unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-    id: Id,
-  ): Effect.Effect<void>;
-  unsubscribe<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-    listener: Listener<
-      ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,
-      ListenerProperties
-    >,
-  ): Effect.Effect<void>;
-  unsubscribe(
-    ...args:
-      | [id: Id]
-      | [topic: Topics<Queries>, idOrListener: Id | AnyListener<Queries, ListenerProperties>]
-  ): Effect.Effect<void> {
-    return Effect.sync(() => {
+  const createTopic = (name: string, params: BaseParams) =>
+    Record.has(queries, name)
+      ? Effect.succeed({ name, params })
+      : Effect.fail(new UnknownQueryError({ query: name }));
+
+  const subscribe = Effect.fnUntraced(function* (topic: Topic, listener: AnyListener, id?: Id) {
+    const listeners = MutableHashMap.get(registry, topic);
+    const listenerId = Option.fromUndefinedOr(id).pipe(
+      Option.orElse(() =>
+        Option.flatMap(listeners, (registered) =>
+          Arr.findFirst(registered, ([, candidate]) => candidate === listener),
+        ).pipe(Option.map(([registeredId]) => registeredId)),
+      ),
+      Option.orElse(() => Option.fromUndefinedOr(createId?.(topic, listener))),
+    );
+    if (Option.isNone(listenerId)) return yield* new MissingSubscriptionIdError();
+
+    const value = yield* query(topic);
+    if (Option.isSome(listeners)) listeners.value.set(listenerId.value, listener);
+    else MutableHashMap.set(registry, topic, new Map([[listenerId.value, listener]]));
+    const event = { topic, value };
+    remember(listener, snapshot(event));
+    listener(event);
+    return listenerId.value;
+  });
+
+  const unsubscribe = (...args: [id: Id] | [topic: Topic, idOrListener: Id | AnyListener]) =>
+    Effect.sync(() => {
       if (args.length === 1) {
-        for (const [topic, listeners] of Array.from(this.registry)) {
+        for (const [topic, listeners] of Array.from(registry)) {
           listeners.delete(args[0]);
-          if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
+          prune(topic, listeners);
         }
         return;
       }
       const [topic, idOrListener] = args;
-      const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, topic));
-      if (listeners === undefined) return;
-      if (typeof idOrListener === "function") {
-        for (const [id, registered] of Array.from(listeners)) {
-          if (registered === idOrListener) listeners.delete(id);
+      const listeners = MutableHashMap.get(registry, topic);
+      if (Option.isNone(listeners)) return;
+      if (Predicate.isFunction(idOrListener)) {
+        for (const [id, registered] of Array.from(listeners.value)) {
+          if (registered === idOrListener) listeners.value.delete(id);
         }
       } else {
-        listeners.delete(idOrListener);
+        listeners.value.delete(idOrListener);
       }
-      if (listeners.size === 0) MutableHashMap.remove(this.registry, topic);
+      prune(topic, listeners.value);
     });
-  }
 
-  sync<Name extends StringKey<Mutations>, Params extends OpParams<Mutations[Name]>>(
-    mutation: Name,
-    params: Params,
-  ): Effect.Effect<
-    void,
-    | UnknownMutationError
-    | UnknownQueryError
-    | OpError<Mutations[Name]>
-    | OpError<Queries[StringKey<Queries>]>
-  > {
-    return Effect.gen({ self: this }, function* () {
-      const definition = this.options.mutations[mutation];
-      if (definition === undefined || !Object.hasOwn(this.options.mutations, mutation)) {
-        return yield* new UnknownMutationError({ mutation });
-      }
-      const run = Reflect.apply(definition.run, definition, params) as unknown as Effect.Effect<
-        unknown,
-        OpError<Mutations[Name]>,
-        SyncEngineServices<Queries, Mutations>
-      >;
-      yield* Effect.provideContext(run, this.context);
-      for (const topic of Array.from(MutableHashMap.keys(this.registry))) {
-        const query = this.options.queries[topic.name];
-        if (query === undefined) continue;
-        if (![...query.tables].some((table) => definition.tables.has(table))) continue;
-        const value = yield* this.query(topic);
-        this.publish({ topic, value });
-      }
-    });
-  }
+  const sync = Effect.fnUntraced(function* (mutation: string, params: BaseParams) {
+    const definition = Record.get(mutations, mutation);
+    if (Option.isNone(definition)) return yield* new UnknownMutationError({ mutation });
+    yield* Effect.provideContext(definition.value.run(...params), context);
+    for (const topic of Array.from(MutableHashMap.keys(registry))) {
+      const affected = Option.exists(Record.get(queries, topic.name), ({ tables }) =>
+        Iterable.some(tables, (table) => definition.value.tables.has(table)),
+      );
+      if (!affected) continue;
+      publish({ topic, value: yield* query(topic) });
+    }
+  });
 
-  subscriptions(): Effect.Effect<
-    ReadonlyArray<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>
-  >;
-  subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-  ): Effect.Effect<
-    ReadonlyArray<
-      Readonly<
-        Subscription<
-          Id,
-          Topic<Name, Params>,
-          Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
-        >
-      >
-    >
-  >;
-  subscriptions(topic?: Topics<Queries>): Effect.Effect<readonly never[]> {
-    return Effect.sync(() => {
-      const entries =
+  const subscriptions = (topic?: Topic) =>
+    Effect.sync(() => {
+      const entries: ReadonlyArray<readonly [Topic, Map<Id, AnyListener>]> =
         topic === undefined
-          ? Array.from(this.registry)
-          : Option.match(MutableHashMap.get(this.registry, topic), {
+          ? Array.from(registry)
+          : Option.match(MutableHashMap.get(registry, topic), {
               onNone: () => [],
               onSome: (listeners) => [[topic, listeners] as const],
             });
       return entries.flatMap(([registeredTopic, listeners]) =>
         Array.from(listeners, ([id, listener]) => ({ id, topic: registeredTopic, listener })),
-      ) as unknown as readonly never[];
+      );
     });
-  }
 
-  private query<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
-    topic: Topic<Name, Params>,
-  ): Effect.Effect<OpResult<Queries[Name]>, UnknownQueryError | OpError<Queries[Name]>> {
-    const definition = this.options.queries[topic.name];
-    if (definition === undefined || !Object.hasOwn(this.options.queries, topic.name)) {
-      return Effect.fail(new UnknownQueryError({ query: topic.name }));
-    }
-    return Effect.provideContext(
-      Reflect.apply(definition.run, definition, topic.params) as unknown as Effect.Effect<
-        OpResult<Queries[Name]>,
-        OpError<Queries[Name]>,
-        SyncEngineServices<Queries, Mutations>
-      >,
-      this.context,
-    );
-  }
-
-  /**
-   * Snapshot an event for later comparison: a query may return a live object that a later
-   * mutation changes in place, and comparing it with itself would drop the update. Values
-   * that cannot be cloned give `undefined`, so the next event is always delivered.
-   */
-  private snapshot(event: ListenerEvent): ListenerEvent | undefined {
-    try {
-      return structuredClone(event);
-    } catch {
-      return undefined;
-    }
-  }
-
-  private remember(
-    listener: AnyListener<Queries, ListenerProperties>,
-    snapshot: ListenerEvent | undefined,
-  ): void {
-    if (snapshot === undefined) this.delivery.delete(listener);
-    else this.delivery.set(listener, snapshot);
-  }
-
-  private publish(event: ListenerEvent<Topics<Queries>>): void {
-    const listeners = Option.getOrUndefined(MutableHashMap.get(this.registry, event.topic));
-    if (listeners === undefined) return;
-    let snapshot: ListenerEvent | undefined;
-    let cloned = false;
-    for (const listener of Array.from(listeners.values())) {
-      const previous = this.delivery.get(listener);
-      if (previous !== undefined && Equal.equals(previous, event)) continue;
-      if (!cloned) {
-        snapshot = this.snapshot(event);
-        cloned = true;
-      }
-      this.remember(listener, snapshot);
-      listener(event);
-    }
-  }
-}
+  return { createTopic, subscribe, unsubscribe, sync, subscriptions } as unknown as SyncEngine<
+    Id,
+    Queries,
+    Mutations,
+    ListenerProperties
+  >;
+};
 
 export const makeSyncEngine = <
   Id,
@@ -280,10 +174,8 @@ export const makeSyncEngine = <
   never,
   SyncEngineServices<Queries, Mutations>
 > =>
-  Effect.map(
-    Effect.context<SyncEngineServices<Queries, Mutations>>(),
-    (context): SyncEngine<Id, Queries, Mutations, ListenerProperties> =>
-      new SyncEngineImpl(options, context),
+  Effect.map(Effect.context<SyncEngineServices<Queries, Mutations>>(), (context) =>
+    make(options, context),
   );
 
 export const syncEngineLayer = <

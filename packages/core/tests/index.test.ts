@@ -10,7 +10,6 @@ import {
 } from "../src/index.js";
 import type {
   BaseParams,
-  Branded,
   Mutation,
   Listener,
   ListenerEvent,
@@ -42,26 +41,11 @@ test("exports canonical topic and listener APIs", async () => {
   );
 
   if (false as boolean) {
-    const brandedString = undefined as unknown as Branded<string, "TestString">;
-    const stringValue: string = brandedString;
-    const brandedNumber = undefined as unknown as Branded<number, "TestNumber">;
-    const numberValue: number = brandedNumber;
-    const brandedBoolean = undefined as unknown as Branded<boolean, "TestBoolean">;
-    const booleanValue: boolean = brandedBoolean;
-    const brandedBigInt = undefined as unknown as Branded<bigint, "TestBigInt">;
-    const bigIntValue: bigint = brandedBigInt;
-    const brandedSymbol = undefined as unknown as Branded<symbol, "TestSymbol">;
-    const symbolValue: symbol = brandedSymbol;
     const validParams: BaseParams = [{ nested: ["value"] }];
     // @ts-expect-error — BaseParams must be an array
     const invalidParams: BaseParams = "value";
     void validParams;
     void invalidParams;
-    void stringValue;
-    void numberValue;
-    void booleanValue;
-    void bigIntValue;
-    void symbolValue;
   }
 
   const topic = Effect.runSync(engine.createTopic("numbers", []));

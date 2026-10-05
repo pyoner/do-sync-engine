@@ -13,22 +13,54 @@ type PreparedExecuteParams<Builder extends SQLiteBuilder> =
 type PreparedInternals = {
   resultKind: "sync" | "async";
   queryMetadata?: { tables?: unknown };
-  execute(...params: unknown[]): { sync(): unknown };
+  execute(...params: BaseParams): { sync(): unknown };
 };
 
 export class DrizzleAdapterError extends Schema.TaggedError<DrizzleAdapterError>()(
   "DrizzleAdapterError",
   {
-    reason: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
   },
-) {
-  override get message(): string {
-    return this.reason;
-  }
-}
+) {}
 
 type AdapterResult<Operation> = Effect.Effect<Operation, DrizzleAdapterError>;
+
+const Tables = Schema.Array(Schema.String);
+
+const make = Effect.fnUntraced(function* (builder: {
+  prepare(): unknown;
+}): Effect.fn.Return<Query<BaseParams, unknown, DrizzleAdapterError>, DrizzleAdapterError> {
+  const prepared = yield* Effect.try({
+    try: () => builder.prepare() as PreparedInternals,
+    catch: (cause) =>
+      new DrizzleAdapterError({
+        message: "adapter() could not prepare Drizzle SQLite builder",
+        cause,
+      }),
+  });
+  if (prepared.resultKind !== "sync")
+    return yield* new DrizzleAdapterError({
+      message: "adapter() requires a synchronous Drizzle SQLite builder",
+    });
+  const tables = yield* Schema.decodeUnknownEffect(Tables)(prepared.queryMetadata?.tables).pipe(
+    Effect.mapError(
+      (cause) =>
+        new DrizzleAdapterError({
+          message: "adapter() could not read Drizzle table metadata",
+          cause,
+        }),
+    ),
+  );
+  return {
+    tables: toTables(tables),
+    run: (...params: BaseParams) =>
+      Effect.try({
+        try: () => prepared.execute(...params).sync(),
+        catch: (cause) => new DrizzleAdapterError({ message: "Drizzle execution failed", cause }),
+      }),
+  };
+});
 
 export function adapter<Builder extends SelectBuilder>(
   builder: Builder,
@@ -41,34 +73,5 @@ export function adapter<Builder extends MutationBuilder>(
   Mutation<PreparedExecuteParams<Builder> & BaseParams, ExecuteResult<Builder>, DrizzleAdapterError>
 >;
 export function adapter(builder: { prepare(): unknown }) {
-  return Effect.gen(function* () {
-    const prepared = yield* Effect.try({
-      try: () => builder.prepare() as PreparedInternals,
-      catch: (cause) =>
-        new DrizzleAdapterError({
-          reason: "adapter() could not prepare Drizzle SQLite builder",
-          cause,
-        }),
-    });
-    if (prepared.resultKind !== "sync")
-      return yield* new DrizzleAdapterError({
-        reason: "adapter() requires a synchronous Drizzle SQLite builder",
-      });
-    const tables = prepared.queryMetadata?.tables;
-    if (
-      !Array.isArray(tables) ||
-      !tables.every((table): table is string => typeof table === "string")
-    )
-      return yield* new DrizzleAdapterError({
-        reason: "adapter() could not read Drizzle table metadata",
-      });
-    return {
-      tables: toTables(tables),
-      run: (...params: unknown[]) =>
-        Effect.try({
-          try: () => prepared.execute(...params).sync(),
-          catch: (cause) => new DrizzleAdapterError({ reason: "Drizzle execution failed", cause }),
-        }),
-    };
-  });
+  return make(builder);
 }
