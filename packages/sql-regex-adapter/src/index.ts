@@ -7,7 +7,6 @@ import { selectTables } from "./select.ts";
 import { updateTables } from "./update.ts";
 import { operationOf } from "./rules.ts";
 import type { Operation } from "./rules.ts";
-export type { Table } from "@do-sync-engine/core";
 
 export class SqlAdapterError extends Schema.TaggedError<SqlAdapterError>()("SqlAdapterError", {
   message: Schema.String,
