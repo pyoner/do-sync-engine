@@ -87,9 +87,9 @@ export type Subscription<
   T extends Topic<string, BaseParams>,
   L extends Listener<ListenerEvent<T, Any>>,
 > = {
-  id: Id;
-  topic: T;
-  listener: L;
+  readonly id: Id;
+  readonly topic: T;
+  readonly listener: L;
 };
 
 export type Subscriptions<Id, Q extends QueryRecord, Properties extends object = object> = {
@@ -168,19 +168,15 @@ export interface SyncEngine<
     | OpError<Queries[StringKey<Queries>]>
   >;
 
-  subscriptions(): Effect.Effect<
-    ReadonlyArray<Readonly<Subscriptions<Id, Queries, ListenerProperties>>>
-  >;
+  subscriptions(): Effect.Effect<ReadonlyArray<Subscriptions<Id, Queries, ListenerProperties>>>;
   subscriptions<Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
   ): Effect.Effect<
     ReadonlyArray<
-      Readonly<
-        Subscription<
-          Id,
-          Topic<Name, Params>,
-          Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
-        >
+      Subscription<
+        Id,
+        Topic<Name, Params>,
+        Listener<ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>, ListenerProperties>
       >
     >
   >;

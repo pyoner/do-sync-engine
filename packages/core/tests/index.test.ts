@@ -14,6 +14,7 @@ import type {
   Listener,
   ListenerEvent,
   Query,
+  Subscription,
   SyncEngine,
   Topic,
 } from "../src/index.js";
@@ -515,4 +516,34 @@ test("dedupes class instance values despite the clone losing the prototype", () 
   Effect.runSync(engine.subscribe(topic, (event) => events.push(event), "a"));
   Effect.runSync(engine.sync("touch", []));
   expect(events).toHaveLength(1);
+});
+
+test("listener values and engine inputs are readonly while topics stay reusable", () => {
+  const queries = {
+    rows: { tables: toTables(["rows"]), run: () => Effect.succeed([{ id: 1 }]) },
+  };
+  const engine = Effect.runSync(makeSyncEngine({ queries, mutations: {} }));
+  const topic = Effect.runSync(engine.createTopic("rows", []));
+
+  // Compile-time checks only; never called.
+  const readonlyChecks = (
+    event: ListenerEvent<Topic<"rows", []>, Array<{ id: number }>>,
+    subscription: Subscription<string, Topic<"rows", []>, Listener>,
+  ) => {
+    // @ts-expect-error tables is a ReadonlySet
+    queries.rows.tables.add("other");
+    // @ts-expect-error event values are deeply readonly
+    event.value[0].id = 2;
+    // @ts-expect-error event values are deeply readonly
+    event.value.push({ id: 3 });
+    // @ts-expect-error subscription fields are readonly
+    subscription.id = "b";
+  };
+  void readonlyChecks;
+
+  // The event topic goes straight back into the engine.
+  Effect.runSync(
+    engine.subscribe(topic, (event) => Effect.runSync(engine.unsubscribe(event.topic, "a")), "a"),
+  );
+  expect(Effect.runSync(engine.subscriptions(topic))).toHaveLength(0);
 });
