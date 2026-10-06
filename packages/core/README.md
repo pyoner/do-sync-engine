@@ -64,6 +64,8 @@ A `Topic` contains the query `name` and `params`. Do not mutate topic params aft
 
 Delivery is deduplicated per listener object: the engine stores an `ohash` digest of the last event sent to each listener in a `WeakMap`, and `sync` skips listeners whose last digest equals the new event's digest. The digest is taken when the event is published, so queries may return live objects that mutations change in place; hashing costs time proportional to the result size, once per published event. Limit: `ohash` hashes functions by source text, not captured state, so two function values with the same source but different closures share a digest and the update is skipped. Do not put closures that carry changing state in query results. Listeners receive the original event, so do not mutate event values. `subscribe` always delivers the current value and records it, so the next unchanged `sync` is not re-sent. Entries disappear when the listener is garbage-collected.
 
+`ListenerEvent` is `ReadonlyDeep` (from `type-fest`): listeners receive `value` as a deeply readonly type, so mutating it fails to compile; `topic` keeps its type and can be passed back to `subscribe`, `unsubscribe` and `subscriptions`. The check is type-only; casts and untyped JavaScript bypass it.
+
 For full deduplication, use one listener object per topic: a listener subscribed to several topics keeps a single last event, so alternating topics can cause re-sends (never missed updates). The same listener subscribed twice to one topic under different IDs receives each event once.
 
 ## Development

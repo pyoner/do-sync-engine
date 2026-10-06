@@ -47,7 +47,8 @@
   },
   "dependencies": {
     "effect": "catalog:",
-    "ohash": "catalog:"
+    "ohash": "catalog:",
+    "type-fest": "catalog:"
   },
   "devDependencies": {
     "@types/node": "^25.6.2",

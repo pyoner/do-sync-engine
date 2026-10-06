@@ -21,6 +21,7 @@ catalog:
   "@xstate/store-svelte": ^2.0.0
   effect: ^4.0.0
   ohash: ^2.0.12
+  type-fest: ^5.10.0
 overrides:
   vite: "catalog:"
   vitest: "catalog:"

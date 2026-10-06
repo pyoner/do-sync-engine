@@ -89,7 +89,7 @@ test("typed topic params, listener values, mutations, and sync", async () => {
     }),
   );
   const topic: Topic<"numbers", []> = Effect.runSync(engine.createTopic("numbers", []));
-  const events: Array<{ topic: Topic<"numbers", []>; value: number[] }> = [];
+  const events: Array<{ topic: Topic<"numbers", []>; value: readonly number[] }> = [];
 
   const listener: Listener<ListenerEvent<Topic<"numbers", []>, number[]>> = ({
     topic: publishedTopic,
@@ -145,8 +145,8 @@ test("delivers each listener only events it has not already received", () => {
     makeSyncEngine<string, typeof queries, typeof mutations>({ queries, mutations }),
   );
   const topic = Effect.runSync(engine.createTopic("rows", []));
-  const first: string[][] = [];
-  const late: string[][] = [];
+  const first: Array<readonly string[]> = [];
+  const late: Array<readonly string[]> = [];
 
   Effect.runSync(engine.subscribe(topic, ({ value }) => first.push(value), "first"));
   Effect.runSync(engine.sync("set", [["a"]]));
@@ -398,7 +398,7 @@ test("builds the engine from a Context.Service layer with query services", () =>
     SyncEngine<string, typeof queries, typeof mutations>
   >()("test/Engine") {}
 
-  const events: number[][] = [];
+  const events: Array<readonly number[]> = [];
   const program = Effect.gen(function* () {
     const engine = yield* Engine;
     const topic = yield* engine.createTopic("rows", []);

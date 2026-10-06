@@ -1,4 +1,5 @@
 import type { Brand, Effect } from "effect";
+import type { ReadonlyDeep } from "type-fest";
 import type { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 
 type Any = any; // oxlint-disable-line
@@ -60,7 +61,7 @@ export type Topics<Q extends QueryRecord> = {
 
 export type ListenerEvent<T extends Topic = Topic, V = Any> = {
   readonly topic: T;
-  readonly value: V;
+  readonly value: ReadonlyDeep<V>;
 };
 
 export type Listener<
