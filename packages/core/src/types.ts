@@ -1,4 +1,5 @@
-import type { Brand, Effect } from "effect";
+import { Brand } from "effect";
+import type { Effect } from "effect";
 import type { ReadonlyDeep } from "type-fest";
 import type { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 
@@ -7,6 +8,7 @@ type Any = any; // oxlint-disable-line
 export type StringKey<T> = Extract<keyof T, string>;
 
 export type Table = Brand.Branded<string, "Table">;
+export const Table = Brand.nominal<Table>();
 export type BaseParams = ReadonlyArray<
   string | number | boolean | bigint | null | undefined | object
 >;

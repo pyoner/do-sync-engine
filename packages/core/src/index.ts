@@ -1,3 +1,4 @@
+export { Table } from "./types";
 export { toTables } from "./helpers";
 export { makeSyncEngine, syncEngineLayer } from "./engine";
 
@@ -17,7 +18,6 @@ export type {
   Query,
   QueryRecord,
   StringKey,
-  Table,
   Subscription,
   SyncEngine,
   SyncEngineOptions,
