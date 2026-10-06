@@ -12,7 +12,7 @@ export type BaseParams = ReadonlyArray<
 >;
 
 type Operation<Params extends BaseParams, A, E, R> = {
-  tables: Set<Table>;
+  readonly tables: ReadonlySet<Table>;
   run(...params: Params): Effect.Effect<A, E, R>;
 };
 
@@ -104,9 +104,9 @@ export type SyncEngineOptions<
   Mutations extends MutationRecord = MutationRecord,
   ListenerProperties extends object = object,
 > = {
-  queries: Queries;
-  mutations: Mutations;
-  createId?: <Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
+  readonly queries: Queries;
+  readonly mutations: Mutations;
+  readonly createId?: <Name extends StringKey<Queries>, Params extends OpParams<Queries[Name]>>(
     topic: Topic<Name, Params>,
     listener: Listener<
       ListenerEvent<Topic<Name, Params>, OpResult<Queries[Name]>>,

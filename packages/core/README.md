@@ -58,6 +58,8 @@ const program = Effect.gen(function* () {
 
 `makeSyncEngine(options)` builds the engine as an `Effect` when you do not need a layer. Services that queries and mutations require become requirements of `makeSyncEngine` or of the layer; engine methods themselves have no requirements.
 
+`tables` on a query or mutation is a `ReadonlySet<Table>` and the `makeSyncEngine` options (`queries`, `mutations`, `createId`) are `readonly` properties. The engine reads them once and keeps the object references, so do not mutate the `tables` set or add entries to the `queries`/`mutations` records after creating the engine; the type check only blocks reassignment and `tables` mutation.
+
 Every engine method returns an `Effect`. Failures are typed: `UnknownQueryError`, `UnknownMutationError`, `MissingSubscriptionIdError` (all `Schema.TaggedError`), plus the `E` of the query or mutation that failed. A throw inside `run` is a defect, not a typed failure. `sync` stops at the first failing query. `subscriptions` returns an array.
 
 A `Topic` contains the query `name` and `params`. Do not mutate topic params after creating a topic. Structurally equivalent topic objects share listeners, including across serialization boundaries; subscribing with a different topic object with equivalent parameters addresses the same subscription.
