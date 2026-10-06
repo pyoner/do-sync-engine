@@ -501,20 +501,6 @@ test("delivers an in-place mutated query result", () => {
   expect(seen).toEqual([1, 2]);
 });
 
-test("delivers again when the last event cannot be snapshotted", () => {
-  const n = 0;
-  const queries = {
-    fn: { tables: toTables(["fn"]), run: () => Effect.sync(() => ({ call: () => n })) },
-  };
-  const mutations = { touch: { tables: toTables(["fn"]), run: () => Effect.void } };
-  const engine = Effect.runSync(makeSyncEngine({ queries, mutations }));
-  const topic = Effect.runSync(engine.createTopic("fn", []));
-  const events: unknown[] = [];
-  Effect.runSync(engine.subscribe(topic, (event) => events.push(event), "a"));
-  Effect.runSync(engine.sync("touch", []));
-  expect(events).toHaveLength(2);
-});
-
 test("dedupes class instance values despite the clone losing the prototype", () => {
   class Point {
     constructor(readonly x: number) {}

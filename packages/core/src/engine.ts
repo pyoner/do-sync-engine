@@ -1,7 +1,6 @@
 import {
   Array as Arr,
   Effect,
-  Equal,
   Iterable,
   Layer,
   MutableHashMap,
@@ -10,6 +9,7 @@ import {
   Record,
 } from "effect";
 import type { Context } from "effect";
+import { hash } from "ohash";
 import { MissingSubscriptionIdError, UnknownMutationError, UnknownQueryError } from "./errors";
 import type {
   BaseParams,
@@ -24,15 +24,6 @@ import type {
 } from "./types";
 
 type AnyListener = Listener<ListenerEvent, object>;
-
-/**
- * Snapshot an event for later comparison: a query may return a live object that a later
- * mutation changes in place, and comparing it with itself would drop the update. Values
- * that cannot be cloned give `None`, so the next event is always delivered.
- */
-const snapshot = Option.liftThrowable(
-  (event: ListenerEvent): ListenerEvent => structuredClone(event),
-);
 
 const make = <
   Id,
@@ -49,11 +40,10 @@ const make = <
   const createId = options.createId as ((topic: Topic, listener: AnyListener) => Id) | undefined;
   const registry = MutableHashMap.empty<Topic, Map<Id, AnyListener>>();
   /** Last event delivered to each listener; one slot per listener object. */
-  const delivery = new WeakMap<AnyListener, ListenerEvent>();
+  const delivery = new WeakMap<AnyListener, string>();
 
-  const remember = (listener: AnyListener, event: Option.Option<ListenerEvent>): void => {
-    if (Option.isSome(event)) delivery.set(listener, event.value);
-    else delivery.delete(listener);
+  const remember = (listener: AnyListener, digest: string): void => {
+    delivery.set(listener, digest);
   };
 
   const prune = (topic: Topic, listeners: Map<Id, AnyListener>): void => {
@@ -69,12 +59,11 @@ const make = <
   const publish = (event: ListenerEvent): void => {
     const listeners = MutableHashMap.get(registry, event.topic);
     if (Option.isNone(listeners)) return;
-    let snapshotted: Option.Option<ListenerEvent> | undefined;
+    // Hash now: a query may return a live object that a later mutation changes in place.
+    const digest = hash(event);
     for (const listener of Array.from(listeners.value.values())) {
-      const previous = delivery.get(listener);
-      if (previous !== undefined && Equal.equals(previous, event)) continue;
-      snapshotted ??= snapshot(event);
-      remember(listener, snapshotted);
+      if (delivery.get(listener) === digest) continue;
+      remember(listener, digest);
       listener(event);
     }
   };
@@ -100,7 +89,7 @@ const make = <
     if (Option.isSome(listeners)) listeners.value.set(listenerId.value, listener);
     else MutableHashMap.set(registry, topic, new Map([[listenerId.value, listener]]));
     const event = { topic, value };
-    remember(listener, snapshot(event));
+    remember(listener, hash(event));
     listener(event);
     return listenerId.value;
   });
