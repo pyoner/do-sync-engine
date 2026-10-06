@@ -1,21 +1,25 @@
 import { createStoreLogic, type ExtractEvents, type Store } from "@xstate/store";
 import { RpcStub, newWebSocketRpcSession } from "capnweb";
 import type {
+  ListenerEvent,
   MutationRecord,
   OpParams,
   OpResult,
   QueryRecord,
   StringKey,
+  Topic,
   Topics,
 } from "@do-sync-engine/core";
 import type { Service } from "@do-sync-engine/durable-object-websocket";
 
+/** A query result as delivered to listeners: deeply readonly. */
+type Result<Q extends QueryRecord> = ListenerEvent<Topic, OpResult<Q[StringKey<Q>]>>["value"];
 type Status = "idle" | "connecting" | "ready" | "disconnected";
 type Context<Q extends QueryRecord> = {
   status: Status;
   error: Error | null;
   transport: WebSocket | null;
-  topics: Record<string, OpResult<Q[StringKey<Q>]> | undefined>;
+  topics: Record<string, Result<Q> | undefined>;
 };
 type SyncRequest<M extends MutationRecord> = {
   mutation: StringKey<M>;
@@ -38,7 +42,7 @@ type Emitted<Q extends QueryRecord> = {
   opened: {};
   closed: { error: Error };
   failed: { error: Error };
-  synced: { key: string; value: OpResult<Q[StringKey<Q>]> };
+  synced: { key: string; value: Result<Q> };
 };
 
 export interface SyncStore<Q extends QueryRecord, M extends MutationRecord> {
@@ -100,7 +104,7 @@ export function createSyncStore<Q extends QueryRecord, M extends MutationRecord>
       },
       synced: (context, { key, value }, enqueue) => {
         if (context.status !== "ready") return;
-        const result = value as OpResult<Q[StringKey<Q>]>;
+        const result = value as Result<Q>;
         enqueue.emit.synced({ key, value: result });
         return { ...context, topics: { ...context.topics, [key]: result } };
       },

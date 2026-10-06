@@ -21,7 +21,7 @@ sync.disconnect();
 sync[Symbol.dispose](); // close the socket and stop the store
 ```
 
-`status` is `idle`, `connecting`, `ready` or `disconnected`. `error` holds the last connection failure.
+`status` is `idle`, `connecting`, `ready` or `disconnected`. `error` holds the last connection failure. Query results in `context.topics` and in the `synced` event are typed deeply readonly (`ReadonlyDeep`), so mutating them fails to compile; the check is type-only.
 
 ## Development
 

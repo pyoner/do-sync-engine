@@ -122,4 +122,15 @@ describe("createSyncStore", () => {
     expect(sockets[0]?.closed).toBe(true);
     expect(status(client)).toBe("disconnected");
   });
+
+  it("exposes query results as deeply readonly", () => {
+    installFakeWebSocket();
+    using client = createSyncStore<{ rows: Query<[], number[]> }, Mutations>({
+      url: "ws://localhost",
+    });
+    const rows = client.store.getSnapshot().context.topics["rows"];
+    // @ts-expect-error results are deeply readonly
+    rows?.push(1);
+    expect(rows).toBeUndefined();
+  });
 });

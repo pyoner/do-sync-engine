@@ -6,6 +6,7 @@ import {
   UnknownQueryError,
   makeSyncEngine,
   syncEngineLayer,
+  Table,
   toTables,
 } from "../src/index.js";
 import type {
@@ -529,9 +530,12 @@ test("listener values and engine inputs are readonly while topics stay reusable"
   const readonlyChecks = (
     event: ListenerEvent<Topic<"rows", []>, Array<{ id: number }>>,
     subscription: Subscription<string, Topic<"rows", []>, Listener>,
+    operation: Query<[], number>,
   ) => {
-    // @ts-expect-error tables is a ReadonlySet
-    queries.rows.tables.add("other");
+    // @ts-expect-error toTables returns a ReadonlySet
+    queries.rows.tables.add(Table("other"));
+    // @ts-expect-error operation tables are a ReadonlySet
+    operation.tables.add(Table("other"));
     // @ts-expect-error event values are deeply readonly
     event.value[0].id = 2;
     // @ts-expect-error event values are deeply readonly
