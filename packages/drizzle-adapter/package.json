@@ -1,8 +1,18 @@
 {
   "name": "@do-sync-engine/drizzle-adapter",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "description": "Drizzle SQLite adapter for do-sync-engine",
+  "homepage": "https://github.com/pyoner/do-sync-engine#readme",
+  "bugs": {
+    "url": "https://github.com/pyoner/do-sync-engine/issues"
+  },
   "license": "MIT",
+  "author": "Askar Yusupov <devex.soft@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pyoner/do-sync-engine.git",
+    "directory": "packages/drizzle-adapter"
+  },
   "files": [
     "dist"
   ],
@@ -29,16 +39,17 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "@do-sync-engine/core": "workspace:*",
-    "effect": "catalog:"
+    "@do-sync-engine/core": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "catalog:",
     "drizzle-orm": "catalog:",
-    "typescript": "^7.0.2",
+    "effect": "catalog:",
+    "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "drizzle-orm": "catalog:"
+    "drizzle-orm": "catalog:",
+    "effect": "catalog:"
   }
 }

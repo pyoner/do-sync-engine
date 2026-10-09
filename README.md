@@ -46,3 +46,17 @@ vp run dev
 ```
 
 Packages export `src/` during development and `dist/` when published (`publishConfig.exports`). Publish with `pnpm publish` only; `npm publish` ignores `publishConfig.exports`.
+
+## Releasing alpha versions
+
+All packages in `packages/*` share one version.
+
+```bash
+VERSION=0.1.0-alpha.1 pnpm release:version   # sets the version in every package (npm pkg set)
+vp check && vp run -r test && vp run -r build
+git commit -am "release: v$VERSION" && git tag "v$VERSION"
+pnpm release:publish                         # publishes with the `alpha` dist-tag
+git push --follow-tags
+```
+
+`latest` is never moved by an alpha publish. Use `pnpm -r --filter "./packages/*" publish --tag alpha --dry-run --no-git-checks` to preview.

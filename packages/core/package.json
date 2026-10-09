@@ -1,6 +1,6 @@
 {
   "name": "@do-sync-engine/core",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "description": "A Cloudflare Durable Objects Sync Engine",
   "keywords": [
     "cloudflare",
@@ -18,7 +18,8 @@
   "author": "Askar Yusupov <devex.soft@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pyoner/do-sync-engine.git"
+    "url": "git+https://github.com/pyoner/do-sync-engine.git",
+    "directory": "packages/core"
   },
   "files": [
     "dist"
@@ -46,13 +47,16 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "effect": "catalog:",
     "ohash": "catalog:",
     "type-fest": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^25.6.2",
-    "typescript": "^7.0.2",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

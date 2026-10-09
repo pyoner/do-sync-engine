@@ -6,6 +6,8 @@
   "scripts": {
     "ready": "vp check && vp run -r test && vp run -r build",
     "dev": "vp run website#dev",
+    "release:version": "pnpm -r --filter \"./packages/*\" exec npm pkg set version=$VERSION",
+    "release:publish": "pnpm -r --filter \"./packages/*\" publish --tag alpha",
     "prepare": "vp config"
   },
   "devDependencies": {

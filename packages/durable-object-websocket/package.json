@@ -1,6 +1,6 @@
 {
   "name": "@do-sync-engine/durable-object-websocket",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
   "description": "Cloudflare Durable Object WebSocket transport for do-sync-engine",
   "homepage": "https://github.com/pyoner/do-sync-engine#readme",
   "bugs": {
@@ -10,7 +10,8 @@
   "author": "Askar Yusupov <devex.soft@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pyoner/do-sync-engine.git"
+    "url": "git+https://github.com/pyoner/do-sync-engine.git",
+    "directory": "packages/durable-object-websocket"
   },
   "files": [
     "dist"
@@ -44,16 +45,19 @@
   },
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
-    "capnweb": "catalog:",
-    "effect": "catalog:"
+    "capnweb": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "latest",
-    "@cloudflare/workers-types": "latest",
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
     "@types/node": "catalog:",
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

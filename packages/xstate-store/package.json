@@ -1,6 +1,18 @@
 {
   "name": "@do-sync-engine/xstate-store",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.0",
+  "description": "XState store bindings for do-sync-engine",
+  "homepage": "https://github.com/pyoner/do-sync-engine#readme",
+  "bugs": {
+    "url": "https://github.com/pyoner/do-sync-engine/issues"
+  },
+  "license": "MIT",
+  "author": "Askar Yusupov <devex.soft@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pyoner/do-sync-engine.git",
+    "directory": "packages/xstate-store"
+  },
   "files": [
     "dist"
   ],
@@ -29,12 +41,15 @@
   "dependencies": {
     "@do-sync-engine/core": "workspace:*",
     "@do-sync-engine/durable-object-websocket": "workspace:*",
-    "@xstate/store": "^4.2.3",
     "capnweb": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "@xstate/store": "^4.2.3",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@xstate/store": "^4.2.3"
   }
 }
